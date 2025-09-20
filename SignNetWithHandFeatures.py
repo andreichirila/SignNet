@@ -108,7 +108,7 @@ def get_datasets_with_fixed_test_split():
     return train_dataset, val_dataset, test_dataset
 
 
-def tune_batch_size(dataset, batch_sizes=[16, 32, 64, 128, 256]):
+def tune_batch_size(dataset, batch_sizes=[16, 32, 64]):
     device = get_device()
     model = SignNetFeatures(num_classes=24).to(device)
     criterion = nn.CrossEntropyLoss()
@@ -244,7 +244,7 @@ def main(epochs=50, learning_rate=1e-3, seed=42):
         print(f'{zero_count} out of {total} train samples have zero landmarks (no hand detected).')
 
         print(f"Starting batch size tuning")
-        best_batch_size = tune_batch_size(train_dataset)
+        best_batch_size = 64 # tune_batch_size(train_dataset)
 
         train_loader = DataLoader(train_dataset, batch_size=best_batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
@@ -259,6 +259,7 @@ def main(epochs=50, learning_rate=1e-3, seed=42):
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
 
         mlflow.log_param("num_classes", 24)
+        mlflow.log_param("batch_size", best_batch_size)
         mlflow.log_param("initial_lr", learning_rate)
         mlflow.log_param("epochs", epochs)
         mlflow.log_param("seed", seed)

@@ -7,7 +7,6 @@ from torchvision import datasets, transforms
 from torch.utils.data import DataLoader, random_split, Subset
 import mlflow
 import mlflow.pytorch
-import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import random
@@ -16,7 +15,6 @@ from torchinfo import summary
 DATASET_PATH = 'dataset'
 TEST_INDICES_PATH = 'test_indices.json'
 
-# Your CNN model class CustomCNN should be defined here or imported
 class SignNet(nn.Module):
     def __init__(self, num_classes):
         super(SignNet, self).__init__()
@@ -107,6 +105,17 @@ class SignNet(nn.Module):
         x = self.softmax(x)
         return x
 
+def get_device():
+    if torch.cuda.is_available():
+        print(f"Running on CUDA")
+        return torch.device("cuda")
+    elif torch.backends.mps.is_available() and torch.backends.mps.is_built():
+        print(f"Running on mps")
+        return torch.device("mps")
+    else:
+        print(f"Running on cpu")
+        return torch.device("cpu")
+
 def get_datasets_with_fixed_test_split(transform_train, transform_val):
     dataset = datasets.ImageFolder(root=DATASET_PATH, transform=transform_train)
     total_size = len(dataset)
@@ -137,7 +146,6 @@ def get_datasets_with_fixed_test_split(transform_train, transform_val):
     val_dataset = Subset(dataset, val_indices)
     test_dataset = Subset(dataset, test_indices)
 
-    # Override transforms
     train_dataset.dataset.transform = transform_train
     val_dataset.dataset.transform = transform_val
     test_dataset.dataset.transform = transform_val
@@ -145,7 +153,7 @@ def get_datasets_with_fixed_test_split(transform_train, transform_val):
     return train_dataset, val_dataset, test_dataset
 
 def tune_batch_size(dataset, batch_sizes=[16, 32, 64]):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = get_device()
     model = SignNet(num_classes=25).to(device)
     criterion = nn.CrossEntropyLoss()
     best_batch = batch_sizes[0]
@@ -182,7 +190,6 @@ def tune_batch_size(dataset, batch_sizes=[16, 32, 64]):
     print(f"Selected batch size: {best_batch}")
     mlflow.log_param("selected_batch_size", best_batch)
     return best_batch
-
 
 def train(model, optimizer, criterion, scheduler, train_loader, val_loader, device, epochs=20):
     for epoch in range(epochs):
@@ -230,7 +237,6 @@ def train(model, optimizer, criterion, scheduler, train_loader, val_loader, devi
 
         scheduler.step(avg_val_loss)
 
-
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -262,7 +268,9 @@ def main(epochs=3, learning_rate=1e-3, seed=42):
         val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
         test_loader = DataLoader(test_dataset, batch_size=best_batch_size, shuffle=False)
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        device = get_device()
+        print(f"Using device: {device}")
+
         model = SignNet(num_classes=25).to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)

@@ -108,7 +108,7 @@ def get_datasets_with_fixed_test_split():
     return train_dataset, val_dataset, test_dataset
 
 
-def tune_batch_size(dataset, batch_sizes=[16, 32, 64]):
+def tune_batch_size(dataset, batch_sizes=[16, 32, 64, 128, 256]):
     device = get_device()
     model = SignNetFeatures(num_classes=24).to(device)
     criterion = nn.CrossEntropyLoss()
@@ -131,7 +131,7 @@ def tune_batch_size(dataset, batch_sizes=[16, 32, 64]):
             optimizer.step()
             total_loss += loss.item()
             count += 1
-            if count > 5:
+            if count > 20:
                 print(f"  Stopping early after {count} batches for quick estimate")
                 break
         avg_loss = total_loss / count
@@ -226,7 +226,7 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def main(epochs=100, learning_rate=1e-3, seed=42):
+def main(epochs=50, learning_rate=1e-3, seed=42):
     set_seed(seed)
 
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")

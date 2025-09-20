@@ -226,13 +226,13 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-def main(epochs=30, learning_rate=1e-3, seed=42):
+def main(epochs=100, learning_rate=1e-3, seed=42):
     set_seed(seed)
 
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
     mlflow.set_experiment("DGS SignNet Features")
 
-    with mlflow.start_run(log_system_metrics=True):
+    with mlflow.start_run(log_system_metrics=False):
         train_dataset, val_dataset, test_dataset = get_datasets_with_fixed_test_split()
 
         # Check for zero features - should be rare in pre-extracted dataset
@@ -244,7 +244,7 @@ def main(epochs=30, learning_rate=1e-3, seed=42):
         print(f'{zero_count} out of {total} train samples have zero landmarks (no hand detected).')
 
         print(f"Starting batch size tuning")
-        best_batch_size = 16  # or tune_batch_size(train_dataset)
+        best_batch_size = tune_batch_size(train_dataset)
 
         train_loader = DataLoader(train_dataset, batch_size=best_batch_size, shuffle=True)
         val_loader = DataLoader(val_dataset, batch_size=best_batch_size, shuffle=False)
@@ -253,7 +253,7 @@ def main(epochs=30, learning_rate=1e-3, seed=42):
         device = get_device()
         print(f"Using device: {device}")
 
-        model = SignNetFeatures(num_classes=25).to(device)
+        model = SignNetFeatures(num_classes=24).to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)

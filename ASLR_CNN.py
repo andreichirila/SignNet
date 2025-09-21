@@ -1,15 +1,25 @@
 if __name__ == "__main__":  # Entry point of the script to ensure proper process handling (not run on import)
     import numpy as np  # Import numpy for numerical operations
+
     import torch  # Import PyTorch for tensor manipulation and deep learning
     import torch.nn as nn  # Import PyTorch's neural network module to define models
     import torch.optim as optim  # Import PyTorch's optimizer module for training
     import torchvision  # Import torchvision for datasets and transformations
     import torchvision.transforms as transforms  # To apply transformations to images
     from torch.utils.data import DataLoader, SubsetRandomSampler  # For creating data loaders and sampling datasets
-    import json  # For working with JSON data formats (e.g., saving results)
+
     import time  # To measure the duration of the training
     from datetime import datetime  # To timestamp generated files
+
+    import mlflow # import mlflow
+    import mlflow.pytorch # import mlflow.pytorch
+
     import os  # For interacting with the filesystem (e.g., make directories)
+
+    from ASLR_CNN_Model import SignLanguageCNN
+
+    mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
+    mlflow.set_experiment("Static Sign Net")
 
     # Check for GPU availability and configure device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Use GPU if available, else CPU
@@ -49,7 +59,7 @@ if __name__ == "__main__":  # Entry point of the script to ensure proper process
     # Split dataset into train, validation, and evaluation sets
     dataset_size = len(dataset)  # Total number of images in dataset
     indices = list(range(dataset_size))  # Create a list of indices for the dataset
-    np.random.seed(118)  # Set random seed for reproducibility
+    np.random.seed(42)  # Set random seed for reproducibility
     np.random.shuffle(indices)  # Shuffle indices for random dataset split
 
     # Define split sizes for validation and evaluation
@@ -77,54 +87,18 @@ if __name__ == "__main__":  # Entry point of the script to ensure proper process
     # Update dataset to use validation transforms (no augmentation)
     dataset.transform = val_transforms  # Apply validation transformations for validation and evaluation
 
-    # Define the model (custom CNN architecture for sign language classification)
-    class SignLanguageCNN(nn.Module):
-        def __init__(self, num_classes):  # Initialize model with specified number of output classes
-            super(SignLanguageCNN, self).__init__()  # Inherit from nn.Module
-            self.features = nn.Sequential(  # Define feature extraction layers
-                nn.Conv2d(3, 32, kernel_size=5),  # Convolution layer (input: 3 channels, output: 32 channels)
-                nn.BatchNorm2d(32),  # Batch normalization for stability
-                nn.ReLU(),  # ReLU activation
-                nn.Conv2d(32, 32, kernel_size=5),  # Second convolution layer
-                nn.BatchNorm2d(32),  # Batch normalization
-                nn.ReLU(),  # ReLU activation
-                nn.Conv2d(32, 64, kernel_size=3),  # Third convolution layer (increasing depth to 64 channels)
-                nn.BatchNorm2d(64),  # Batch normalization
-                nn.ReLU(),  # ReLU activation
-                nn.MaxPool2d(kernel_size=2, stride=2),  # Max pooling layer to downsample by 2x
-                nn.Conv2d(64, 128, kernel_size=3),  # Fourth convolution layer (128 channels)
-                nn.BatchNorm2d(128),  # Batch normalization
-                nn.ReLU(),  # ReLU activation
-                nn.MaxPool2d(kernel_size=2, stride=2),  # Max pooling layer
-                nn.Conv2d(128, 256, kernel_size=3),  # Further deepening to 256 channels
-                nn.BatchNorm2d(256),  # Batch normalization
-                nn.ReLU(),  # ReLU activation
-                nn.MaxPool2d(kernel_size=2, stride=2),  # Max pooling
-                nn.Conv2d(256, 256, kernel_size=3),  # Final convolution layer
-                nn.BatchNorm2d(256),  # Batch normalization
-                nn.ReLU(),  # ReLU activation
-                nn.AdaptiveAvgPool2d((1, 1))  # Global average pooling to reduce spatial dimensions to 1x1
-            )
-            self.classifier = nn.Sequential(  # Define fully connected layers for classification
-                nn.Linear(256, 128),  # Fully connected layer (input: 256, output: 128)
-                nn.ReLU(),  # ReLU activation
-                nn.Linear(128, 64),  # Fully connected layer (output: 64)
-                nn.ReLU(),  # ReLU activation
-                nn.Dropout(0.5),  # Dropout for regularization
-                nn.Linear(64, num_classes),  # Final fully connected layer (output: number of classes)
-                nn.Softmax(dim=1)  # Apply Softmax activation for class probabilities
-            )
-
-        def forward(self, x):  # Define forward pass of the model
-            x = self.features(x)  # Pass input through feature extractor
-            x = x.view(x.size(0), -1)  # Flatten spatial dimensions for fully connected layers
-            x = self.classifier(x)  # Pass through classifier layers
-            return x  # Return output
-
     # Initialize model, loss function, and optimizer
-    model = SignLanguageCNN(num_classes).to(device)  # Instantiate and move model to selected device
-    criterion = nn.CrossEntropyLoss()  # Define cross-entropy loss for classification
-    optimizer = optim.RMSprop(model.parameters(), lr=0.0005)  # Use RMSprop optimizer with specified learning rate
+    with mlflow.start_run():
+        model = SignLanguageCNN(num_classes).to(device)  # Instantiate and move model to selected device
+        criterion = nn.CrossEntropyLoss()  # Define cross-entropy loss for classification
+        optimizer = optim.RMSprop(model.parameters(), lr=0.0005)  # Use RMSprop optimizer with specified learning rate
+
+        # Log parameters
+        mlflow.log_param("batch_size", batch_size)
+        mlflow.log_param("epochs", 35)
+        mlflow.log_param("learning_rate", 0.0005)
+        mlflow.log_param("optimizer", "RMSprop")
+        mlflow.log_param("num_classes", num_classes)
 
 
     # Custom ReduceLROnPlateau class to reduce learning rate when validation loss plateaus
@@ -156,7 +130,6 @@ if __name__ == "__main__":  # Entry point of the script to ensure proper process
             self.patience = patience  # Number of epochs to wait before stopping
             self.best_loss = float('inf')  # Initialize best loss to infinity
             self.counter = 0  # Counter to track number of plateaued epochs
-            self.early_stop = False  # Flag to indicate if training should stop
 
         def step(self, val_loss):  # Called at the end of each epoch with the current validation loss
             if val_loss < self.best_loss:  # If validation loss improves
@@ -165,14 +138,12 @@ if __name__ == "__main__":  # Entry point of the script to ensure proper process
             else:  # If validation loss does not improve
                 self.counter += 1  # Increment counter
                 if self.counter >= self.patience:  # If patience threshold is exceeded
-                    self.early_stop = True  # Set early stop flag
                     print("Early stopping triggered")  # Log the event
 
 
     # Training loop configuration
-    epochs = 80  # Number of epochs to train the model
+    epochs = 35  # Number of epochs to train the model
     reduce_lr = ReduceLROnPlateau(optimizer, factor=0.5, patience=6)  # Initialize ReduceLROnPlateau
-    early_stop = EarlyStopping(patience=10)  # Initialize EarlyStopping
 
     history = {'acc': [], 'val_acc': [], 'loss': [], 'val_loss': []}  # Dictionary to store training and validation metrics
     start_time = time.time()  # Record the start time of training
@@ -227,13 +198,19 @@ if __name__ == "__main__":  # Entry point of the script to ensure proper process
         print(f"Epoch {epoch + 1}/{epochs}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
               f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
 
+        # Log metrics to MLflow
+        mlflow.log_metrics({
+            "train_accuracy": train_acc,
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_accuracy": val_acc,
+        }, step=epoch)
+
         reduce_lr.step(val_loss)  # Update learning rate based on validation loss
-        early_stop.step(val_loss)  # Check if early stopping should be triggered
-        if early_stop.early_stop:  # If training should stop early
-            break  # Exit the training loop
 
     end_time = time.time()  # Record the end time of training
     duration = end_time - start_time  # Compute total training time
+    print(f"Training completed in {duration:.2f} seconds")
 
     # Evaluation phase
     model.eval()  # Set model mode to evaluation
@@ -258,26 +235,12 @@ if __name__ == "__main__":  # Entry point of the script to ensure proper process
     eval_loss = eval_loss / len(eval_loader)  # Compute average evaluation loss
     eval_acc = correct / total  # Compute evaluation accuracy
     print(f"Test Loss: {eval_loss:.4f}, Test Acc: {eval_acc:.4f}")  # Log evaluation results
+    mlflow.pytorch.log_model(pytorch_model=model, name="ASLR_CNN")
 
-    # Save evaluation results to a JSON file
-    evaluation_result_data = {  # Create a dictionary with ground truth and predicted labels
-        "y": y_true,  # Ground truth labels
-        "pred": y_pred  # Predicted labels
-    }
-    current_time = datetime.now().strftime('%Y-%m-%d-%H-%M-%S')  # Format current time for file naming
-    evaluation_result_json = json.dumps(evaluation_result_data, indent=4)  # Convert results to JSON format
-
-    os.makedirs("../results", exist_ok=True)  # Ensure output folder exists
-    with open(f"../results/evaluationResults-{current_time}.json", "w") as outfile:  # Open output file
-        outfile.write(evaluation_result_json)  # Write evaluation results to file
-
-    # Save training history to a JSON file
-    history_json = json.dumps(history, indent=4)  # Convert training history to JSON format
-    with open(f"../results/results-{current_time}.json", "w") as outfile:  # Open output file
-        outfile.write(history_json)  # Write training history to file
-
-    # Optionally save the trained model
-    # os.makedirs("../models", exist_ok=True)  # Ensure model folder exists
-    # Save model weights and metadata for reproducibility
-    # torch.save(model.state_dict(), f"../models/trainedModel-{current_time}-eval_loss-{round(eval_loss, 3)}"
-    #           f"-eval_acc-{round(eval_acc, 3)}-train_time-{round(duration, 3)}.pth")
+    # Ensure current_time is properly formatted as a string using datetime
+    current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    # save the trained model
+    os.makedirs("./models", exist_ok=True)  # Ensure model folder exists
+    #Save model weights and metadata for reproducibility
+    torch.save(model.state_dict(), f"./models/trainedModel-{current_time}-eval_loss-{round(eval_loss, 3)}"
+                                   f"-eval_acc-{round(eval_acc, 3)}-train_time-{round(duration, 3)}.pth")

@@ -33,24 +33,27 @@ if __name__ == "__main__":  # Check if the script is being executed directly
 
     # Load the dataset containing hand-landmark coordinates
     df = pd.read_csv('landmark_datasets/german_sign_language.csv')  # Load the CSV dataset
+    df_new = pd.read_csv('landmark_datasets/new_samples_german_sign_language.csv')
 
-    # Drop rows with missing values to ensure data consistency
-    df = df.dropna()  # This ensures no incomplete rows are used during training
+    combined_df = pd.concat([df, df_new], ignore_index=True)
+    combined_df = combined_df.sort_values(by='label')
+    combined_df.to_csv('landmark_datasets/german_sign_language_updated.csv', index=False)
+    combined_df = combined_df.dropna()
 
     # Logge Klassenverteilung
-    print("Label distribution:\n", df['label'].value_counts().to_dict())
+    print("Label distribution:\n", combined_df['label'].value_counts().to_dict())
 
     # Encode categorical labels (e.g., 'a', 'b', etc.) into integers
     label_encoder = LabelEncoder()  # Initialize label encoder
-    df['label_encoded'] = label_encoder.fit_transform(df['label'])  # Create numeric labels and add to dataframe
+    combined_df['label_encoded'] = label_encoder.fit_transform(combined_df['label'])  # Create numeric labels and add to dataframe
     num_classes = len(label_encoder.classes_)  # Count total number of unique classes
     print(f"Class names: {label_encoder.classes_}")  # Display the classes
     print(f"Number of classes: {num_classes}")  # Display the number of unique classes
 
     # Extract feature columns from the dataset
-    feature_cols = [col for col in df.columns if 'coordinate' in col]  # Get all columns containing "coordinate"
-    X = df[feature_cols].values.astype(np.float32)  # Extract features and convert to NumPy float32
-    y = df['label_encoded'].values.astype(np.int64)  # Extract encoded class labels as int64
+    feature_cols = [col for col in combined_df.columns if 'coordinate' in col]  # Get all columns containing "coordinate"
+    X = combined_df[feature_cols].values.astype(np.float32)  # Extract features and convert to NumPy float32
+    y = combined_df['label_encoded'].values.astype(np.int64)  # Extract encoded class labels as int64
 
     # Normalize features relative to the wrist landmark (first three coordinates: x, y, z)
     for i in range(1, 21):  # Loop through all 21 landmarks excluding the wrist
@@ -186,7 +189,7 @@ if __name__ == "__main__":  # Check if the script is being executed directly
 
     mlflow.pytorch.log_model(
         pytorch_model=model,
-        name="MLP_Augmentation",
+        name="MLP_With_New_Datasets",
         signature=signature,
     )
     # Ensure current_time is properly formatted as a string using datetime

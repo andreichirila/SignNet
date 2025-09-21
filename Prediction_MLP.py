@@ -1,5 +1,6 @@
 import cv2  # Import OpenCV for image processing and webcam access
 import torch  # Import PyTorch for model loading and inference
+
 from MLP_Model import SignLanguageMLP  # Import the custom Multi-Layer Perceptron (MLP) model for predictions
 from HandTrackingOpenCV import HandDetector  # Import a pre-built hand detector based on MediaPipe
 import numpy as np  # Import NumPy for array operations and numerical computations
@@ -10,9 +11,9 @@ import glob  # Import glob module for finding files that match a pattern
 CONFIG = {
     'num_classes': 24,  # Number of output classes (24 letters mapped to model outputs)
     'class_names': [  # List of class names corresponding to the output classes
-        'a', 'b', 'c', 'd', 'e', 'f', 'g', 'h',
-        'i', 'k', 'l', 'm', 'n', 'o', 'p', 'q',
-        'r', 's', 't', 'u', 'v', 'w', 'x', 'y'
+        'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H',
+        'I', 'K', 'L', 'M', 'N', 'O', 'P', 'Q',
+        'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y'
     ],
     'confidence_threshold': 0.7,  # Minimum confidence threshold for considering a prediction valid
     'model_dir': './models',  # Directory path to saved models
@@ -75,6 +76,10 @@ def main():
                 print("Camera error – exiting.")  # Notify user
                 break  # Exit the loop
 
+            # Initialize annotated_text with a default value
+            annotated_text = "No Hands Detected"  # Default message if no hands are detected
+            color = (0, 0, 255)  # Default color (red)
+
             # Detect hands in the current frame
             hands, img_annotated, bbox = detector.findHands(img, draw=True)  # Annotate hands if detected
             if hands:  # If hand landmarks are detected
@@ -84,20 +89,6 @@ def main():
                 # Ensure the detected landmarks are valid
                 if hand_landmarks and len(hand_landmarks) > 0:  # Check if any landmarks exist
                     inner_len = len(hand_landmarks[0])  # Determine if the points provide 2D or 3D data
-
-                    # If the landmarks are 2D, add a zero (z-coordinate) for missing depth
-                    if inner_len == 2:  # Only x and y coordinates are present
-                        hand_landmarks = [(x, y, 0.0) for x, y in hand_landmarks]  # Pad z with 0.0
-                    elif inner_len != 3:  # If neither 2D nor 3D, skip this frame
-                        print("Warning: Unexpected landmark format.")
-                        continue  # Skip to the next iteration
-
-                    # Ensure the array contains exactly 21 points by padding with zeros if necessary
-                    if len(hand_landmarks) < 21:  # Missing some points
-                        print(f"Warning: Incomplete landmarks ({len(hand_landmarks)} points). Padding.")
-                        hand_landmarks += [(0.0, 0.0, 0.0)] * (21 - len(hand_landmarks))  # Pad the missing points
-                    else:  # If more than 21 points, truncate the array
-                        hand_landmarks = hand_landmarks[:21]
 
                 # Flatten the 21 (x, y, z) landmarks into a single feature vector (1D array of 63 elements)
                 input_features = np.array(hand_landmarks).flatten().astype(np.float32)
@@ -118,10 +109,18 @@ def main():
                 # Feed the prepared tensor into the model to get predictions
                 letter, confidence = predict_letter(model, input_tensor, CONFIG['class_names'], CONFIG['confidence_threshold'])
 
-                # Annotate the frame with the model's prediction
-                color = (0, 255, 0) if confidence > 0 else (0, 0, 255)  # Green for valid predictions, red otherwise
-                annotated_text = f"{letter}: {confidence:.2f}" if confidence > 0 else "Unknown"
-                cv2.putText(img_annotated, annotated_text, (bbox[0], bbox[1] - 10),  # Place the text near the detected hand
+                # Annotate the frame with the model's prediction and confidence
+                if confidence > 0.7:  # Only display predictions if confidence exceeds 0.7
+                    color = (0, 255, 0)  # Green for valid predictions above the threshold
+                    annotated_text = f"{letter}: {confidence:.2f}"  # Display exact confidence up to 2 decimal places
+                else:
+                    color = (0, 0, 255)  # Red for invalid or low-confidence predictions
+                    annotated_text = "Unknown"  # Show "Unknown" for low-confidence predictions
+
+            # Ensure bbox is not None before using it
+            if bbox is not None:
+                cv2.putText(img_annotated, annotated_text, (bbox[0], bbox[1] - 10),
+                            # Place the text near the detected hand
                             cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2)
 
             # Display the annotated frame in a window

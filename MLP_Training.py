@@ -1,3 +1,5 @@
+from LandmarkDataset import LandmarkDataset
+
 if __name__ == "__main__":  # Check if the script is being executed directly
     import pandas as pd  # Import pandas for data processing
     from sklearn.model_selection import train_test_split  # Import function to split data into train/test sets
@@ -16,6 +18,8 @@ if __name__ == "__main__":  # Check if the script is being executed directly
 
     import mlflow  # MLflow for tracking model experiments and metrics
     import mlflow.pytorch  # MLflow plugin to handle PyTorch models
+    from mlflow.models import ModelSignature
+    from mlflow.types import Schema, TensorSpec
 
     from MLP_Model import SignLanguageMLP  # Import custom MLP model from the Landmarks module
 
@@ -57,23 +61,11 @@ if __name__ == "__main__":  # Check if the script is being executed directly
     X_train, X_temp, y_train, y_temp = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)  # Train-temp split
     X_val, X_eval, y_val, y_eval = train_test_split(X_temp, y_temp, test_size=0.5, random_state=42, stratify=y_temp)  # Temp split into validation and evaluation
 
-    # Create a custom dataset class to handle landmarks
-    class LandmarkDataset(Dataset):
-        def __init__(self, features, labels):
-            self.features = torch.tensor(features, dtype=torch.float32)  # Convert features to PyTorch tensors
-            self.labels = torch.tensor(labels, dtype=torch.long)  # Convert labels to tensors
-
-        def __len__(self):
-            return len(self.labels)  # Return dataset size
-
-        def __getitem__(self, idx):
-            return self.features[idx], self.labels[idx]  # Return feature-label pair for a given index
-
     # Create PyTorch datasets for each data split
     batch_size = 32
-    train_dataset = LandmarkDataset(X_train, y_train)  # Training dataset
-    val_dataset = LandmarkDataset(X_val, y_val)  # Validation dataset
-    eval_dataset = LandmarkDataset(X_eval, y_eval)  # Testing dataset
+    train_dataset = LandmarkDataset(X_train, y_train, augment=True)
+    val_dataset = LandmarkDataset(X_val, y_val, augment=False)  # Keine Augmentation für Validation
+    eval_dataset = LandmarkDataset(X_eval, y_eval, augment=False)
 
     # Create data loaders for batching and shuffling
     train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)  # Training data loader
@@ -101,6 +93,7 @@ if __name__ == "__main__":  # Check if the script is being executed directly
 
         # Training loop
         for epoch in range(epochs):  # Train for the specified number of epochs
+            train_dataset.set_training(True)
             model.train()  # Set model to training mode
             running_loss = 0.0  # Initialize training loss for the current epoch
             correct = 0  # Count correct classifications in the epoch
@@ -124,6 +117,7 @@ if __name__ == "__main__":  # Check if the script is being executed directly
             train_acc = correct / total  # Training accuracy
 
             # Validation phase
+            val_dataset.set_training(False)
             model.eval()  # Set model mode to evaluation (no gradient updates)
             val_loss = 0.0  # Initialize validation loss for the epoch
             correct = 0  # Initialize correct predictions counter
@@ -183,12 +177,23 @@ if __name__ == "__main__":  # Check if the script is being executed directly
     eval_loss = eval_loss / len(eval_loader)  # Compute average evaluation loss
     eval_acc = correct / total  # Compute evaluation accuracy
     print(f"Test Loss: {eval_loss:.4f}, Test Acc: {eval_acc:.4f}")  # Log evaluation results
-    mlflow.pytorch.log_model(pytorch_model=model, name="ASLR_CNN_Landmark")
 
+    # Definiere die Signature
+    signature = ModelSignature(
+        inputs=Schema([TensorSpec(np.dtype(np.float32), (-1, 63))]),  # Input: [batch_size, 63]
+        outputs=Schema([TensorSpec(np.dtype(np.float32), (-1, num_classes))])  # Output: [batch_size, num_classes]
+    )
+
+    mlflow.pytorch.log_model(
+        pytorch_model=model,
+        name="MLP_Augmentation",
+        signature=signature,
+    )
     # Ensure current_time is properly formatted as a string using datetime
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     # save the trained model
     os.makedirs("models", exist_ok=True)  # Ensure model folder exists
     #Save model weights and metadata for reproducibility
+
     torch.save(model.state_dict(), f"./models/MLP_trainedModel-{current_time}-eval_loss-{round(eval_loss, 3)}"
                                    f"-eval_acc-{round(eval_acc, 3)}-train_time-{round(duration, 3)}.pth")

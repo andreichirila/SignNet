@@ -26,14 +26,15 @@ if __name__ == "__main__":  # Check if the script is being executed directly
     # Check device availability (GPU or CPU) for training
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")  # Use GPU if available
     print(f"Using device: {device}")  # Display device information
-    print(f"Check CUDA version PyTorch was built with: {torch.version.cuda}")  # Output CUDA version used in PyTorch
-    print(f"GPU available: {torch.cuda.is_available()}")  # Output whether GPU is available
 
     # Load the dataset containing hand-landmark coordinates
     df = pd.read_csv('landmark_datasets/german_sign_language.csv')  # Load the CSV dataset
 
     # Drop rows with missing values to ensure data consistency
     df = df.dropna()  # This ensures no incomplete rows are used during training
+
+    # Logge Klassenverteilung
+    print("Label distribution:\n", df['label'].value_counts().to_dict())
 
     # Encode categorical labels (e.g., 'a', 'b', etc.) into integers
     label_encoder = LabelEncoder()  # Initialize label encoder
@@ -69,95 +70,91 @@ if __name__ == "__main__":  # Check if the script is being executed directly
             return self.features[idx], self.labels[idx]  # Return feature-label pair for a given index
 
     # Create PyTorch datasets for each data split
+    batch_size = 32
     train_dataset = LandmarkDataset(X_train, y_train)  # Training dataset
     val_dataset = LandmarkDataset(X_val, y_val)  # Validation dataset
     eval_dataset = LandmarkDataset(X_eval, y_eval)  # Testing dataset
 
     # Create data loaders for batching and shuffling
-    train_loader = DataLoader(train_dataset, batch_size=32, shuffle=True, num_workers=0)  # Training data loader
-    val_loader = DataLoader(val_dataset, batch_size=32, shuffle=False, num_workers=0)  # Validation data loader
-    eval_loader = DataLoader(eval_dataset, batch_size=32, shuffle=False, num_workers=0)  # Test data loader
-    epochs = 50  # Number of epochs to train the model
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=0)  # Training data loader
+    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=0)  # Validation data loader
+    eval_loader = DataLoader(eval_dataset, batch_size=batch_size, shuffle=False, num_workers=0)  # Test data loader
+    epochs = 35  # Number of epochs to train the model
+    learnin_rate = 0.0005
 
     # MLflow experiment tracking
     with mlflow.start_run():  # Start an MLflow run to log data and metrics
         model = SignLanguageMLP(num_classes).to(device)  # Create an instance of the model and move it to device
         criterion = CrossEntropyLoss()  # Define loss function
-        optimizer = optim.RMSprop(model.parameters(), lr=0.0005)  # Use RMSprop optimizer with a learning rate of 0.0005
+        optimizer = optim.RMSprop(model.parameters(), lr=learnin_rate)  # Use RMSprop optimizer with a learning rate of 0.0005
 
         # Log parameters to MLflow for transparency and reproducibility
-        batch_size = 32  # Batch size used for training
         mlflow.log_param("batch_size", batch_size)  # Log batch size
         mlflow.log_param("epochs", epochs)  # Log total number of epochs
-        mlflow.log_param("learning_rate", 0.0002)  # Log learning rate
+        mlflow.log_param("learning_rate", learnin_rate)  # Log learning rate
         mlflow.log_param("optimizer", "RMSprop")  # Log optimizer used
         mlflow.log_param("num_classes", num_classes)  # Log number of output classes
 
-    # Learning rate scheduler to reduce LR on validation loss plateau
-    reduce_lr = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=6)  # Reduce learning rate when validation loss plateaus
-    history = {'acc': [], 'val_acc': [], 'loss': [], 'val_loss': []}  # Store training/validation loss and accuracy
-    start_time = time.time()  # Track the start time of training
+        # Learning rate scheduler to reduce LR on validation loss plateau
+        reduce_lr = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=6)  # Reduce learning rate when validation loss plateaus
+        start_time = time.time()  # Track the start time of training
 
-    # Training loop
-    for epoch in range(epochs):  # Train for the specified number of epochs
-        model.train()  # Set model to training mode
-        running_loss = 0.0  # Initialize training loss for the current epoch
-        correct = 0  # Count correct classifications in the epoch
-        total = 0  # Count total samples in the epoch
+        # Training loop
+        for epoch in range(epochs):  # Train for the specified number of epochs
+            model.train()  # Set model to training mode
+            running_loss = 0.0  # Initialize training loss for the current epoch
+            correct = 0  # Count correct classifications in the epoch
+            total = 0  # Count total samples in the epoch
 
-        for images, labels in train_loader:  # Loop through training data batches
-            images, labels = images.to(device), labels.to(device)  # Move images and labels to the same device
-            optimizer.zero_grad()  # Clear gradients from the previous step
-            outputs = model(images)  # Perform forward pass
-            loss = criterion(outputs, labels)  # Compute the loss
-            loss.backward()  # Backward pass to compute gradients
-            optimizer.step()  # Update model weights
+            for inputs, labels in train_loader:  # Loop through training data batches
+                inputs, labels = inputs.to(device), labels.to(device)  # Move images and labels to the same device
+                optimizer.zero_grad()  # Clear gradients from the previous step
+                outputs = model(inputs)  # Perform forward pass
+                loss = criterion(outputs, labels)  # Compute the loss
+                loss.backward()  # Backward pass to compute gradients
+                optimizer.step()  # Update model weights
 
-            running_loss += loss.item()  # Accumulate the epoch loss
-            _, predicted = torch.max(outputs, 1)  # Get predicted classes
-            total += labels.size(0)  # Count total labels in batch
-            correct += (predicted == labels).sum().item()  # Count correctly predicted labels
+                running_loss += loss.item()  # Accumulate the epoch loss
+                _, predicted = torch.max(outputs, 1)  # Get predicted classes
+                total += labels.size(0)  # Count total labels in batch
+                correct += (predicted == labels).sum().item()  # Count correctly predicted labels
 
-        # Calculate average training loss and accuracy
-        train_loss = running_loss / len(train_loader)  # Average training loss
-        train_acc = correct / total  # Training accuracy
-        history['acc'].append(train_acc)  # Save accuracy history
-        history['loss'].append(train_loss)  # Save loss history
+            # Calculate average training loss and accuracy
+            train_loss = running_loss / len(train_loader)  # Average training loss
+            train_acc = correct / total  # Training accuracy
 
-        # Validation phase
-        model.eval()  # Set model mode to evaluation (no gradient updates)
-        val_loss = 0.0  # Initialize validation loss for the epoch
-        correct = 0  # Initialize correct predictions counter
-        total = 0  # Initialize total samples counter
+            # Validation phase
+            model.eval()  # Set model mode to evaluation (no gradient updates)
+            val_loss = 0.0  # Initialize validation loss for the epoch
+            correct = 0  # Initialize correct predictions counter
+            total = 0  # Initialize total samples counter
 
-        with torch.no_grad():  # Disable gradients for validation (faster computation)
-            for images, labels in val_loader:  # Loop over validation data batches
-                images, labels = images.to(device), labels.to(device)  # Move images and labels to the selected device
-                outputs = model(images)  # Forward pass
-                loss = criterion(outputs, labels)  # Compute validation loss
-                val_loss += loss.item()  # Accumulate total validation loss
-                _, predicted = torch.max(outputs, 1)  # Get predicted class
-                total += labels.size(0)  # Update total number of samples
-                correct += (predicted == labels).sum().item()  # Count correct predictions
+            with torch.no_grad():  # Disable gradients for validation (faster computation)
+                for inputs, labels in val_loader:  # Loop over validation data batches
+                    inputs, labels = inputs.to(device), labels.to(device)  # Move images and labels to the selected device
+                    outputs = model(inputs)  # Forward pass
+                    loss = criterion(outputs, labels)  # Compute validation loss
+                    val_loss += loss.item()  # Accumulate total validation loss
+                    _, predicted = torch.max(outputs, 1)  # Get predicted class
+                    total += labels.size(0)  # Update total number of samples
+                    correct += (predicted == labels).sum().item()  # Count correct predictions
 
-        val_loss = val_loss / len(val_loader)  # Compute average validation loss
-        val_acc = correct / total  # Compute validation accuracy
-        history['val_acc'].append(val_acc)  # Save validation accuracy to history
-        history['val_loss'].append(val_loss)  # Save validation loss to history
+            val_loss = val_loss / len(val_loader)  # Compute average validation loss
+            val_acc = correct / total  # Compute validation accuracy
 
-        # Log training and validation results for the current epoch
-        print(f"Epoch {epoch + 1}/{epochs}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
-              f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
+            # Log training and validation results for the current epoch
+            print(f"Epoch {epoch + 1}/{epochs}, Train Loss: {train_loss:.4f}, Train Acc: {train_acc:.4f}, "
+                  f"Val Loss: {val_loss:.4f}, Val Acc: {val_acc:.4f}")
 
-        # Log metrics to MLflow
-        mlflow.log_metrics({
-            "train_accuracy": train_acc,
-            "train_loss": train_loss,
-            "val_loss": val_loss,
-            "val_accuracy": val_acc,
-        }, step=epoch)
+            # Log metrics to MLflow
+            mlflow.log_metrics({
+                "train_accuracy": train_acc,
+                "train_loss": train_loss,
+                "val_loss": val_loss,
+                "val_accuracy": val_acc,
+            }, step=epoch)
 
-        reduce_lr.step(val_loss)  # Update learning rate based on validation loss
+            reduce_lr.step(val_loss)  # Update learning rate based on validation loss
 
     end_time = time.time()  # Record the end time of training
     duration = end_time - start_time  # Compute total training time
@@ -172,9 +169,9 @@ if __name__ == "__main__":  # Check if the script is being executed directly
     y_pred = []  # List to store model predictions
 
     with torch.no_grad():  # Disable gradients for evaluation
-        for images, labels in eval_loader:  # Loop over evaluation data batches
-            images, labels = images.to(device), labels.to(device)  # Move images and labels to the selected device
-            outputs = model(images)  # Forward pass
+        for inputs, labels in eval_loader:  # Loop over evaluation data batches
+            inputs, labels = inputs.to(device), labels.to(device)  # Move images and labels to the selected device
+            outputs = model(inputs)  # Forward pass
             loss = criterion(outputs, labels)  # Compute evaluation loss
             eval_loss += loss.item()  # Accumulate total evaluation loss
             _, predicted = torch.max(outputs, 1)  # Get predicted class

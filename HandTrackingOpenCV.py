@@ -4,7 +4,7 @@ import mediapipe as mp
 class HandDetector:
     """
     Finds Hands using the mediapipe library. Exports the landmarks
-    in pixel format. Provides bounding box info of the hand found.
+    in pixel format (x,y) and relative depth (z). Provides bounding box info.
     """
 
     def __init__(self, mode=False, maxHands=2, detectionCon=0.5, minTrackCon=0.5):
@@ -20,7 +20,8 @@ class HandDetector:
         self.minTrackCon = minTrackCon
 
         self.mpHands = mp.solutions.hands
-        self.hands = self.mpHands.Hands(static_image_mode=self.mode, max_num_hands=self.maxHands,
+        self.hands = self.mpHands.Hands(static_image_mode=self.mode,
+                                        max_num_hands=self.maxHands,
                                         min_detection_confidence=self.detectionCon,
                                         min_tracking_confidence=self.minTrackCon)
         self.mpDraw = mp.solutions.drawing_utils
@@ -33,57 +34,54 @@ class HandDetector:
         Finds hands in a BGR image.
         :param img: Image to find the hands in.
         :param draw: Flag to draw the output on the image.
-        :return: Image with or without drawings
+        :param flipType: Flag to flip hand type (Left/Right) for mirrored images.
+        :return: List of hands (with landmarks, bbox, center, type), annotated image, bbox
         """
-
         bbox = None
-
         imgRGB = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
         self.results = self.hands.process(imgRGB)
         allHands = []
         h, w, c = img.shape
+
         if self.results.multi_hand_landmarks:
             for handType, handLms in zip(self.results.multi_handedness, self.results.multi_hand_landmarks):
                 myHand = {}
-                ## lmList
                 mylmList = []
                 xList = []
                 yList = []
+                zList = []
                 for id, lm in enumerate(handLms.landmark):
                     px, py = int(lm.x * w), int(lm.y * h)
-                    mylmList.append([px, py])
+                    pz = lm.z  # Relative depth (z) from MediaPipe
+                    mylmList.append([px, py, pz])  # Include z-coordinate
                     xList.append(px)
                     yList.append(py)
+                    zList.append(pz)
 
-                ## bbox
+                # Bounding box
                 xmin, xmax = min(xList), max(xList)
                 ymin, ymax = min(yList), max(yList)
                 boxW, boxH = xmax - xmin, ymax - ymin
                 bbox = xmin, ymin, boxW, boxH
-                cx, cy = bbox[0] + (bbox[2] // 2), \
-                         bbox[1] + (bbox[3] // 2)
+                cx, cy = bbox[0] + (bbox[2] // 2), bbox[1] + (bbox[3] // 2)
 
                 myHand["lmList"] = mylmList
                 myHand["bbox"] = bbox
                 myHand["center"] = (cx, cy)
 
                 if flipType:
-                    if handType.classification[0].label == "Right":
-                        myHand["type"] = "Left"
-                    else:
-                        myHand["type"] = "Right"
+                    myHand["type"] = "Left" if handType.classification[0].label == "Right" else "Right"
                 else:
                     myHand["type"] = handType.classification[0].label
                 allHands.append(myHand)
 
-                # draw
+                # Draw landmarks and bounding box
                 if draw:
-                    self.mpDraw.draw_landmarks(img, handLms,
-                                               self.mpHands.HAND_CONNECTIONS)
+                    self.mpDraw.draw_landmarks(img, handLms, self.mpHands.HAND_CONNECTIONS)
                     cv2.rectangle(img, (bbox[0] - 20, bbox[1] - 20),
                                   (bbox[0] + bbox[2] + 20, bbox[1] + bbox[3] + 20),
                                   (255, 0, 255), 2)
-                    cv2.putText(img, myHand["type"], (bbox[0] - 30, bbox[1] - 30), cv2.FONT_HERSHEY_PLAIN,
-                                2, (255, 0, 255), 2)
+                    cv2.putText(img, myHand["type"], (bbox[0] - 30, bbox[1] - 30),
+                                cv2.FONT_HERSHEY_PLAIN, 2, (255, 0, 255), 2)
 
         return allHands, img, bbox

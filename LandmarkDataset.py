@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import Dataset
 
 class LandmarkDataset(Dataset):
-    def __init__(self, features, labels, augment=True, noise_std=0.01, scale_range=(0.9, 1.1), rotation_range=(-15, 15)):
+    def __init__(self, features, labels, augment=True, noise_std=0.01, scale_range=(0.9, 1.1), rotation_range=(-10, 10)):
         """
         Initialisiert das Dataset für Handlandmarks.
         :param features: Input-Features (Handlandmark-Koordinaten).

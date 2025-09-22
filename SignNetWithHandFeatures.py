@@ -12,6 +12,7 @@ import random
 from torchinfo import summary
 import pandas as pd
 from sklearn.preprocessing import LabelEncoder
+from SignNetCNN import SignNetCNN
 
 
 DATASET_PATH = 'dataset_handfeatures'  # Set this to your extracted dataset path
@@ -39,28 +40,45 @@ class DGSLandmarkDataset(Dataset):
     def __getitem__(self, idx):
         feature = self.features[idx]
         label = self.labels[idx]
+
+        # Apply augmentation only if transform is defined and indicates training mode
+        if self.transform is not None:
+            feature = self.transform(feature)
+        else:
+            # Apply custom landmark augmentation here if no other transform is given
+            feature = feature.numpy() if isinstance(feature, torch.Tensor) else feature
+            feature = augment_landmarks(feature)
+
+        # Convert to tensor
         feature = torch.tensor(feature, dtype=torch.float32)
         label = torch.tensor(label, dtype=torch.long)
-        if self.transform:
-            feature = self.transform(feature)
+
         return feature, label
 
+def augment_landmarks(landmarks, noise_std=0.01, max_rotation_deg=10):
+    """
+    landmarks: np.array shape (63,) = (21 points * 3 coords)
+    Adds noise and small random rotation to landmarks in XY plane.
+    """
+    lm = landmarks.reshape(21, 3).copy()
 
-class SignNetFeatures(nn.Module):
-    def __init__(self, num_classes):
-        super(SignNetFeatures, self).__init__()
-        self.fc1 = nn.Linear(63, 128)
-        self.bn1 = nn.BatchNorm1d(128)
-        self.fc2 = nn.Linear(128, 64)
-        self.bn2 = nn.BatchNorm1d(64)
-        self.fc_out = nn.Linear(64, num_classes)
+    # Add Gaussian noise to all coordinates
+    lm += np.random.normal(0, noise_std, lm.shape)
 
-    def forward(self, x):
-        x = F.relu(self.bn1(self.fc1(x)))
-        x = F.relu(self.bn2(self.fc2(x)))
-        x = self.fc_out(x)
-        return F.softmax(x, dim=1)
+    # Random rotation in radians
+    angle = np.deg2rad(np.random.uniform(-max_rotation_deg, max_rotation_deg))
+    cos_val, sin_val = np.cos(angle), np.sin(angle)
 
+    # Rotation matrix for XY plane
+    R = np.array([[cos_val, -sin_val],
+                  [sin_val,  cos_val]])
+
+    # Apply rotation to x,y only
+    xy = lm[:, :2]
+    xy_rot = np.dot(xy, R.T)
+    lm[:, :2] = xy_rot
+
+    return lm.flatten()
 
 def get_device():
     if torch.cuda.is_available():
@@ -106,46 +124,6 @@ def get_datasets_with_fixed_test_split():
     test_dataset = torch.utils.data.Subset(full_dataset, test_indices)
 
     return train_dataset, val_dataset, test_dataset
-
-
-def tune_batch_size(dataset, batch_sizes=[16, 32, 64]):
-    device = get_device()
-    model = SignNetFeatures(num_classes=24).to(device)
-    criterion = nn.CrossEntropyLoss()
-    best_batch = batch_sizes[0]
-    best_loss = float('inf')
-    print("Starting batch size tuning...")
-    for batch_size in batch_sizes:
-        print(f"Testing batch size: {batch_size}")
-        loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-        optimizer = optim.Adam(model.parameters(), lr=1e-3)
-        model.train()
-        total_loss = 0.0
-        count = 0
-        for features, labels in loader:
-            features, labels = features.to(device), labels.to(device)
-            optimizer.zero_grad()
-            outputs = model(features)
-            loss = criterion(outputs, labels)
-            loss.backward()
-            optimizer.step()
-            total_loss += loss.item()
-            count += 1
-            if count > 20:
-                print(f"  Stopping early after {count} batches for quick estimate")
-                break
-        avg_loss = total_loss / count
-        print(f"Batch size {batch_size}: training loss {avg_loss:.4f}")
-        mlflow.log_metric(f"batch_size_{batch_size}_loss", avg_loss)
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            best_batch = batch_size
-            print(f"New best batch size found: {best_batch} with loss {best_loss:.4f}")
-        else:
-            print(f"No improvement with batch size {batch_size}")
-    print(f"Selected batch size: {best_batch}")
-    mlflow.log_param("selected_batch_size", best_batch)
-    return best_batch
 
 
 def train(model, optimizer, criterion, scheduler, train_loader, val_loader, device, epochs=30):
@@ -253,7 +231,7 @@ def main(epochs=50, learning_rate=1e-3, seed=42):
         device = get_device()
         print(f"Using device: {device}")
 
-        model = SignNetFeatures(num_classes=24).to(device)
+        model = SignNetCNN(num_classes=24).to(device)
         criterion = nn.CrossEntropyLoss()
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3, factor=0.5)
@@ -278,7 +256,7 @@ def main(epochs=50, learning_rate=1e-3, seed=42):
         evaluate(model, test_loader, criterion, device)
 
         mlflow.pytorch.log_model(model, "model")
-
+        torch.save(model.state_dict(), 'model/model.pth')
 
 if __name__ == "__main__":
     main()

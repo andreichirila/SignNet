@@ -10,7 +10,7 @@ import json
 # Assume PhoenixDataset as before to load frames + annotations
 
 mp_hands = mp.solutions.hands.Hands(static_image_mode=False, max_num_hands=2)
-mp_face = mp.solutions.face_mesh.FaceMesh(static_image_mode=False)
+mp_face = mp.solutions.face_mesh.FaceMesh(static_image_mode=False, refine_landmarks=True)
 mp_pose = mp.solutions.pose.Pose(static_image_mode=False)
 
 class PhoenixDataset(Dataset):
@@ -74,7 +74,7 @@ def extract_landmarks(frames):
     for frame in frames:
         # Allocate arrays (always fixed size, even if no detections)
         hand_lms = np.zeros(126, dtype=np.float32)    # 2 hands × 21 × 3
-        face_lms = np.zeros(1404, dtype=np.float32)   # 468 × 3
+        face_lms = np.zeros(1434, dtype=np.float32) # Refined face landmarks are 478 points giving 478*3=1434 features
         pose_lms = np.zeros(99, dtype=np.float32)     # 33 × 3
 
         # Hands
@@ -106,7 +106,7 @@ def extract_landmarks(frames):
     return np.stack(landmarks)
 
 
-def save_landmarks_readable(landmarks, label, save_folder, sample_id):
+def save_landmarks_readable(landmarks, glosses, save_folder, sample_id):
     os.makedirs(save_folder, exist_ok=True)
     # Save landmarks as CSV
     csv_path = os.path.join(save_folder, f"{sample_id}_landmarks.csv")
@@ -116,7 +116,7 @@ def save_landmarks_readable(landmarks, label, save_folder, sample_id):
     # Save label as JSON
     label_path = os.path.join(save_folder, f"{sample_id}_label.json")
     with open(label_path, 'w', encoding='utf-8') as f:
-        json.dump({'label': label}, f, ensure_ascii=False, indent=2)
+        json.dump({'glosses': glosses}, f, ensure_ascii=False, indent=2)
 
 def build_vocab(annotation_file, save_path):
     vocab = {}
@@ -140,16 +140,22 @@ def build_vocab(annotation_file, save_path):
 def preprocess_and_save(root, annotation_file, split, save_dir, max_frames=None):
     dataset = PhoenixDataset(root, annotation_file, split=split, max_frames=max_frames)
     os.makedirs(save_dir, exist_ok=True)
-    for idx in range(len(dataset)):
-        frames, glosses = dataset[idx]
-        frames_norm = frames.astype(np.float32) / 255.0
-        landmarks = extract_landmarks(frames_norm)
-        label = glosses[0] if glosses else ""
-        save_path = os.path.join(save_dir, f"{split}_sample_{idx}.npz")
-        np.savez_compressed(save_path, landmarks=landmarks, label=label)
-        save_landmarks_readable(landmarks, label, "./landmarks_readable", sample_id=f"sample_{idx}")
-        if idx % 10 == 0:
-            print(f"[{split}] Processed sample {idx}/{len(dataset)}")
+
+    with open(annotation_file, "r", encoding="utf-8") as f:
+        next(f)  # skip header
+        for idx, line in enumerate(f):
+            parts = line.strip().split("|")
+            if len(parts) < 4:
+                continue
+            sample_id = parts[0]  # the ID from the corpus file
+            frames, glosses = dataset[idx]
+            landmarks = extract_landmarks(frames)
+            save_path = os.path.join(save_dir, f"{sample_id}.npz")
+            np.savez_compressed(save_path, landmarks=landmarks, glosses=np.array(glosses))
+            save_landmarks_readable(landmarks, glosses, "./landmarks_readable", sample_id=sample_id)
+            if idx % 10 == 0:
+                print(f"[{split}] Processed sample {idx}/{len(dataset)}")
+
 
 if __name__ == "__main__":
     root = 'phoenix-2014.v3.tar/phoenix2014-release/phoenix-2014-multisigner'

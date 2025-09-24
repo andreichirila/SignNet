@@ -2,6 +2,28 @@ import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import json
+import os
+import numpy as np
+
+
+class LandmarkDataset(Dataset):
+    def __init__(self, landmarks_dir, vocab):
+        self.landmarks_dir = landmarks_dir
+        self.file_names = sorted([f for f in os.listdir(landmarks_dir) if f.endswith(".npz")])
+        self.vocab = vocab
+
+    def __len__(self):
+        return len(self.file_names)
+
+    def __getitem__(self, idx):
+        path = os.path.join(self.landmarks_dir, self.file_names[idx])
+        data = np.load(path)
+        landmarks = data['landmarks']  # shape (T, feature_dim)
+        label_str = data['label'].item()
+        label_idx = self.vocab.get(label_str, 0)
+        landmarks_tensor = torch.tensor(landmarks).float()
+        label_tensor = torch.tensor(label_idx).long()
+        return landmarks_tensor, label_tensor
 
 class SignLanguageLSTM(nn.Module):
     def __init__(self, input_dim=1530, hidden_dim=128, num_classes=100):

@@ -2,7 +2,7 @@ import cv2
 import torch
 
 import mediapipe as mp
-
+import numpy as np
 import torch.serialization
 import torch.nn.functional as F
 
@@ -13,7 +13,7 @@ import mlflow
 # model.load_state_dict(torch.load('model/model.pth', map_location='cpu'))
 
 mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
-model_uri = "models:/StaticHandSignCNN/2"
+model_uri = "models:/StaticHandSignCNN/4"
 model = mlflow.pytorch.load_model(model_uri)
 model.eval()
 
@@ -35,8 +35,27 @@ hands = mp_hands.Hands(
 labels = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'k', 'l', 'm',
                 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y']
 
+def hand_scale(hand_lms):
+    # hand_lms: (21, 3)
+    # landmarks: shape (63,) -> reshape (21,3)
+    hand_lms = np.array(hand_lms).reshape(21, 3)
+    wrist = hand_lms[0]
+    tips = hand_lms[[4, 8, 12, 16, 20]]  # Thumb, index, middle, ring, pinky tips
+    tip_dists = [np.linalg.norm(tip[:2] - wrist[:2]) for tip in tips]
+    avg_dist = np.mean(tip_dists)
+    # Also consider box scale:
+    min_xy = hand_lms[:, :2].min(axis=0)
+    max_xy = hand_lms[:, :2].max(axis=0)
+    box_diag = np.linalg.norm(max_xy - min_xy)
+    scale = max(avg_dist, box_diag)
+    if scale == 0:
+        scale = 1
+    normed = (hand_lms - wrist) / scale
+    return normed.flatten()
+
 def predict_gesture(landmarks, model):
     # landmarks: list of 63 floats (21 points * 3)
+    landmarks = hand_scale(landmarks)
     with torch.no_grad():
         input_tensor = torch.tensor(landmarks, dtype=torch.float32).unsqueeze(0)  # batch size 1
         output = model(input_tensor)

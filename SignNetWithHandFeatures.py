@@ -41,6 +41,9 @@ class DGSLandmarkDataset(Dataset):
         feature = self.features[idx]
         label = self.labels[idx]
 
+        # apply scaling
+        feature = hand_scale(feature.reshape(21, 3))
+
         # Apply augmentation only if transform is defined and indicates training mode
         if self.transform is not None:
             feature = self.transform(feature)
@@ -54,6 +57,22 @@ class DGSLandmarkDataset(Dataset):
         label = torch.tensor(label, dtype=torch.long)
 
         return feature, label
+
+def hand_scale(hand_lms):
+    # hand_lms: (21, 3)
+    wrist = hand_lms[0]
+    tips = hand_lms[[4, 8, 12, 16, 20]]  # Thumb, index, middle, ring, pinky tips
+    tip_dists = [np.linalg.norm(tip[:2] - wrist[:2]) for tip in tips]
+    avg_dist = np.mean(tip_dists)
+    # Also consider box scale:
+    min_xy = hand_lms[:, :2].min(axis=0)
+    max_xy = hand_lms[:, :2].max(axis=0)
+    box_diag = np.linalg.norm(max_xy - min_xy)
+    scale = max(avg_dist, box_diag)
+    if scale == 0:
+        scale = 1
+    normed = (hand_lms - wrist) / scale
+    return normed
 
 def augment_landmarks(landmarks, noise_std=0.01, max_rotation_deg=10):
     """

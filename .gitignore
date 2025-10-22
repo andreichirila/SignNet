@@ -2,4 +2,9 @@
 labels_grouped.txt
 __pycache__/
 Nicht bestätigt 268322.crdownload
+2305.04868v1.pdf
 models
+SignNet+/phoenix-2014.v3
+SignNet+/checkpoint.json
+SignNet+/parsed_landmarks_dataset_(nicht_verwenden)
+SignNet+/LandmarksPhoenixDataset

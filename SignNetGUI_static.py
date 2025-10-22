@@ -9,6 +9,7 @@ import csv
 import pandas as pd
 import tkinter as tk
 from PIL import Image, ImageTk
+import time
 
 CONFIG = {
     'num_classes': 24,
@@ -18,7 +19,8 @@ CONFIG = {
     'model_dir': './models',
     'output_csv': './landmark_datasets/new_samples_german_sign_language.csv',
     'frame_width': 640,
-    'frame_height': 480
+    'frame_height': 480,
+    'hold_time_threshold': 1.0  # Time in seconds to hold a sign to record it
 }
 
 def load_latest_model(model_dir, num_classes, device):
@@ -69,6 +71,10 @@ class SignLanguageGUI:
         self.label_display = tk.Label(root, textvariable=self.label_text, font=("Arial", 14))
         self.label_display.pack()
 
+        self.word_text = tk.StringVar(value="Word: ")
+        self.word_display = tk.Label(root, textvariable=self.word_text, font=("Arial", 14))
+        self.word_display.pack()
+
         self.letter_var = tk.StringVar(value=CONFIG['class_names'][0])
         self.letter_menu = tk.OptionMenu(root, self.letter_var, *CONFIG['class_names'])
         self.letter_menu.pack()
@@ -81,6 +87,9 @@ class SignLanguageGUI:
         self.input_features = None
         self.predicted_letter = None
         self.confidence = 0.0
+        self.word = []  # List to store the letters forming the word
+        self.last_letter = None  # Track the last predicted letter
+        self.letter_start_time = None  # Track when a letter prediction started
 
         self.update_webcam()
 
@@ -109,7 +118,7 @@ class SignLanguageGUI:
 
                 self.input_features = np.array(normalized_landmarks).flatten().astype(np.float32)
 
-                wrist = self.input_features[0:3].copy()  # Copy to avoid modifying during prediction
+                wrist = self.input_features[0:3].copy()
                 for i in range(1, 21):
                     start_idx = i * 3
                     self.input_features[start_idx:start_idx + 3] -= wrist
@@ -125,8 +134,27 @@ class SignLanguageGUI:
                 if self.confidence > 0.7:
                     self.label_text.set(f"Predicted: {self.predicted_letter} ({self.confidence:.2f})")
                     self.letter_var.set(self.predicted_letter)
+
+                    # Check if the predicted letter is the same as the last one
+                    if self.predicted_letter == self.last_letter:
+                        # Continue timing if the letter hasn't changed
+                        if self.letter_start_time is not None:
+                            elapsed_time = time.time() - self.letter_start_time
+                            if elapsed_time >= CONFIG['hold_time_threshold']:
+                                # Record the letter to the word if held for 2 seconds
+                                if self.predicted_letter not in self.word:
+                                    self.word.append(self.predicted_letter)
+                                    self.word_text.set(f"Word: {''.join(self.word)}")
+                                    print(f"Added letter '{self.predicted_letter}' to word: {''.join(self.word)}")
+                                    self.letter_start_time = time.time()  # Reset timer after recording
+                    else:
+                        # New letter detected, reset the timer
+                        self.last_letter = self.predicted_letter
+                        self.letter_start_time = time.time()
                 else:
                     self.label_text.set("unknown")
+                    self.last_letter = None
+                    self.letter_start_time = None
 
         img_rgb = cv2.cvtColor(img_annotated, cv2.COLOR_BGR2RGB)
         img_pil = Image.fromarray(img_rgb)
@@ -139,7 +167,7 @@ class SignLanguageGUI:
         if self.input_features is not None:
             selected_letter = self.letter_var.get().lower()
             wrist_normalized_features = self.input_features.copy()
-            wrist_normalized_features[0:3] = 0  # Set wrist coordinates to 0
+            wrist_normalized_features[0:3] = 0
             with open(CONFIG['output_csv'], 'a', newline='') as f:
                 writer = csv.writer(f)
                 row = [selected_letter] + wrist_normalized_features.tolist()

@@ -601,7 +601,7 @@ def plot_training_curves(histories: Dict[str, Dict], save_path=None):
 
 
 # ============================================================================
-# 🎯 MAIN DEMO FUNCTION
+# MAIN DEMO FUNCTION
 # ============================================================================
 
 def run_demo(data_files: List[Path],
@@ -714,7 +714,7 @@ def run_demo(data_files: List[Path],
 
 
 # ============================================================================
-# 🚀 ENTRY POINT
+# ENTRY POINT
 # ============================================================================
 
 if __name__ == "__main__":

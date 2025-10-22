@@ -155,5 +155,5 @@ print("""
 """)
 
 print("="*70)
-print("🎉 Demo completed! Check training_comparison.png for plots.")
+print("Demo completed! Check training_comparison.png for plots.")
 print("="*70)

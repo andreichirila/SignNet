@@ -17,10 +17,10 @@ print("="*70)
 # ============================================================================
 
 # Input: Your trained model from vast.ai
-INPUT_MODEL = Path("Fertige_Models/current_model.pth")
+INPUT_MODEL = Path("HistoryModels/current_model.pth")
 
 # Output: GUI-compatible model
-OUTPUT_MODEL = Path("Fertige_Models/current_model_converted.pth")
+OUTPUT_MODEL = Path("HistoryModels/current_model_converted.pth")
 OUTPUT_MODEL.parent.mkdir(exist_ok=True)
 
 print(f"\n📥 Input:  {INPUT_MODEL}")

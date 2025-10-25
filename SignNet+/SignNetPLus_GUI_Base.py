@@ -593,7 +593,7 @@ if __name__ == "__main__":
     print("="*70)
 
     # Model path
-    model_path = Path("Fertige_Models/current_model_converted.pth")
+    model_path = Path("HistoryModels/current_model_converted.pth")
 
     print(f"\n✅ Model path: {model_path}")
     print("\n🎥 Starting live demo...")

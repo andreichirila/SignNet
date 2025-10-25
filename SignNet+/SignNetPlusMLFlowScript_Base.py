@@ -52,7 +52,7 @@ def find_dataset():
     print(f"   Expected structure:")
     print(f"   SignNet+/")
     print(f"   ├── SignNetPlusMLFlowScript.py  (this file)")
-    print(f"   ├── SignNetPlusModel.py")
+    print(f"   ├── SignNetPlusModel_Base.py")
     print(f"   └── LandmarksPhoenixDataset/")
     print(f"       ├── landmarks_train/")
     print(f"       ├── landmarks_dev/")
@@ -100,12 +100,12 @@ else:
 print("\n📦 Loading training framework...")
 
 try:
-    from SignNetPlusModel import train_signbert_with_mlflow
-    print("   ✅ SignNetPlusModel.py loaded!")
+    from SignNetPlusModel_Base import train_signbert_with_mlflow
+    print("   ✅ SignNetPlusModel_Base.py loaded!")
 except ImportError as e:
-    print(f"   ❌ ERROR: Cannot import from SignNetPlusModel.py")
+    print(f"   ❌ ERROR: Cannot import from SignNetPlusModel_Base.py")
     print(f"   {e}")
-    print(f"\n💡 Ensure SignNetPlusModel.py is in the same folder:")
+    print(f"\n💡 Ensure SignNetPlusModel_Base.py is in the same folder:")
     print(f"   {Path(__file__).parent}")
     sys.exit(1)
 

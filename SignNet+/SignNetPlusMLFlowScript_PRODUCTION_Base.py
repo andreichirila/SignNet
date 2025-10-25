@@ -88,7 +88,7 @@ print("\n⚠️  This will take 3-4 hours!")  # Warns the user about the expecte
 print("💡 You can check progress in MLflow: https://mlflow.schlaepfer.me")  # Provides a tip with a URL to monitor progress via MLflow (a tool for managing ML experiments).
 print()  # Prints an empty line for spacing.
 
-from SignNetPlusModel import train_signbert_with_mlflow  # Imports the train_signbert_with_mlflow function from a custom module named SignNetPlusModel, which handles the actual training logic with MLflow integration.
+from SignNetPlusModel_Base import train_signbert_with_mlflow  # Imports the train_signbert_with_mlflow function from a custom module named SignNetPlusModel, which handles the actual training logic with MLflow integration.
 
 try:  # Starts a try-except block to handle potential errors during training.
     results = train_signbert_with_mlflow(  # Calls the imported training function and assigns the returned results to the results variable.

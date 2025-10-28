@@ -1,106 +1,739 @@
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader
-import json
 import os
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader, Subset
+from torch.nn import CTCLoss
+import glob
+import json
+import math
+from tqdm import tqdm
+import mlflow
+import mlflow.pytorch
+from torchinfo import summary
 
+# ==================== DATASET ====================
 
 class LandmarkDataset(Dataset):
-    def __init__(self, landmarks_dir, vocab):
+    """Dataset loader for preprocessed landmarks"""
+    def __init__(self, landmarks_dir, vocab_file=None, build_vocab=False, 
+                 augment=False, all_dirs_for_vocab=None, max_samples=None, random_subset=False):
         self.landmarks_dir = landmarks_dir
-        self.file_names = sorted([f for f in os.listdir(landmarks_dir) if f.endswith(".npz")])
-        self.vocab = vocab
+        self.samples = sorted(glob.glob(os.path.join(landmarks_dir, "*.npz")))
+        self.augment = augment
+
+        # Initialize augmentation
+        if self.augment:
+            self.temporal_aug = TemporalAugmentation(speed_range=(0.85, 1.15), prob=0.5)
+
+        # Limit samples
+        if max_samples is not None:
+            if random_subset:
+                # Random subset for better representation
+                random.seed(seed)
+                self.samples = random.sample(self.samples, 
+                                           min(max_samples, len(self.samples)))
+                print(f"Random subset: {len(self.samples)} samples (seed={seed})")
+            else:
+                # First N samples
+                self.samples = self.samples[:max_samples]
+                print(f"First {len(self.samples)} samples")
+                
+                
+        if build_vocab:
+            # Build vocab from all directories if provided
+            if all_dirs_for_vocab:
+                self.gloss_vocab = self._build_vocab_from_multiple_dirs(all_dirs_for_vocab)
+            else:
+                self.gloss_vocab = self._build_vocab()
+            self._save_vocab(vocab_file)
+        else:
+            self.gloss_vocab = self._load_vocab(vocab_file)
+
+        self.idx_to_gloss = {v: k for k, v in self.gloss_vocab.items()}
+        
+    def _build_vocab_from_multiple_dirs(self, directories):
+        """Build vocabulary from multiple directories (train, dev, test)"""
+        glosses = set()
+        for directory in directories:
+            samples = sorted(glob.glob(os.path.join(directory, "*.npz")))
+            for sample_path in tqdm(samples, desc=f"Building vocab from {directory}"):
+                data = np.load(sample_path, allow_pickle=True)
+                glosses.update(data['glosses'])
+
+        gloss_to_idx = {
+            '<pad>': 0, 
+            '<blank>': 1, 
+            '<sos>': 2, 
+            '<eos>': 3,
+            '<unk>': 4
+        }
+        
+        for idx, gloss in enumerate(sorted(glosses)):
+            gloss_to_idx[gloss] = idx + 5
+
+        print(f"Vocabulary size: {len(gloss_to_idx)} (from {len(directories)} directories)")
+        return gloss_to_idx
+
+    def _build_vocab(self):
+        """Build vocabulary from all glosses in dataset"""
+        glosses = set()
+        for sample_path in tqdm(self.samples, desc="Building vocab"):
+            data = np.load(sample_path, allow_pickle=True)
+            glosses.update(data['glosses'])
+
+        gloss_to_idx = {
+            '<pad>': 0, 
+            '<blank>': 1, 
+            '<sos>': 2, 
+            '<eos>': 3,
+            '<unk>': 4
+        }
+        
+        for idx, gloss in enumerate(sorted(glosses)):
+            gloss_to_idx[gloss] = idx + 5
+
+        print(f"Vocabulary size: {len(gloss_to_idx)}")
+        return gloss_to_idx
+
+    def _save_vocab(self, vocab_file):
+        """Save vocabulary to JSON file"""
+        if vocab_file:
+            with open(vocab_file, 'w') as f:
+                json.dump(self.gloss_vocab, f, indent=2)
+            print(f"Vocabulary saved to {vocab_file}")
+
+    def _load_vocab(self, vocab_file):
+        """Load vocabulary from JSON file"""
+        with open(vocab_file, 'r') as f:
+            vocab = json.load(f)
+        print(f"Vocabulary loaded from {vocab_file}, size: {len(vocab)}")
+        return vocab
 
     def __len__(self):
-        return len(self.file_names)
+        return len(self.samples)
 
     def __getitem__(self, idx):
-        path = os.path.join(self.landmarks_dir, self.file_names[idx])
-        data = np.load(path)
-        landmarks = data['landmarks']  # shape (T, feature_dim)
-        label_str = data['label'].item()
-        label_idx = self.vocab.get(label_str, 0)
-        landmarks_tensor = torch.tensor(landmarks).float()
-        label_tensor = torch.tensor(label_idx).long()
-        return landmarks_tensor, label_tensor
+        data = np.load(self.samples[idx], allow_pickle=True)
+        landmarks = data['landmarks']
 
-class SignLanguageLSTM(nn.Module):
-    def __init__(self, input_dim=1530, hidden_dim=128, num_classes=100):
+        # Apply augmentation during training
+        if self.augment:
+            # Temporal augmentation
+            landmarks = self.temporal_aug(landmarks)
+
+            # Spatial noise
+            if np.random.random() > 0.5:
+                landmarks = add_spatial_noise(landmarks, noise_std=0.005)
+
+        landmarks = torch.FloatTensor(landmarks)
+        
+        # Handle unknown glosses safely
+        glosses = []
+        for g in data['glosses']:
+            g_str = str(g)
+            glosses.append(self.gloss_vocab.get(g_str, self.gloss_vocab['<unk>']))
+        
+        return landmarks, torch.LongTensor(glosses)
+
+
+def collate_fn(batch):
+    """Collate function for variable-length sequences"""
+    landmarks, glosses = zip(*batch)
+
+    # Pad landmarks to max length in batch
+    max_len = max(lm.shape[0] for lm in landmarks)
+    feature_dim = landmarks[0].shape[1]
+    padded_landmarks = torch.zeros(len(landmarks), max_len, feature_dim)
+    landmark_lengths = []
+
+    for i, lm in enumerate(landmarks):
+        padded_landmarks[i, :lm.shape[0]] = lm
+        landmark_lengths.append(lm.shape[0])
+
+    # Pad glosses
+    max_gloss_len = max(len(g) for g in glosses)
+    padded_glosses = torch.zeros(len(glosses), max_gloss_len).long()
+    gloss_lengths = []
+
+    for i, g in enumerate(glosses):
+        padded_glosses[i, :len(g)] = g
+        gloss_lengths.append(len(g))
+
+    return (padded_landmarks, torch.LongTensor(landmark_lengths),
+            padded_glosses, torch.LongTensor(gloss_lengths))
+
+
+# ==================== MODEL ====================
+
+class PositionalEncoding(nn.Module):
+    """Positional encoding for transformer"""
+    def __init__(self, d_model, max_len=5000, dropout=0.1):
         super().__init__()
-        self.lstm = nn.LSTM(input_dim, hidden_dim, batch_first=True)
-        self.fc = nn.Linear(hidden_dim, num_classes)
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() *
+                            -(math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
-        output, _ = self.lstm(x)
-        output = self.fc(output[:, -1, :])
-        return output
+        x = x + self.pe[:, :x.size(1)]
+        return self.dropout(x)
 
-def compute_accuracy(output, target):
-    preds = output.argmax(dim=1)
-    correct = (preds == target).sum().item()
-    return correct, target.size(0)
 
-def train(model, dataloader, criterion, optimizer, device):
+class SignLanguageTranslator(nn.Module):
+    """Transformer-based Sign Language Translation Model"""
+    def __init__(self, input_dim, num_glosses, d_model=512, nhead=8,
+                 num_encoder_layers=6, dropout=0.1):
+        super().__init__()
+
+        # Input projection
+        self.input_proj = nn.Sequential(
+            nn.Linear(input_dim, d_model),
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout)
+        )
+
+        # Temporal convolution for local feature extraction
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+
+        # Positional encoding
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
+
+        # Transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=nhead,
+            dim_feedforward=d_model * 4,
+            dropout=dropout,
+            activation='relu',
+            batch_first=True,
+            norm_first=True
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+
+        # CTC head for gloss prediction
+        self.ctc_head = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, num_glosses)
+        )
+
+        self.d_model = d_model
+
+    def forward(self, src, src_lengths):
+        # Input projection: [B, T, input_dim] -> [B, T, d_model]
+        x = self.input_proj(src)
+
+        # Temporal convolution
+        x_conv = self.temporal_conv(x.transpose(1, 2)).transpose(1, 2)
+        x = x + x_conv
+
+        # Positional encoding
+        x = self.pos_encoder(x)
+
+        # Create padding mask
+        src_mask = self._generate_padding_mask(src_lengths, src.size(1)).to(src.device)
+
+        # Encode
+        memory = self.encoder(x, src_key_padding_mask=src_mask)
+
+        # CTC prediction
+        ctc_logits = self.ctc_head(memory)
+
+        return ctc_logits
+
+    def _generate_padding_mask(self, lengths, max_len):
+        """Generate padding mask for variable length sequences"""
+        batch_size = len(lengths)
+        mask = torch.arange(max_len).expand(batch_size, max_len) >= lengths.unsqueeze(1)
+        return mask
+
+
+# ==================== DATA AUGMENTATION ====================
+
+class TemporalAugmentation:
+    """Temporal data augmentation"""
+    def __init__(self, speed_range=(0.85, 1.15), prob=0.5):
+        self.speed_range = speed_range
+        self.prob = prob
+
+    def __call__(self, landmarks):
+        if np.random.random() > self.prob:
+            return landmarks
+
+        # Random temporal scaling
+        speed = np.random.uniform(*self.speed_range)
+        num_frames = landmarks.shape[0]
+        new_num_frames = max(1, int(num_frames / speed))
+
+        indices = np.linspace(0, num_frames - 1, new_num_frames)
+        augmented = np.array([landmarks[min(int(i), num_frames-1)] for i in indices])
+
+        return augmented
+
+
+def add_spatial_noise(landmarks, noise_std=0.005):
+    """Add Gaussian noise to landmarks"""
+    noise = np.random.normal(0, noise_std, landmarks.shape)
+    return landmarks + noise
+
+
+# ==================== TRAINING ====================
+
+def decode_predictions(ctc_output, lengths, vocab, blank_id=1):
+    """Decode CTC output using greedy decoding"""
+    batch_size = ctc_output.size(0)
+    predictions = torch.argmax(ctc_output, dim=-1)
+
+    decoded = []
+    for i in range(batch_size):
+        pred = predictions[i, :lengths[i]]
+
+        # Remove blanks and repeated tokens
+        pred_seq = []
+        prev = None
+        for p in pred:
+            p = p.item()
+            if p != blank_id and p != prev:
+                pred_seq.append(p)
+            prev = p
+
+        # Convert to glosses
+        glosses = [vocab.get(p, '<unk>') for p in pred_seq]
+        decoded.append(glosses)
+
+    return decoded
+
+
+def compute_wer(predictions, targets):
+    """Compute Word Error Rate"""
+    errors = 0
+    total_words = 0
+
+    for pred, tgt in zip(predictions, targets):
+        # Simple edit distance calculation
+        pred_words = pred if isinstance(pred, list) else pred.split()
+        tgt_words = tgt if isinstance(tgt, list) else tgt.split()
+
+        d = [[0] * (len(tgt_words) + 1) for _ in range(len(pred_words) + 1)]
+
+        for i in range(len(pred_words) + 1):
+            d[i][0] = i
+        for j in range(len(tgt_words) + 1):
+            d[0][j] = j
+
+        for i in range(1, len(pred_words) + 1):
+            for j in range(1, len(tgt_words) + 1):
+                if pred_words[i-1] == tgt_words[j-1]:
+                    d[i][j] = d[i-1][j-1]
+                else:
+                    d[i][j] = min(d[i-1][j], d[i][j-1], d[i-1][j-1]) + 1
+
+        errors += d[len(pred_words)][len(tgt_words)]
+        total_words += len(tgt_words)
+
+    return errors / max(total_words, 1)
+
+
+def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch):
+    """Train for one epoch"""
     model.train()
-    running_loss = 0
-    correct = 0
-    total = 0
-    for landmarks, labels in dataloader:
-        landmarks, labels = landmarks.to(device), labels.to(device)
+    total_loss = 0
+    num_batches = 0
+
+    pbar = tqdm(train_loader, desc="Training")
+    for batch_idx, (landmarks, landmark_lengths, glosses, gloss_lengths) in enumerate(pbar):
+        landmarks = landmarks.to(device)
+        glosses = glosses.to(device)
+        landmark_lengths = landmark_lengths.to(device)
+        gloss_lengths = gloss_lengths.to(device)
+
         optimizer.zero_grad()
-        outputs = model(landmarks)
-        loss = criterion(outputs, labels)
+
+        # Forward pass
+        ctc_logits = model(landmarks, landmark_lengths)
+
+        # CTC loss expects [T, B, C] format and log probabilities
+        ctc_logits = ctc_logits.transpose(0, 1)
+        log_probs = F.log_softmax(ctc_logits, dim=-1)
+
+        # Calculate CTC loss
+        loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
+
+        # Backward pass
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
-        running_loss += loss.item()
-        c, t = compute_accuracy(outputs, labels)
-        correct += c
-        total += t
-    print(f"Train Loss: {running_loss / len(dataloader):.4f}, Accuracy: {correct / total:.4f}")
 
-def evaluate(model, dataloader, device):
+        total_loss += loss.item()
+        num_batches += 1
+
+        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+        
+        # Log batch loss to MLflow every 50 batches
+        if batch_idx % 50 == 0:
+            step = epoch * len(train_loader) + batch_idx
+            mlflow.log_metric("batch_loss", loss.item(), step=step)
+
+    return total_loss / num_batches
+
+
+def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
+    """Validate the model"""
     model.eval()
-    correct = 0
-    total = 0
-    with torch.no_grad():
-        for landmarks, labels in dataloader:
-            landmarks, labels = landmarks.to(device), labels.to(device)
-            outputs = model(landmarks)
-            c, t = compute_accuracy(outputs, labels)
-            correct += c
-            total += t
-    print(f"Eval Accuracy: {correct / total:.4f}")
+    total_loss = 0
+    num_batches = 0
+    all_predictions = []
+    all_targets = []
 
-def load_vocab(vocab_file):
-    import json
-    with open(vocab_file, "r", encoding="utf-8") as f:
-        vocab = json.load(f)
-    print(f"Loaded vocabulary of size {len(vocab)} from {vocab_file}")
-    return vocab
+    with torch.no_grad():
+        pbar = tqdm(val_loader, desc="Validation")
+        for landmarks, landmark_lengths, glosses, gloss_lengths in pbar:
+            landmarks = landmarks.to(device)
+            glosses = glosses.to(device)
+            landmark_lengths = landmark_lengths.to(device)
+            gloss_lengths = gloss_lengths.to(device)
+
+            # Forward pass
+            ctc_logits = model(landmarks, landmark_lengths)
+
+            # Calculate loss
+            ctc_logits_t = ctc_logits.transpose(0, 1)
+            log_probs = F.log_softmax(ctc_logits_t, dim=-1)
+            loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
+
+            total_loss += loss.item()
+            num_batches += 1
+
+            # Decode predictions
+            predictions = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
+
+            # Convert targets to glosses
+            for i in range(glosses.size(0)):
+                target = glosses[i, :gloss_lengths[i]].cpu().numpy()
+                target_glosses = [idx_to_gloss.get(int(t), '<unk>') for t in target]
+                all_predictions.append(predictions[i])
+                all_targets.append(target_glosses)
+
+            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+
+    avg_loss = total_loss / num_batches
+    wer = compute_wer(all_predictions, all_targets)
+
+    return avg_loss, wer
+
+
+def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
+    """Full training loop with MLflow tracking"""
+    os.makedirs(save_dir, exist_ok=True)
+
+    criterion = CTCLoss(blank=1, zero_infinity=True)
+    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, betas=(0.9, 0.98), eps=1e-9)
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=3)
+
+    best_wer = float('inf')
+
+    for epoch in range(num_epochs):
+        print(f"\n{'='*50}")
+        print(f"Epoch {epoch+1}/{num_epochs}")
+        print(f"{'='*50}")
+
+        # Train
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch)
+        print(f"Train Loss: {train_loss:.4f}")
+
+        # Validate
+        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss)
+        print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
+
+        # Log metrics to MLflow
+        mlflow.log_metric("train_loss", train_loss, step=epoch)
+        mlflow.log_metric("val_loss", val_loss, step=epoch)
+        mlflow.log_metric("val_wer", val_wer, step=epoch)
+        mlflow.log_metric("learning_rate", optimizer.param_groups[0]['lr'], step=epoch)
+
+        # Learning rate scheduling
+        scheduler.step(val_loss)
+
+        # Save best model
+        if val_wer < best_wer:
+            best_wer = val_wer
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': val_loss,
+                'val_wer': val_wer,
+            }
+            checkpoint_path = os.path.join(save_dir, 'best_model.pt')
+            torch.save(checkpoint, checkpoint_path)
+            print(f"✓ Saved best model with WER: {best_wer:.4f}")
+            
+            # Log best model to MLflow
+            # mlflow.log_artifact(checkpoint_path)
+            mlflow.log_metric("best_wer", best_wer)
+
+        # Save checkpoint every 5 epochs
+        if (epoch + 1) % 5 == 0:
+            checkpoint = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': val_loss,
+                'val_wer': val_wer,
+            }
+            checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pt')
+            torch.save(checkpoint, checkpoint_path)
+            mlflow.log_artifact(checkpoint_path)
+
+    return best_wer
+
+
+def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=100):
+    """Generate comprehensive model summary"""
+    print("\n" + "="*70)
+    print("MODEL SUMMARY")
+    print("="*70)
+    
+    # Create dummy input
+    dummy_input = torch.randn(batch_size, seq_length, input_dim).to(device)
+    dummy_lengths = torch.tensor([seq_length] * batch_size).to(device)
+    
+    # Get torchinfo summary
+    model_stats = summary(
+        model,
+        input_data=(dummy_input, dummy_lengths),
+        col_names=["input_size", "output_size", "num_params", "trainable"],
+        col_width=20,
+        row_settings=["var_names"],
+        verbose=0
+    )
+    
+    # Print summary
+    print(model_stats)
+    
+    # Additional statistics
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    non_trainable_params = total_params - trainable_params
+    
+    # Calculate model size in MB
+    param_size = sum(p.numel() * p.element_size() for p in model.parameters())
+    buffer_size = sum(b.numel() * b.element_size() for b in model.buffers())
+    size_mb = (param_size + buffer_size) / 1024**2
+    
+    print("\n" + "="*70)
+    print("DETAILED STATISTICS")
+    print("="*70)
+    print(f"Total Parameters:           {total_params:>15,}")
+    print(f"Trainable Parameters:       {trainable_params:>15,}")
+    print(f"Non-trainable Parameters:   {non_trainable_params:>15,}")
+    print(f"Model Size:                 {size_mb:>15.2f} MB")
+    print(f"Input Shape:                {tuple(dummy_input.shape)}")
+    print(f"Output Shape:               {model(dummy_input, dummy_lengths).shape}")
+    print("="*70 + "\n")
+    
+    # Return summary as string for logging
+    summary_str = str(model_stats)
+    
+    # Create detailed summary dictionary
+    summary_dict = {
+        "total_params": total_params,
+        "trainable_params": trainable_params,
+        "non_trainable_params": non_trainable_params,
+        "model_size_mb": size_mb,
+        "input_shape": list(dummy_input.shape),
+        "output_shape": list(model(dummy_input, dummy_lengths).shape)
+    }
+    
+    return summary_str, summary_dict
+
+
+# ==================== MAIN ====================
+
+def main():
+    # Configuration
+    LANDMARKS_TRAIN = "./landmarks_train"
+    LANDMARKS_DEV = "./landmarks_dev"
+    VOCAB_FILE = "vocab.json"
+    BATCH_SIZE = 16
+    NUM_EPOCHS = 50
+    INPUT_DIM = 1659  # 126 (hands) + 1434 (face) + 99 (pose)
+    D_MODEL = 512
+    NHEAD = 8
+    NUM_LAYERS = 6
+    DROPOUT = 0.1
+    
+    # MLflow configuration
+    EXPERIMENT_NAME = "SignLanguageTranslation"
+    RUN_NAME = "transformer_ctc_baseline"
+
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f"Using device: {device}")
+
+    mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
+    # Set MLflow experiment
+    mlflow.set_experiment(EXPERIMENT_NAME)
+    
+    # Start MLflow run
+    with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME):
+        # Log hyperparameters
+        mlflow.log_params({
+            "batch_size": BATCH_SIZE,
+            "num_epochs": NUM_EPOCHS,
+            "input_dim": INPUT_DIM,
+            "d_model": D_MODEL,
+            "nhead": NHEAD,
+            "num_layers": NUM_LAYERS,
+            "dropout": DROPOUT,
+            "optimizer": "Adam",
+            "learning_rate": 1e-4,
+            "scheduler": "ReduceLROnPlateau",
+            "augmentation": "temporal+spatial",
+            "loss_function": "CTC"
+        })
+        
+        # Log device info
+        mlflow.log_param("device", str(device))
+        mlflow.log_param("cuda_available", torch.cuda.is_available())
+        if torch.cuda.is_available():
+            mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
+
+        # Create datasets
+        print("\n" + "="*50)
+        print("Loading Datasets")
+        print("="*50)
+
+        # Create datasets with augmentation
+        train_dataset = LandmarkDataset(
+            LANDMARKS_TRAIN,
+            vocab_file=VOCAB_FILE,
+            build_vocab=True,
+            augment=True,  # Enable augmentation for training
+            # max_samples=500,
+            # random_subset=False
+        )
+
+        val_dataset = LandmarkDataset(
+            LANDMARKS_DEV,
+            vocab_file=VOCAB_FILE,
+            build_vocab=False,
+            augment=False  # No augmentation for validation
+        )
+        
+        # Log dataset info
+        mlflow.log_params({
+            "train_samples": len(train_dataset),
+            "val_samples": len(val_dataset),
+            "vocab_size": len(train_dataset.gloss_vocab)
+        })
+        
+        # Log vocabulary file as artifact
+        mlflow.log_artifact(VOCAB_FILE)
+
+        use_pin_memory = torch.cuda.is_available()
+        # Create data loaders
+        train_loader = DataLoader(
+            train_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=True,
+            collate_fn=collate_fn,
+            num_workers=4,
+            pin_memory=use_pin_memory
+        )
+
+        val_loader = DataLoader(
+            val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=4,
+            pin_memory=use_pin_memory
+        )
+
+        # Create model
+        print("\n" + "="*50)
+        print("Creating Model")
+        print("="*50)
+
+        num_glosses = len(train_dataset.gloss_vocab)
+        model = SignLanguageTranslator(
+            input_dim=INPUT_DIM,
+            num_glosses=num_glosses,
+            d_model=D_MODEL,
+            nhead=NHEAD,
+            num_encoder_layers=NUM_LAYERS,
+            dropout=DROPOUT
+        ).to(device)
+
+        # Generate and log model summary
+        summary_str, summary_dict = generate_model_summary(
+            model, 
+            INPUT_DIM, 
+            device, 
+            batch_size=BATCH_SIZE,
+            seq_length=100
+        )
+        
+        # Log model statistics to MLflow
+        mlflow.log_params(summary_dict)
+        
+        # Save model summary to file and log as artifact
+        model_summary_path = "model_summary.txt"
+        with open(model_summary_path, 'w', encoding='utf-8') as f:
+            f.write(summary_str)
+            f.write("\n\n" + "="*70 + "\n")
+            f.write("DETAILED STATISTICS\n")
+            f.write("="*70 + "\n")
+            for key, value in summary_dict.items():
+                f.write(f"{key}: {value}\n")
+        mlflow.log_artifact(model_summary_path)
+
+        # Train model
+        print("\n" + "="*50)
+        print("Starting Training")
+        print("="*50)
+
+        best_wer = train_model(
+            model,
+            train_loader,
+            val_loader,
+            NUM_EPOCHS,
+            device,
+            train_dataset.gloss_vocab,
+            train_dataset.idx_to_gloss
+        )
+
+        print(f"\n{'='*50}")
+        print(f"Training Complete! Best WER: {best_wer:.4f}")
+        print(f"{'='*50}")
+        
+        # Log final best WER
+        mlflow.log_metric("final_best_wer", best_wer)
+        
+        # Log the final model
+        mlflow.pytorch.log_model(model, "model")
+        
+        # Set tags for easy filtering
+        mlflow.set_tags({
+            "model_type": "transformer",
+            "task": "sign_language_translation",
+            "dataset": "phoenix-2014",
+            "status": "completed"
+        })
 
 
 if __name__ == "__main__":
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # Load your vocab here (same vocab used for preprocessing)
-    vocab = load_vocab("vocab.json")
-
-    train_ds = LandmarkDataset("./landmarks_train", vocab)
-    dev_ds = LandmarkDataset("./landmarks_dev", vocab)
-    test_ds = LandmarkDataset("./landmarks_test", vocab)
-
-    train_loader = DataLoader(train_ds, batch_size=4, shuffle=True)
-    dev_loader = DataLoader(dev_ds, batch_size=4)
-    test_loader = DataLoader(test_ds, batch_size=4)
-
-    model = SignLanguageLSTM(input_dim=1530, hidden_dim=128, num_classes=len(vocab)).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
-
-    for epoch in range(5):
-        train(model, train_loader, criterion, optimizer, device)
-        evaluate(model, dev_loader, device)
-
-    # Final test run
-    evaluate(model, test_loader, device)
+    main()

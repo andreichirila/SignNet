@@ -429,7 +429,7 @@ class SignLanguageTranslationModel(nn.Module):
 
         # Enhanced temporal convolution with multiple kernel sizes
         # Each conv outputs d_model//3, but we need to ensure they sum to d_model
-        conv_channels = [d_model // 3, d_model // 3, d_model - 2 * (d_model // 3)]  # Ensures exact sum
+        conv_channels = [d_model // 3, d_model // 3, d_model - 2 * (d_model // 3)]
         self.temporal_conv = nn.ModuleList([
             nn.Conv1d(d_model, conv_channels[i], kernel_size=k, padding=k//2)
             for i, k in enumerate([3, 5, 7])
@@ -847,7 +847,37 @@ def compute_bleu(predictions, targets):
 
 
 # ==================== TRAINING ====================
-
+class WarmupScheduler:
+    """Learning rate scheduler with linear warmup and cosine decay"""
+    def __init__(self, optimizer, warmup_steps, total_steps, base_lr):
+        self.optimizer = optimizer
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+        self.base_lr = base_lr
+        self.current_step = 0
+    
+    def step(self):
+        """Update learning rate and return current LR"""
+        self.current_step += 1
+        
+        if self.current_step < self.warmup_steps:
+            # Linear warmup from 0 to base_lr
+            lr = self.base_lr * (self.current_step / self.warmup_steps)
+        else:
+            # Cosine decay after warmup
+            progress = (self.current_step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
+            lr = self.base_lr * 0.5 * (1 + math.cos(math.pi * progress))
+        
+        # Update all parameter groups
+        for param_group in self.optimizer.param_groups:
+            param_group['lr'] = lr
+        
+        return lr
+    
+    def get_last_lr(self):
+        """Get current learning rate"""
+        return [param_group['lr'] for param_group in self.optimizer.param_groups]
+        
 def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler=None):
     """Train for one epoch with mixed precision and joint loss"""
     model.train()
@@ -894,6 +924,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
         scaler.update()
+        current_lr = lr_scheduler.step()
         
         # Call scheduler AFTER optimizer.step() AND scaler.update()
         if scheduler is not None:
@@ -922,7 +953,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
             'loss': f'{loss.item():.4f}',
             'ctc': f'{np.mean(ctc_losses[-10:]):.4f}' if ctc_losses else '0.0000',
             'att': f'{np.mean(att_losses[-10:]):.4f}' if att_losses else '0.0000',
-            'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
+            'lr': f'{current_lr:.2e}'
         })
         
         if batch_idx % 20 == 0:
@@ -1032,26 +1063,42 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
     os.makedirs(save_dir, exist_ok=True)
 
     # Joint CTC/Attention loss with weights
-    criterion = JointCTCLoss(ctc_weight=ctc_weight, attention_weight=1-ctc_weight)
+    criterion = JointCTCLoss(ctc_weight=0.3, attention_weight=0.7, blank_id=1)
     
-    # Lower learning rate with AdamW
-    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, betas=(0.9, 0.98), 
-                                  eps=1e-9, weight_decay=0.01)
+    # ==================== NEW: HIGHER LEARNING RATE ====================
+    base_lr = 5e-4  # CHANGED from 5e-5 to 5e-4 (10x increase)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=base_lr,  # Use base_lr directly
+        betas=(0.9, 0.98), 
+        eps=1e-9, 
+        weight_decay=0.01
+    )
     
-    # Warmup scheduler
-    num_training_steps = num_epochs * len(train_loader)
-    num_warmup_steps = num_training_steps // 10  # 10% warmup
+    # ==================== NEW: WARMUP SCHEDULER ====================
+    total_steps = num_epochs * len(train_loader)
+    warmup_steps = int(0.1 * total_steps)  # 10% warmup
     
-    def lr_lambda(current_step):
-        if current_step < num_warmup_steps:
-            return float(current_step) / float(max(1, num_warmup_steps))
-        return max(0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps)))
+    warmup_scheduler = WarmupScheduler(
+        optimizer=optimizer,
+        warmup_steps=warmup_steps,
+        total_steps=total_steps,
+        base_lr=base_lr
+    )
     
-    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    print(f"\n{'='*50}")
+    print(f"LEARNING RATE CONFIGURATION")
+    print(f"{'='*50}")
+    print(f"Base LR: {base_lr:.2e}")
+    print(f"Total training steps: {total_steps:,}")
+    print(f"Warmup steps: {warmup_steps:,} ({warmup_steps/total_steps*100:.1f}%)")
+    print(f"{'='*50}\n")
     
-    # Plateau scheduler for after warmup
-    plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=5)
+    # Log LR configuration to MLflow
+    mlflow.log_param("base_learning_rate", base_lr)
+    mlflow.log_param("warmup_steps", warmup_steps)
+    mlflow.log_param("total_steps", total_steps)
+    mlflow.log_param("warmup_ratio", 0.1)
 
     best_wer = float('inf')
     best_bleu = 0.0
@@ -1067,17 +1114,21 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         print(f"Epoch {epoch+1}/{num_epochs}")
         print(f"{'='*50}")
 
-        # Train
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, 
-                               device, vocab, epoch, warmup_scheduler)
+        # Train - PASS warmup_scheduler instead of old scheduler
+        train_loss = train_epoch(
+            model, train_loader, optimizer, criterion, 
+            device, vocab, epoch, warmup_scheduler  # CHANGED: pass warmup_scheduler
+        )
         print(f"Train Loss: {train_loss:.4f}")
 
         # Validate with joint evaluation
-        val_loss, ctc_wer, att_wer, bleu = validate(model, val_loader, criterion, 
-                                                  device, vocab, idx_to_gloss, 
-                                                  use_beam_search=False, 
-                                                  beam_width=beam_width,
-                                                  joint_eval=True)
+        val_loss, ctc_wer, att_wer, bleu = validate(
+            model, val_loader, criterion, 
+            device, vocab, idx_to_gloss, 
+            use_beam_search=False, 
+            beam_width=beam_width,
+            joint_eval=True
+        )
         print(f"Val Loss: {val_loss:.4f}")
         print(f"CTC WER: {ctc_wer:.4f}, Attention WER: {att_wer:.4f}")
         print(f"BLEU: {bleu:.4f}")
@@ -1089,10 +1140,6 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         mlflow.log_metric("val_att_wer", att_wer, step=epoch)
         mlflow.log_metric("val_bleu", bleu, step=epoch)
         mlflow.log_metric("learning_rate", optimizer.param_groups[0]['lr'], step=epoch)
-
-        # Plateau scheduling after warmup
-        if epoch * len(train_loader) > num_warmup_steps:
-            plateau_scheduler.step(val_loss)
 
         # Save best model (based on attention WER + BLEU)
         combined_metric = att_wer - bleu  # Lower WER + higher BLEU is better
@@ -1137,6 +1184,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
             torch.save(checkpoint, checkpoint_path)
 
     return best_wer, bleu
+
 
 def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=100):
     """Generate comprehensive model summary"""
@@ -1221,6 +1269,47 @@ def log_gpu_stats(step):
     except:
         pass  # Silently fail if nvidia-smi not available
 
+def verify_data_normalization(train_loader, num_samples=5):
+    """Verify that data normalization is correct"""
+    print("\n" + "="*50)
+    print("DATA NORMALIZATION VERIFICATION")
+    print("="*50)
+    
+    # REMOVED: model.eval() - not needed, we're just checking data
+    
+    for i, (landmarks, landmark_lengths, glosses, gloss_lengths) in enumerate(train_loader):
+        if i >= num_samples:
+            break
+        
+        # Check statistics
+        print(f"\nSample {i+1}:")
+        print(f"  Landmarks shape: {landmarks.shape}")
+        print(f"  Landmarks range: [{landmarks.min():.3f}, {landmarks.max():.3f}]")
+        print(f"  Landmarks mean: {landmarks.mean():.3f}, std: {landmarks.std():.3f}")
+        print(f"  Sequence length: {landmark_lengths[0].item()}")
+        print(f"  Glosses length: {gloss_lengths[0].item()}")
+        print(f"  Glosses (first 10): {glosses[0][:10].tolist()}")
+        
+        # Check for anomalies
+        if landmarks.isnan().any():
+            print("  ⚠️  WARNING: NaN values detected!")
+        if landmarks.isinf().any():
+            print("  ⚠️  WARNING: Inf values detected!")
+        if landmark_lengths[0] < 10:
+            print("  ⚠️  WARNING: Very short sequence!")
+        
+        # Check if landmarks are properly normalized
+        if landmarks.min() < -10 or landmarks.max() > 10:
+            print("  ⚠️  WARNING: Landmarks may not be normalized (extreme values)")
+        
+        # Check vocabulary range
+        if glosses.max() >= 1000:  # Adjust based on your vocab size
+            print(f"  ⚠️  WARNING: Very high gloss ID detected: {glosses.max().item()}")
+        if glosses.min() < 0:
+            print("  ⚠️  WARNING: Negative gloss ID detected!")
+    
+    print("="*50 + "\n")
+    
 # ==================== MAIN ====================
 
 def main():
@@ -1299,9 +1388,9 @@ def main():
             "dropout": DROPOUT,
             "dim_feedforward": DIM_FEEDFORWARD,
             "optimizer": "AdamW",
-            "learning_rate": 5e-5,
+            "learning_rate": 5e-4,  # CHANGED from 5e-5 to 5e-4
             "weight_decay": 0.01,
-            "scheduler": "Warmup+Plateau",
+            "scheduler": "Warmup+CosineDecay",  # CHANGED from "Warmup+Plateau"
             "warmup_ratio": 0.1,
             "augmentation": "temporal+spatial+masking",
             "loss_function": "joint_ctc_attention",
@@ -1369,6 +1458,8 @@ def main():
             prefetch_factor=4,  # Add prefetching
             persistent_workers=True  # Keep workers alive between epochs
         )
+        
+        verify_data_normalization(train_loader, num_samples=5)
 
         val_loader = DataLoader(
             val_dataset,
@@ -1384,16 +1475,16 @@ def main():
         print("Creating Joint CTC/Attention Model")
         print("="*50)
 
-        num_glosses = len(train_dataset.gloss_vocab)
+        vocab_size = len(train_dataset.gloss_vocab)
         model = SignLanguageTranslationModel(
-            input_dim=INPUT_DIM,
-            num_glosses=num_glosses,
-            d_model=D_MODEL,
-            nhead=NHEAD,
-            num_encoder_layers=NUM_ENCODER_LAYERS,
-            num_decoder_layers=NUM_DECODER_LAYERS,
-            dropout=DROPOUT,
-            dim_feedforward=DIM_FEEDFORWARD
+            input_dim=1659,
+            num_glosses=vocab_size,
+            d_model=1024,           # CHANGED: 512 -> 1024 (2x)
+            nhead=16,               # CHANGED: 8 -> 16 (keep nhead = d_model/64)
+            num_encoder_layers=8,   # CHANGED: 6 -> 8 (deeper)
+            num_decoder_layers=8,   # CHANGED: 6 -> 8 (deeper)
+            dropout=0.1,
+            dim_feedforward=4096    # CHANGED: 2048 -> 4096 (2x)
         ).to(device)
 
         # Generate and log model summary

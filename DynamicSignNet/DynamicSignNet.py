@@ -15,7 +15,6 @@ from torchinfo import summary
 import platform
 import psutil
 import random
-import torchaudio
 
 # ==================== DATASET ====================
 
@@ -491,72 +490,73 @@ def random_masking(landmarks, mask_prob=0.1):
 
 # ==================== BEAM SEARCH DECODER ====================
 
-class FastCTCBeamDecoder:
-    """Fast beam search decoder using TorchAudio"""
-    def __init__(self, vocab, blank_id=1, beam_width=10):
+class CTCBeamDecoder:
+    """Simple beam search decoder for CTC"""
+    def __init__(self, blank_id=1, beam_width=10):
         self.blank_id = blank_id
         self.beam_width = beam_width
-        self.vocab = vocab
-        self.idx_to_token = {v: k for k, v in vocab.items()}
-        
-        # Create token list for TorchAudio decoder
-        # TorchAudio expects tokens as a list of strings
-        tokens = [self.idx_to_token.get(i, '<unk>') for i in range(len(vocab))]
-        
-        # Build TorchAudio CTC decoder
-        self.decoder = torchaudio.models.decoder.ctc_decoder(
-            lexicon=None,  # No lexicon for sign language
-            tokens=tokens,
-            blank_token='<blank>',
-            sil_token='<blank>',  # Use blank as silence
-            unk_word='<unk>',
-            nbest=1,  # Return only best hypothesis
-            beam_size=beam_width,
-            beam_threshold=50,
-            lm_weight=0,  # No language model
-            word_score=0
-        )
     
     def decode(self, log_probs, lengths):
         """
-        Decode using TorchAudio's fast beam search
+        Decode using beam search
         Args:
             log_probs: [B, T, num_classes] log probabilities
             lengths: [B] sequence lengths
         Returns:
-            List of decoded sequences (as token indices)
+            List of decoded sequences
         """
-        # TorchAudio decoder expects CPU tensors
-        log_probs_cpu = log_probs.cpu()
-        lengths_cpu = lengths.cpu()
-        
-        # Decode batch
-        results = self.decoder(log_probs_cpu, lengths_cpu)
-        
+        batch_size = log_probs.size(0)
         decoded = []
-        for result in results:
-            # Get best hypothesis (nbest=1, so only one result)
-            hypothesis = result[0]
-            # Convert tokens back to indices
-            token_indices = [self.vocab.get(token, self.vocab['<unk>']) 
-                           for token in hypothesis.tokens]
-            decoded.append(token_indices)
+        
+        for b in range(batch_size):
+            seq_len = lengths[b].item()
+            probs = log_probs[b, :seq_len].cpu().numpy()
+            
+            # Beam search
+            beam = [([self.blank_id], 0.0)]  # (sequence, score)
+            
+            for t in range(seq_len):
+                new_beam = []
+                
+                for seq, score in beam:
+                    for c in range(probs.shape[1]):
+                        new_score = score + probs[t, c]
+                        
+                        # Extend sequence
+                        if c == self.blank_id:
+                            new_seq = seq
+                        elif len(seq) > 0 and c == seq[-1]:
+                            # Repeated character
+                            new_seq = seq
+                        else:
+                            new_seq = seq + [c]
+                        
+                        new_beam.append((new_seq, new_score))
+                
+                # Keep top beam_width
+                new_beam = sorted(new_beam, key=lambda x: x[1], reverse=True)[:self.beam_width]
+                beam = new_beam
+            
+            # Get best sequence
+            best_seq = beam[0][0]
+            # Remove blanks
+            best_seq = [c for c in best_seq if c != self.blank_id]
+            decoded.append(best_seq)
         
         return decoded
 
 
-def decode_predictions_beam(ctc_output, lengths, vocab, idx_to_gloss, blank_id=1, beam_width=10):
-    """Decode CTC output using fast TorchAudio beam search"""
+def decode_predictions_beam(ctc_output, lengths, vocab, blank_id=1, beam_width=10):
+    """Decode CTC output using beam search"""
     log_probs = F.log_softmax(ctc_output, dim=-1)
+    decoder = CTCBeamDecoder(blank_id=blank_id, beam_width=beam_width)
     
-    # Use fast decoder (create once per call - could be optimized further)
-    decoder = FastCTCBeamDecoder(vocab=vocab, blank_id=blank_id, beam_width=beam_width)
     predictions = decoder.decode(log_probs, lengths)
     
     # Convert to glosses
     decoded = []
     for pred_seq in predictions:
-        glosses = [idx_to_gloss.get(p, '<unk>') for p in pred_seq]
+        glosses = [vocab.get(p, '<unk>') for p in pred_seq]
         decoded.append(glosses)
     
     return decoded
@@ -698,9 +698,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
 
             # Decode predictions with beam search
             if use_beam_search:
-                # Need to pass vocab for TorchAudio decoder
-                vocab = {v: k for k, v in idx_to_gloss.items()}  # Create vocab from idx_to_gloss
-                predictions = decode_predictions_beam(ctc_logits, landmark_lengths, vocab, idx_to_gloss,
+                predictions = decode_predictions_beam(ctc_logits, landmark_lengths, idx_to_gloss, 
                                                      blank_id=1, beam_width=beam_width)
             else:
                 predictions = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)

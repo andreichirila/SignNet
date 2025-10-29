@@ -381,6 +381,14 @@ class TransformerDecoderLayer(nn.Module):
 
     def forward(self, tgt, memory, tgt_mask=None, tgt_key_padding_mask=None,
                 memory_key_padding_mask=None):
+        # Ensure all masks are boolean type if provided
+        if tgt_mask is not None and tgt_mask.dtype != torch.bool:
+            tgt_mask = tgt_mask.bool()
+        if tgt_key_padding_mask is not None and tgt_key_padding_mask.dtype != torch.bool:
+            tgt_key_padding_mask = tgt_key_padding_mask.bool()
+        if memory_key_padding_mask is not None and memory_key_padding_mask.dtype != torch.bool:
+            memory_key_padding_mask = memory_key_padding_mask.bool()
+        
         # Self-attention
         tgt2 = self.norm1(tgt)
         tgt2 = self.self_attn(tgt2, tgt2, tgt2, attn_mask=tgt_mask,
@@ -553,16 +561,16 @@ class SignLanguageTranslationModel(nn.Module):
         return ctc_logits, attention_logits
 
     def _generate_padding_mask(self, lengths, max_len):
-        """Generate padding mask for variable length sequences"""
+        """Generate padding mask for variable length sequences - BOOLEAN"""
         batch_size = len(lengths)
         mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths.unsqueeze(1)
-        return mask
+        return mask  # Already returns boolean
 
     def _generate_square_subsequent_mask(self, sz):
-        """Generate square mask for sequential decoding"""
-        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
+        """Generate square mask for sequential decoding - RETURN BOOLEAN"""
+        # Create upper triangular matrix of True values
+        mask = torch.triu(torch.ones(sz, sz, dtype=torch.bool), diagonal=1)
+        return mask  # Return boolean mask, not float
 
 # ==================== JOINT LOSS COMPUTATION ====================
 
@@ -1056,7 +1064,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         # Validate with joint evaluation
         val_loss, ctc_wer, att_wer, bleu = validate(model, val_loader, criterion, 
                                                   device, vocab, idx_to_gloss, 
-                                                  use_beam_search=True, 
+                                                  use_beam_search=False, 
                                                   beam_width=beam_width,
                                                   joint_eval=True)
         print(f"Val Loss: {val_loss:.4f}")

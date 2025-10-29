@@ -12,6 +12,8 @@ from tqdm import tqdm
 import mlflow
 import mlflow.pytorch
 from torchinfo import summary
+import platform
+import psutil
 
 # ==================== DATASET ====================
 
@@ -577,7 +579,7 @@ def main():
     DROPOUT = 0.1
     
     # MLflow configuration
-    EXPERIMENT_NAME = "SignLanguageTranslation"
+    EXPERIMENT_NAME = "SignNetAdvanced"
     RUN_NAME = "transformer_ctc_baseline"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -586,8 +588,25 @@ def main():
     os.environ['MLFLOW_TRACKING_USERNAME'] = 'roman'
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
+
     # Set MLflow experiment
     mlflow.set_experiment(EXPERIMENT_NAME)
+    
+    
+    # System information
+    mlflow.log_param("python_version", platform.python_version())
+    mlflow.log_param("pytorch_version", torch.__version__)
+    mlflow.log_param("os", platform.system())
+    mlflow.log_param("cpu_count", os.cpu_count())
+    mlflow.log_param("total_ram_gb", round(psutil.virtual_memory().total / (1024**3), 2))
+
+    # GPU details
+    if torch.cuda.is_available():
+        mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
+        mlflow.log_param("gpu_count", torch.cuda.device_count())
+        mlflow.log_param("cuda_version", torch.version.cuda)
+        mlflow.log_param("cudnn_version", torch.backends.cudnn.version())
+        mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2))
     
     # Start MLflow run
     with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME):

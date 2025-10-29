@@ -6,3 +6,4 @@ mlflow
 torchinfo
 psutil
 pynvml
+nltk

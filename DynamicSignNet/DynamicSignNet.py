@@ -813,13 +813,16 @@ def compute_wer(predictions, targets):
     return errors / max(total_words, 1)
 
 def compute_bleu(predictions, targets):
-    """Compute BLEU score (simplified)"""
-    from nltk.translate.bleu_score import sentence_bleu
+    """Compute BLEU score with smoothing for short sequences"""
+    from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
     import nltk
     try:
         nltk.data.find('tokenizers/punkt')
     except LookupError:
         nltk.download('punkt')
+    
+    # Use smoothing function to handle zero n-gram overlaps
+    smoothing = SmoothingFunction()
     
     bleu_scores = []
     for pred, tgt in zip(predictions, targets):
@@ -830,10 +833,18 @@ def compute_bleu(predictions, targets):
         tgt_tokens = [tgt_str.split()]  # Wrap in list for sentence_bleu
         
         if len(pred_tokens) > 0 and len(tgt_tokens[0]) > 0:
-            bleu = sentence_bleu(tgt_tokens, pred_tokens, weights=(0.25, 0.25, 0.25, 0.25))
+            # Use method1 smoothing (epsilon smoothing) for low-quality outputs
+            # Use lower weights for sign language (BLEU-2 instead of BLEU-4)
+            bleu = sentence_bleu(
+                tgt_tokens, 
+                pred_tokens, 
+                weights=(0.5, 0.5, 0, 0),  # BLEU-2 for short sequences
+                smoothing_function=smoothing.method1  # Add-epsilon smoothing
+            )
             bleu_scores.append(bleu)
     
     return np.mean(bleu_scores) if bleu_scores else 0.0
+
 
 # ==================== TRAINING ====================
 

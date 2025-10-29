@@ -15,7 +15,7 @@ from torchinfo import summary
 import platform
 import psutil
 import random
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 
 
 # ==================== DATASET ====================
@@ -628,7 +628,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     num_batches = 0
     
     # Add gradient scaler for mixed precision
-    scaler = GradScaler()
+    scaler = GradScaler(device.type)
 
     pbar = tqdm(train_loader, desc="Training")
     for batch_idx, (landmarks, landmark_lengths, glosses, gloss_lengths) in enumerate(pbar):
@@ -640,7 +640,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
         optimizer.zero_grad()
 
         # Use autocast for mixed precision
-        with autocast():
+        with autocast(device.type):
             ctc_logits = model(landmarks, landmark_lengths)
             ctc_logits = ctc_logits.transpose(0, 1)
             log_probs = F.log_softmax(ctc_logits, dim=-1)

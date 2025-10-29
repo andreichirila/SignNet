@@ -729,7 +729,7 @@ def greedy_decode_attention(model, memory, memory_lengths, max_len=100,
     for i in range(max_len - 1):
         with torch.no_grad():
             # Decode one step
-            output = model.decode(ys, memory, ys_lengths, memory_lengths, training=False)
+            output = model.decode(ys, memory, ys_lengths, memory_lengths)
             output = output[:, -1, :]  # Take last token prediction [B, num_classes]
             
             # Get next token

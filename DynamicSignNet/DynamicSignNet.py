@@ -571,47 +571,40 @@ class JointCTCLoss(nn.Module):
     def __init__(self, ctc_weight=0.3, attention_weight=0.7, blank_id=1):
         super().__init__()
         self.ctc_criterion = CTCLoss(blank=blank_id, zero_infinity=True)
-        self.attention_criterion = nn.CrossEntropyLoss(ignore_index=0)  # ignore <pad>
+        self.attention_criterion = nn.CrossEntropyLoss(ignore_index=0)
         self.ctc_weight = ctc_weight
         self.attention_weight = attention_weight
         self.blank_id = blank_id
 
     def forward(self, ctc_logits, attention_logits, targets_ctc, targets_att,
                 src_lengths, tgt_lengths):
-        """
-        Compute joint loss
-        Args:
-            ctc_logits: [B, T, num_classes] CTC logits
-            attention_logits: [B, S, num_classes] Attention logits  
-            targets_ctc: [B, S] gloss targets
-            targets_att: [B, S] gloss targets (same as ctc)
-            src_lengths: [B] source lengths
-            tgt_lengths: [B] target lengths
-        """
+        """Compute joint loss with float32 for CTC"""
         total_loss = 0.0
         
-        # CTC Loss
-        ctc_logits_t = ctc_logits.transpose(0, 1)  # [T, B, num_classes]
+        # CTC Loss - MUST use float32
+        # Convert to float32 if in float16
+        ctc_logits_fp32 = ctc_logits.float()
+        ctc_logits_t = ctc_logits_fp32.transpose(0, 1)  # [T, B, num_classes]
         ctc_log_probs = F.log_softmax(ctc_logits_t, dim=-1)
         ctc_loss = self.ctc_criterion(ctc_log_probs, targets_ctc, src_lengths, tgt_lengths)
         total_loss += self.ctc_weight * ctc_loss
         
-        # Attention Loss (sequence-to-sequence cross-entropy)
+        # Attention Loss (works fine with float16/32)
         if attention_logits is not None:
-            B, S, num_classes = attention_logits.shape
-            attention_logits_flat = attention_logits.reshape(-1, num_classes)
-            targets_att_flat = targets_att.reshape(-1)
-            valid_mask = targets_att_flat != 0  # [B*S]
-
+            batch_size, seq_len, num_classes = attention_logits.shape
+            attention_logits_flat = attention_logits.reshape(batch_size * seq_len, num_classes)
+            targets_att_flat = targets_att.reshape(batch_size * seq_len)
+            valid_mask = targets_att_flat != 0
+            
             if valid_mask.sum() > 0:
                 att_loss = self.attention_criterion(
-                    attention_logits_flat[valid_mask],    # [N, num_classes]
-                    targets_att_flat[valid_mask]          # [N]
+                    attention_logits_flat[valid_mask],
+                    targets_att_flat[valid_mask]
                 )
-
                 total_loss += self.attention_weight * att_loss
         
         return total_loss
+
 
 # ==================== DATA AUGMENTATION ====================
 
@@ -892,8 +885,9 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
         
         # Track individual losses
         with torch.no_grad():
+            # CTC loss tracking - use float32
             ctc_loss_only = criterion.ctc_criterion(
-                F.log_softmax(ctc_logits.transpose(0, 1), dim=-1), 
+                F.log_softmax(ctc_logits.float().transpose(0, 1), dim=-1),  # Add .float()
                 ctc_targets, landmark_lengths, gloss_lengths
             )
             ctc_losses.append(ctc_loss_only.item())
@@ -901,7 +895,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
             if attention_logits is not None:
                 att_loss_only = criterion.attention_criterion(
                     attention_logits.reshape(-1, attention_logits.size(-1)),
-                    decoder_target.reshape(-1)  # Use decoder_target, not ctc_targets[:, 1:]
+                    decoder_target.reshape(-1)
                 )
                 att_losses.append(att_loss_only.item())
 

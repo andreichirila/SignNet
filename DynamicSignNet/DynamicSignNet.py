@@ -689,7 +689,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
             gloss_lengths = gloss_lengths.to(device)
 
             # Forward pass with mixed precision
-            with autocast():
+            with autocast(device.type):
                 ctc_logits = model(landmarks, landmark_lengths)
 
                 # Calculate loss
@@ -882,7 +882,7 @@ def main():
     VOCAB_FILE = "vocab.json"
     STATS_FILE = "normalization_stats.npz"
     BATCH_SIZE = 64
-    NUM_EPOCHS = 50
+    NUM_EPOCHS = 30
     INPUT_DIM = 1659
     D_MODEL = 512
     NHEAD = 8

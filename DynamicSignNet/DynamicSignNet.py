@@ -16,7 +16,6 @@ import platform
 import psutil
 import random
 import torchaudio
-from torchaudio.models.decoder import ctc_decoder
 
 # ==================== DATASET ====================
 
@@ -501,19 +500,20 @@ class FastCTCBeamDecoder:
         self.idx_to_token = {v: k for k, v in vocab.items()}
         
         # Create token list for TorchAudio decoder
+        # TorchAudio expects tokens as a list of strings
         tokens = [self.idx_to_token.get(i, '<unk>') for i in range(len(vocab))]
         
-        # Use the correct import: ctc_decoder is a function, not a method
-        self.decoder = ctc_decoder(
+        # Build TorchAudio CTC decoder
+        self.decoder = torchaudio.models.decoder.ctc_decoder(
             lexicon=None,  # No lexicon for sign language
             tokens=tokens,
             blank_token='<blank>',
-            sil_token='<blank>',
+            sil_token='<blank>',  # Use blank as silence
             unk_word='<unk>',
-            nbest=1,
+            nbest=1,  # Return only best hypothesis
             beam_size=beam_width,
             beam_threshold=50,
-            lm_weight=0,
+            lm_weight=0,  # No language model
             word_score=0
         )
     
@@ -521,12 +521,12 @@ class FastCTCBeamDecoder:
         """
         Decode using TorchAudio's fast beam search
         Args:
-            log_probs: [B, T, num_classes] log probabilities (on GPU)
-            lengths: [B] sequence lengths (on GPU)
+            log_probs: [B, T, num_classes] log probabilities
+            lengths: [B] sequence lengths
         Returns:
             List of decoded sequences (as token indices)
         """
-        # Move to CPU for decoder
+        # TorchAudio decoder expects CPU tensors
         log_probs_cpu = log_probs.cpu()
         lengths_cpu = lengths.cpu()
         
@@ -535,9 +535,9 @@ class FastCTCBeamDecoder:
         
         decoded = []
         for result in results:
-            # Get best hypothesis
+            # Get best hypothesis (nbest=1, so only one result)
             hypothesis = result[0]
-            # Convert token strings back to indices
+            # Convert tokens back to indices
             token_indices = [self.vocab.get(token, self.vocab['<unk>']) 
                            for token in hypothesis.tokens]
             decoded.append(token_indices)
@@ -761,7 +761,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
 
         # Validate with beam search
         val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, 
-                                     use_beam_search=False, beam_width=beam_width)
+                                     use_beam_search=True, beam_width=beam_width)
         print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
 
         # Log metrics to MLflow

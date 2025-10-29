@@ -1306,8 +1306,11 @@ def verify_data_normalization(train_loader, num_samples=5):
             print("  ⚠️  WARNING: Landmarks may not be normalized (extreme values)")
         
         # Check vocabulary range
-        if glosses.max() >= 1000:  # Adjust based on your vocab size
-            print(f"  ⚠️  WARNING: Very high gloss ID detected: {glosses.max().item()}")
+        vocab_size = len(train_dataset.gloss_vocab)
+    if glosses.max() >= vocab_size:
+        print(f"  ⚠️  CRITICAL: Gloss ID ({glosses.max().item()}) >= vocab size ({vocab_size})!")
+    elif glosses.max() > vocab_size * 0.95:
+        print(f"  ℹ️  INFO: High gloss ID detected: {glosses.max().item()}/{vocab_size}")
         if glosses.min() < 0:
             print("  ⚠️  WARNING: Negative gloss ID detected!")
     
@@ -1321,7 +1324,7 @@ def main():
     LANDMARKS_DEV = "./landmarks_dev"
     VOCAB_FILE = "vocab.json"
     STATS_FILE = "normalization_stats.npz"
-    BATCH_SIZE = 32  # Reduced batch size for joint model
+    BATCH_SIZE = 16  # Reduced batch size for joint model
     NUM_EPOCHS = 30
     INPUT_DIM = 1659
     D_MODEL = 512

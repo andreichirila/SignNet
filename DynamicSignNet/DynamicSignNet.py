@@ -924,7 +924,10 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
         scaler.update()
-        current_lr = lr_scheduler.step()
+        if scheduler is not None:
+            current_lr = scheduler.step()
+        else:
+            current_lr = optimizer.param_groups[0]['lr']
         
         # Call scheduler AFTER optimizer.step() AND scaler.update()
         if scheduler is not None:

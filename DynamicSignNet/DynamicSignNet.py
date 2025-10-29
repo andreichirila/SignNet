@@ -15,6 +15,8 @@ from torchinfo import summary
 import platform
 import psutil
 import random
+from torch.cuda.amp import autocast, GradScaler
+
 
 # ==================== DATASET ====================
 
@@ -620,10 +622,13 @@ def compute_wer(predictions, targets):
 
 
 def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler=None):
-    """Train for one epoch"""
+    """Train for one epoch with mixed precision"""
     model.train()
     total_loss = 0
     num_batches = 0
+    
+    # Add gradient scaler for mixed precision
+    scaler = GradScaler()
 
     pbar = tqdm(train_loader, desc="Training")
     for batch_idx, (landmarks, landmark_lengths, glosses, gloss_lengths) in enumerate(pbar):
@@ -634,22 +639,20 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
 
         optimizer.zero_grad()
 
-        # Forward pass
-        ctc_logits = model(landmarks, landmark_lengths)
+        # Use autocast for mixed precision
+        with autocast():
+            ctc_logits = model(landmarks, landmark_lengths)
+            ctc_logits = ctc_logits.transpose(0, 1)
+            log_probs = F.log_softmax(ctc_logits, dim=-1)
+            loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
 
-        # CTC loss expects [T, B, C] format and log probabilities
-        ctc_logits = ctc_logits.transpose(0, 1)
-        log_probs = F.log_softmax(ctc_logits, dim=-1)
-
-        # Calculate CTC loss
-        loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
-
-        # Backward pass
-        loss.backward()
+        # Scaled backward pass
+        scaler.scale(loss).backward()
+        scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
         
-        # Step scheduler if provided (for warmup)
         if scheduler is not None:
             scheduler.step()
 
@@ -661,7 +664,6 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
             'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
         })
         
-        # Log batch loss to MLflow every 50 batches
         if batch_idx % 50 == 0:
             step = epoch * len(train_loader) + batch_idx
             mlflow.log_metric("batch_loss", loss.item(), step=step)
@@ -669,8 +671,9 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     return total_loss / num_batches
 
 
+
 def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False, beam_width=10):
-    """Validate the model"""
+    """Validate the model with mixed precision"""
     model.eval()
     total_loss = 0
     num_batches = 0
@@ -685,18 +688,19 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
             landmark_lengths = landmark_lengths.to(device)
             gloss_lengths = gloss_lengths.to(device)
 
-            # Forward pass
-            ctc_logits = model(landmarks, landmark_lengths)
+            # Forward pass with mixed precision
+            with autocast():
+                ctc_logits = model(landmarks, landmark_lengths)
 
-            # Calculate loss
-            ctc_logits_t = ctc_logits.transpose(0, 1)
-            log_probs = F.log_softmax(ctc_logits_t, dim=-1)
-            loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
+                # Calculate loss
+                ctc_logits_t = ctc_logits.transpose(0, 1)
+                log_probs = F.log_softmax(ctc_logits_t, dim=-1)
+                loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
 
             total_loss += loss.item()
             num_batches += 1
 
-            # Decode predictions with beam search
+            # Decode predictions (outside autocast for decoding operations)
             if use_beam_search:
                 predictions = decode_predictions_beam(ctc_logits, landmark_lengths, idx_to_gloss, 
                                                      blank_id=1, beam_width=beam_width)
@@ -716,6 +720,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
     wer = compute_wer(all_predictions, all_targets)
 
     return avg_loss, wer
+
 
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, 
@@ -877,7 +882,7 @@ def main():
     LANDMARKS_DEV = "./landmarks_dev"
     VOCAB_FILE = "vocab.json"
     STATS_FILE = "normalization_stats.npz"
-    BATCH_SIZE = 32
+    BATCH_SIZE = 64
     NUM_EPOCHS = 50
     INPUT_DIM = 1659
     D_MODEL = 512
@@ -901,6 +906,14 @@ def main():
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
+    
+    # Enable cuDNN optimizations
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.enabled = True
+        # Enable TF32 for faster matmul on Ampere+ GPUs
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     os.environ['MLFLOW_TRACKING_USERNAME'] = 'roman'
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
@@ -998,8 +1011,10 @@ def main():
             batch_size=BATCH_SIZE,
             shuffle=True,
             collate_fn=collate_fn,
-            num_workers=4,
-            pin_memory=use_pin_memory
+            num_workers=8,
+            pin_memory=use_pin_memory,
+            prefetch_factor=4,  # Add prefetching
+            persistent_workers=True  # Keep workers alive between epochs
         )
 
         val_loader = DataLoader(

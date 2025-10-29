@@ -759,7 +759,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
 
         # Validate with beam search
         val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, 
-                                     use_beam_search=True, beam_width=beam_width)
+                                     use_beam_search=False, beam_width=beam_width)
         print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
 
         # Log metrics to MLflow

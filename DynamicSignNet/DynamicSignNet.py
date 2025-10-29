@@ -18,11 +18,10 @@ import random
 import subprocess
 from torch.amp import autocast, GradScaler
 
-
 # ==================== DATASET ====================
 
 class LandmarkDataset(Dataset):
-    """Dataset loader for preprocessed landmarks"""
+    """Dataset loader for preprocessed landmarks with attention targets"""
     def __init__(self, landmarks_dir, vocab_file=None, build_vocab=False, 
                  augment=False, all_dirs_for_vocab=None, max_samples=None, 
                  random_subset=False, seed=42, compute_stats=False, stats_file=None):
@@ -67,7 +66,7 @@ class LandmarkDataset(Dataset):
             print("Warning: No normalization stats provided. Using zero mean and unit std.")
             self.mean = 0.0
             self.std = 1.0
-        
+            
     def _compute_normalization_stats(self):
         """Compute mean and std for landmark normalization"""
         print("Computing normalization statistics...")
@@ -313,7 +312,6 @@ class LandmarkDataset(Dataset):
         
         return landmarks, torch.LongTensor(glosses)
 
-
 def collate_fn(batch):
     """Collate function for variable-length sequences"""
     landmarks, glosses = zip(*batch)
@@ -340,8 +338,7 @@ def collate_fn(batch):
     return (padded_landmarks, torch.LongTensor(landmark_lengths),
             padded_glosses, torch.LongTensor(gloss_lengths))
 
-
-# ==================== MODEL ====================
+# ==================== JOINT CTC/ATTENTION MODEL ====================
 
 class PositionalEncoding(nn.Module):
     """Positional encoding for transformer"""
@@ -362,13 +359,59 @@ class PositionalEncoding(nn.Module):
         x = x * self.scale + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
+class TransformerDecoderLayer(nn.Module):
+    """Custom decoder layer for sign language translation"""
+    def __init__(self, d_model, nhead, dim_feedforward=2048, dropout=0.1):
+        super().__init__()
+        
+        self.self_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.cross_attn = nn.MultiheadAttention(d_model, nhead, dropout=dropout, batch_first=True)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+        self.dropout3 = nn.Dropout(dropout)
 
-class SignLanguageTranslator(nn.Module):
-    """Improved Transformer-based Sign Language Translation Model"""
+        self.activation = nn.GELU()
+
+    def forward(self, tgt, memory, tgt_mask=None, tgt_key_padding_mask=None,
+                memory_key_padding_mask=None):
+        # Self-attention
+        tgt2 = self.norm1(tgt)
+        tgt2 = self.self_attn(tgt2, tgt2, tgt2, attn_mask=tgt_mask,
+                              key_padding_mask=tgt_key_padding_mask)[0]
+        tgt = tgt + self.dropout1(tgt2)
+        
+        # Cross-attention
+        tgt2 = self.norm2(tgt)
+        tgt2 = self.cross_attn(tgt2, memory, memory,
+                              key_padding_mask=memory_key_padding_mask)[0]
+        tgt = tgt + self.dropout2(tgt2)
+        
+        # Feed-forward
+        tgt2 = self.norm3(tgt)
+        tgt2 = self.linear2(self.dropout(self.activation(self.linear1(tgt2))))
+        tgt = tgt + self.dropout3(tgt2)
+        
+        return tgt
+
+class SignLanguageTranslationModel(nn.Module):
+    """Joint CTC/Attention Transformer for Sign Language Translation"""
     def __init__(self, input_dim, num_glosses, d_model=512, nhead=8,
-                 num_encoder_layers=8, dropout=0.1, dim_feedforward=2048):
+                 num_encoder_layers=6, num_decoder_layers=6, dropout=0.1, 
+                 dim_feedforward=2048):
         super().__init__()
 
+        self.d_model = d_model
+        self.num_glosses = num_glosses
+        self.blank_id = 1  # CTC blank token
+
+        # === ENCODER ===
         # Input projection with residual connection
         self.input_proj = nn.Sequential(
             nn.Linear(input_dim, d_model),
@@ -389,7 +432,7 @@ class SignLanguageTranslator(nn.Module):
         # Positional encoding
         self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
-        # Transformer encoder with more layers
+        # Transformer encoder with pre-norm
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
@@ -401,7 +444,7 @@ class SignLanguageTranslator(nn.Module):
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
 
-        # Enhanced CTC head
+        # CTC head
         self.ctc_head = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.LayerNorm(d_model),
@@ -410,7 +453,25 @@ class SignLanguageTranslator(nn.Module):
             nn.Linear(d_model, num_glosses)
         )
 
-        self.d_model = d_model
+        # === DECODER ===
+        self.decoder_embedding = nn.Embedding(num_glosses, d_model)
+        self.decoder_pos_encoder = PositionalEncoding(d_model, dropout=dropout)
+        
+        # Decoder layers
+        self.decoder_layers = nn.ModuleList([
+            TransformerDecoderLayer(d_model, nhead, dim_feedforward, dropout)
+            for _ in range(num_decoder_layers)
+        ])
+        
+        # Output projection for attention-based prediction
+        self.decoder_output = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, num_glosses)
+        )
+
         self._init_weights()
 
     def _init_weights(self):
@@ -419,7 +480,8 @@ class SignLanguageTranslator(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, src_lengths):
+    def encode(self, src, src_lengths):
+        """Encoder forward pass"""
         # Input projection: [B, T, input_dim] -> [B, T, d_model]
         x = self.input_proj(src)
 
@@ -440,10 +502,55 @@ class SignLanguageTranslator(nn.Module):
         # Encode
         memory = self.encoder(x, src_key_padding_mask=src_mask)
 
-        # CTC prediction
-        ctc_logits = self.ctc_head(memory)
+        return memory
 
-        return ctc_logits
+    def decode(self, tgt, memory, tgt_lengths, src_lengths):
+        """Decoder forward pass with teacher forcing"""
+        # Embed target sequence [B, S] -> [B, S, d_model]
+        tgt_embed = self.decoder_embedding(tgt) * math.sqrt(self.d_model)
+        
+        # Positional encoding for decoder
+        tgt_embed = self.decoder_pos_encoder(tgt_embed)
+        
+        # Generate target mask (causal mask for autoregressive decoding)
+        tgt_mask = self._generate_square_subsequent_mask(tgt.size(1)).to(tgt.device)
+        tgt_key_padding_mask = self._generate_padding_mask(tgt_lengths, tgt.size(1)).to(tgt.device)
+        src_key_padding_mask = self._generate_padding_mask(src_lengths, memory.size(1)).to(memory.device)
+        
+        # Pass through decoder layers
+        dec_output = tgt_embed
+        for layer in self.decoder_layers:
+            dec_output = layer(dec_output, memory, tgt_mask=tgt_mask,
+                             tgt_key_padding_mask=tgt_key_padding_mask,
+                             memory_key_padding_mask=src_key_padding_mask)
+        
+        # Generate output logits
+        output_logits = self.decoder_output(dec_output)
+        
+        return output_logits
+
+    def forward(self, src, src_lengths, tgt=None, tgt_lengths=None, training=True):
+        """
+        Forward pass with joint CTC/Attention
+        Args:
+            src: [B, T, input_dim] source landmarks
+            src_lengths: [B] source sequence lengths
+            tgt: [B, S] target gloss sequence (for training)
+            tgt_lengths: [B] target sequence lengths
+            training: whether in training mode
+        """
+        # Encode source
+        memory = self.encode(src, src_lengths)
+        
+        # CTC branch (always computed)
+        ctc_logits = self.ctc_head(memory)  # [B, T, num_glosses]
+        
+        # Attention branch (only during training or when target provided)
+        attention_logits = None
+        if training and tgt is not None:
+            attention_logits = self.decode(tgt, memory, tgt_lengths, src_lengths)  # [B, S, num_glosses]
+        
+        return ctc_logits, attention_logits
 
     def _generate_padding_mask(self, lengths, max_len):
         """Generate padding mask for variable length sequences"""
@@ -451,6 +558,60 @@ class SignLanguageTranslator(nn.Module):
         mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths.unsqueeze(1)
         return mask
 
+    def _generate_square_subsequent_mask(self, sz):
+        """Generate square mask for sequential decoding"""
+        mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+# ==================== JOINT LOSS COMPUTATION ====================
+
+class JointCTCLoss(nn.Module):
+    """Combined CTC and Attention loss for joint training"""
+    def __init__(self, ctc_weight=0.3, attention_weight=0.7, blank_id=1):
+        super().__init__()
+        self.ctc_criterion = CTCLoss(blank=blank_id, zero_infinity=True)
+        self.attention_criterion = nn.CrossEntropyLoss(ignore_index=0)  # ignore <pad>
+        self.ctc_weight = ctc_weight
+        self.attention_weight = attention_weight
+        self.blank_id = blank_id
+
+    def forward(self, ctc_logits, attention_logits, targets_ctc, targets_att,
+                src_lengths, tgt_lengths):
+        """
+        Compute joint loss
+        Args:
+            ctc_logits: [B, T, num_classes] CTC logits
+            attention_logits: [B, S, num_classes] Attention logits  
+            targets_ctc: [B, S] gloss targets
+            targets_att: [B, S] gloss targets (same as ctc)
+            src_lengths: [B] source lengths
+            tgt_lengths: [B] target lengths
+        """
+        total_loss = 0.0
+        
+        # CTC Loss
+        ctc_logits_t = ctc_logits.transpose(0, 1)  # [T, B, num_classes]
+        ctc_log_probs = F.log_softmax(ctc_logits_t, dim=-1)
+        ctc_loss = self.ctc_criterion(ctc_log_probs, targets_ctc, src_lengths, tgt_lengths)
+        total_loss += self.ctc_weight * ctc_loss
+        
+        # Attention Loss (sequence-to-sequence cross-entropy)
+        if attention_logits is not None:
+            B, S, num_classes = attention_logits.shape
+            attention_logits_flat = attention_logits.reshape(-1, num_classes)
+            targets_att_flat = targets_att.reshape(-1)
+            valid_mask = targets_att_flat != 0  # [B*S]
+
+            if valid_mask.sum() > 0:
+                att_loss = self.attention_criterion(
+                    attention_logits_flat[valid_mask],    # [N, num_classes]
+                    targets_att_flat[valid_mask]          # [N]
+                )
+
+                total_loss += self.attention_weight * att_loss
+        
+        return total_loss
 
 # ==================== DATA AUGMENTATION ====================
 
@@ -474,12 +635,10 @@ class TemporalAugmentation:
 
         return augmented
 
-
 def add_spatial_noise(landmarks, noise_std=0.015):
     """Add stronger Gaussian noise to landmarks"""
     noise = np.random.normal(0, noise_std, landmarks.shape)
     return landmarks + noise
-
 
 def random_masking(landmarks, mask_prob=0.1):
     """Randomly mask some frames"""
@@ -490,8 +649,7 @@ def random_masking(landmarks, mask_prob=0.1):
         mask[0] = True
     return landmarks[mask]
 
-
-# ==================== BEAM SEARCH DECODER ====================
+# ==================== BEAM SEARCH DECODER (CTC) ====================
 
 class CTCBeamDecoder:
     """Simple beam search decoder for CTC"""
@@ -548,7 +706,6 @@ class CTCBeamDecoder:
         
         return decoded
 
-
 def decode_predictions_beam(ctc_output, lengths, vocab, blank_id=1, beam_width=10):
     """Decode CTC output using beam search"""
     log_probs = F.log_softmax(ctc_output, dim=-1)
@@ -564,8 +721,42 @@ def decode_predictions_beam(ctc_output, lengths, vocab, blank_id=1, beam_width=1
     
     return decoded
 
+# ==================== ATTENTION DECODER (Inference) ====================
 
-# ==================== TRAINING ====================
+def greedy_decode_attention(model, memory, memory_lengths, max_len=100, 
+                           sos_id=2, eos_id=3, pad_id=0, device='cuda'):
+    """Greedy decoding for attention decoder during inference"""
+    model.eval()
+    batch_size = memory.size(0)
+    
+    # Initialize with SOS token
+    ys = torch.ones(batch_size, 1).fill_(sos_id).long().to(device)
+    ys_lengths = torch.ones(batch_size).fill_(1).long().to(device)
+    
+    for i in range(max_len - 1):
+        with torch.no_grad():
+            # Decode one step
+            output = model.decode(ys, memory, ys_lengths, memory_lengths, training=False)
+            output = output[:, -1, :]  # Take last token prediction [B, num_classes]
+            
+            # Get next token
+            next_token = output.argmax(-1)  # [B]
+            
+            # Stop if EOS or PAD
+            finished = (next_token == eos_id) | (next_token == pad_id)
+            next_token[finished] = pad_id
+            
+            # Append to sequence
+            ys = torch.cat([ys, next_token.unsqueeze(1)], dim=1)
+            ys_lengths += 1
+            
+            # Stop early if all sequences finished
+            if finished.all():
+                break
+    
+    return ys
+
+# ==================== EVALUATION ====================
 
 def decode_predictions(ctc_output, lengths, vocab, blank_id=1):
     """Decode CTC output using greedy decoding (fallback)"""
@@ -590,7 +781,6 @@ def decode_predictions(ctc_output, lengths, vocab, blank_id=1):
         decoded.append(glosses)
 
     return decoded
-
 
 def compute_wer(predictions, targets):
     """Compute Word Error Rate"""
@@ -621,12 +811,38 @@ def compute_wer(predictions, targets):
 
     return errors / max(total_words, 1)
 
+def compute_bleu(predictions, targets):
+    """Compute BLEU score (simplified)"""
+    from nltk.translate.bleu_score import sentence_bleu
+    import nltk
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        nltk.download('punkt')
+    
+    bleu_scores = []
+    for pred, tgt in zip(predictions, targets):
+        pred_str = ' '.join(pred if isinstance(pred, list) else pred.split())
+        tgt_str = ' '.join(tgt if isinstance(tgt, list) else tgt.split())
+        
+        pred_tokens = pred_str.split()
+        tgt_tokens = [tgt_str.split()]  # Wrap in list for sentence_bleu
+        
+        if len(pred_tokens) > 0 and len(tgt_tokens[0]) > 0:
+            bleu = sentence_bleu(tgt_tokens, pred_tokens, weights=(0.25, 0.25, 0.25, 0.25))
+            bleu_scores.append(bleu)
+    
+    return np.mean(bleu_scores) if bleu_scores else 0.0
+
+# ==================== TRAINING ====================
 
 def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler=None):
-    """Train for one epoch with mixed precision"""
+    """Train for one epoch with mixed precision and joint loss"""
     model.train()
     total_loss = 0
     num_batches = 0
+    ctc_losses = []
+    att_losses = []
     
     scaler = GradScaler(device.type)
 
@@ -639,10 +855,25 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
 
         # Forward pass with mixed precision
         with autocast(device.type):
-            ctc_logits = model(landmarks, landmark_lengths)
-            ctc_logits = ctc_logits.transpose(0, 1)
-            log_probs = F.log_softmax(ctc_logits, dim=-1)
-            loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
+            # Input to decoder: remove last token (exclude <eos>)
+            decoder_input = glosses[:, :-1]
+            # Target for decoder: remove first token (exclude <sos>)
+            decoder_target = glosses[:, 1:]
+            # Adjusted target lengths
+            adjusted_tgt_lengths = gloss_lengths - 1
+            
+            ctc_logits, attention_logits = model(landmarks, landmark_lengths, 
+                                               decoder_input,
+                                               adjusted_tgt_lengths, 
+                                               training=True)
+            
+            # CTC targets use full glosses
+            ctc_targets = glosses
+            
+            # Compute joint loss with shifted targets for attention
+            loss = criterion(ctc_logits, attention_logits, 
+                           ctc_targets, decoder_target,  # Use shifted target here
+                           landmark_lengths, gloss_lengths)
 
         # Backward pass
         optimizer.zero_grad()  # Move zero_grad here
@@ -658,28 +889,47 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
 
         total_loss += loss.item()
         num_batches += 1
+        
+        # Track individual losses
+        with torch.no_grad():
+            ctc_loss_only = criterion.ctc_criterion(
+                F.log_softmax(ctc_logits.transpose(0, 1), dim=-1), 
+                ctc_targets, landmark_lengths, gloss_lengths
+            )
+            ctc_losses.append(ctc_loss_only.item())
+            
+            if attention_logits is not None:
+                att_loss_only = criterion.attention_criterion(
+                    attention_logits.reshape(-1, attention_logits.size(-1)),
+                    decoder_target.reshape(-1)  # Use decoder_target, not ctc_targets[:, 1:]
+                )
+                att_losses.append(att_loss_only.item())
 
         pbar.set_postfix({
             'loss': f'{loss.item():.4f}',
+            'ctc': f'{np.mean(ctc_losses[-10:]):.4f}' if ctc_losses else '0.0000',
+            'att': f'{np.mean(att_losses[-10:]):.4f}' if att_losses else '0.0000',
             'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
         })
         
         if batch_idx % 20 == 0:
             step = epoch * len(train_loader) + batch_idx
             mlflow.log_metric("batch_loss", loss.item(), step=step)
+            mlflow.log_metric("batch_ctc_loss", ctc_loss_only.item(), step=step)
+            if attention_logits is not None:
+                mlflow.log_metric("batch_att_loss", att_loss_only.item(), step=step)
             log_gpu_stats(step)
 
     return total_loss / num_batches
 
-
-
-
-def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False, beam_width=10):
-    """Validate the model with mixed precision"""
+def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, 
+             use_beam_search=False, beam_width=10, joint_eval=True):
+    """Validate the model with mixed precision and joint evaluation"""
     model.eval()
     total_loss = 0
     num_batches = 0
-    all_predictions = []
+    all_ctc_predictions = []
+    all_att_predictions = []
     all_targets = []
 
     with torch.no_grad():
@@ -692,45 +942,84 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
 
             # Forward pass with mixed precision
             with autocast(device.type):
-                ctc_logits = model(landmarks, landmark_lengths)
-
-                # Calculate loss
-                ctc_logits_t = ctc_logits.transpose(0, 1)
-                log_probs = F.log_softmax(ctc_logits_t, dim=-1)
-                loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
+                decoder_input = glosses[:, :-1]
+                decoder_target = glosses[:, 1:]
+                adjusted_tgt_lengths = gloss_lengths - 1
+                
+                ctc_logits, attention_logits = model(landmarks, landmark_lengths, 
+                                                   decoder_input, 
+                                                   adjusted_tgt_lengths, 
+                                                   training=True)
+                
+                # CTC targets for loss computation
+                ctc_targets = glosses
+                
+                # Compute joint loss
+                loss = criterion(ctc_logits, attention_logits, 
+                               ctc_targets, decoder_target,
+                               landmark_lengths, gloss_lengths)
 
             total_loss += loss.item()
             num_batches += 1
 
-            # Decode predictions (outside autocast for decoding operations)
+            # Decode predictions
+            # CTC predictions
             if use_beam_search:
-                predictions = decode_predictions_beam(ctc_logits, landmark_lengths, idx_to_gloss, 
-                                                     blank_id=1, beam_width=beam_width)
+                ctc_preds = decode_predictions_beam(ctc_logits, landmark_lengths, 
+                                                  idx_to_gloss, blank_id=1, 
+                                                  beam_width=beam_width)
             else:
-                predictions = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
+                ctc_preds = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
+            
+            all_ctc_predictions.extend(ctc_preds)
+
+            # Attention predictions (greedy decode)
+            if joint_eval and attention_logits is not None:
+                # For validation, we can also run greedy decoding on the decoder
+                memory = model.encode(landmarks, landmark_lengths)
+                att_decoded = greedy_decode_attention(model, memory, landmark_lengths,
+                                                    max_len=max(gloss_lengths)+10,
+                                                    device=device)
+                
+                # Convert attention predictions to glosses
+                att_preds = []
+                for i in range(att_decoded.size(0)):
+                    seq = att_decoded[i, :gloss_lengths[i]].cpu().numpy()
+                    gloss_seq = [idx_to_gloss.get(int(t), '<unk>') for t in seq if t != 0]
+                    att_preds.append(gloss_seq)
+                all_att_predictions.extend(att_preds)
+            else:
+                all_att_predictions.extend(ctc_preds)  # Fallback to CTC
 
             # Convert targets to glosses
             for i in range(glosses.size(0)):
                 target = glosses[i, :gloss_lengths[i]].cpu().numpy()
                 target_glosses = [idx_to_gloss.get(int(t), '<unk>') for t in target]
-                all_predictions.append(predictions[i])
                 all_targets.append(target_glosses)
 
             pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
     avg_loss = total_loss / num_batches
-    wer = compute_wer(all_predictions, all_targets)
+    
+    # Compute metrics
+    ctc_wer = compute_wer(all_ctc_predictions, all_targets)
+    att_wer = compute_wer(all_att_predictions, all_targets) if joint_eval else ctc_wer
+    bleu_score = compute_bleu(all_att_predictions if joint_eval else all_ctc_predictions, all_targets)
 
-    return avg_loss, wer
-
-
+    # Log detailed metrics
+    mlflow.log_metric("val_ctc_wer", ctc_wer)
+    mlflow.log_metric("val_att_wer", att_wer)
+    mlflow.log_metric("val_bleu", bleu_score)
+    
+    return avg_loss, ctc_wer, att_wer, bleu_score
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, 
-                save_dir='checkpoints', beam_width=10):
-    """Full training loop with MLflow tracking"""
+                save_dir='checkpoints', beam_width=10, ctc_weight=0.3):
+    """Full training loop with MLflow tracking and joint loss"""
     os.makedirs(save_dir, exist_ok=True)
 
-    criterion = CTCLoss(blank=1, zero_infinity=True)
+    # Joint CTC/Attention loss with weights
+    criterion = JointCTCLoss(ctc_weight=ctc_weight, attention_weight=1-ctc_weight)
     
     # Lower learning rate with AdamW
     optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, betas=(0.9, 0.98), 
@@ -752,8 +1041,13 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         optimizer, mode='min', factor=0.5, patience=5)
 
     best_wer = float('inf')
+    best_bleu = 0.0
     patience_counter = 0
     max_patience = 10
+
+    # Log loss weights
+    mlflow.log_param("ctc_loss_weight", ctc_weight)
+    mlflow.log_param("attention_loss_weight", 1-ctc_weight)
 
     for epoch in range(num_epochs):
         print(f"\n{'='*50}")
@@ -761,39 +1055,52 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         print(f"{'='*50}")
 
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, warmup_scheduler)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, 
+                               device, vocab, epoch, warmup_scheduler)
         print(f"Train Loss: {train_loss:.4f}")
 
-        # Validate with beam search
-        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, 
-                                     use_beam_search=False, beam_width=beam_width)
-        print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
+        # Validate with joint evaluation
+        val_loss, ctc_wer, att_wer, bleu = validate(model, val_loader, criterion, 
+                                                  device, vocab, idx_to_gloss, 
+                                                  use_beam_search=True, 
+                                                  beam_width=beam_width,
+                                                  joint_eval=True)
+        print(f"Val Loss: {val_loss:.4f}")
+        print(f"CTC WER: {ctc_wer:.4f}, Attention WER: {att_wer:.4f}")
+        print(f"BLEU: {bleu:.4f}")
 
         # Log metrics to MLflow
         mlflow.log_metric("train_loss", train_loss, step=epoch)
         mlflow.log_metric("val_loss", val_loss, step=epoch)
-        mlflow.log_metric("val_wer", val_wer, step=epoch)
+        mlflow.log_metric("val_ctc_wer", ctc_wer, step=epoch)
+        mlflow.log_metric("val_att_wer", att_wer, step=epoch)
+        mlflow.log_metric("val_bleu", bleu, step=epoch)
         mlflow.log_metric("learning_rate", optimizer.param_groups[0]['lr'], step=epoch)
 
         # Plateau scheduling after warmup
         if epoch * len(train_loader) > num_warmup_steps:
             plateau_scheduler.step(val_loss)
 
-        # Save best model
-        if val_wer < best_wer:
-            best_wer = val_wer
+        # Save best model (based on attention WER + BLEU)
+        combined_metric = att_wer - bleu  # Lower WER + higher BLEU is better
+        if combined_metric < best_wer:
+            best_wer = combined_metric
             patience_counter = 0
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': val_loss,
-                'val_wer': val_wer,
+                'ctc_wer': ctc_wer,
+                'att_wer': att_wer,
+                'bleu': bleu,
+                'ctc_weight': ctc_weight
             }
-            checkpoint_path = os.path.join(save_dir, 'best_model.pt')
+            checkpoint_path = os.path.join(save_dir, 'best_model_joint.pt')
             torch.save(checkpoint, checkpoint_path)
-            print(f"✓ Saved best model with WER: {best_wer:.4f}")
-            mlflow.log_metric("best_wer", best_wer)
+            print(f"✓ Saved best joint model: Att WER={att_wer:.4f}, BLEU={bleu:.4f}")
+            mlflow.log_metric("best_att_wer", att_wer)
+            mlflow.log_metric("best_bleu", bleu)
         else:
             patience_counter += 1
             
@@ -809,28 +1116,31 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_loss': val_loss,
-                'val_wer': val_wer,
+                'ctc_wer': ctc_wer,
+                'att_wer': att_wer,
+                'bleu': bleu,
             }
-            checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pt')
+            checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}_joint.pt')
             torch.save(checkpoint, checkpoint_path)
 
-    return best_wer
-
+    return best_wer, bleu
 
 def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=100):
     """Generate comprehensive model summary"""
     print("\n" + "="*70)
-    print("MODEL SUMMARY")
+    print("MODEL SUMMARY - JOINT CTC/ATTENTION")
     print("="*70)
     
     # Create dummy input
     dummy_input = torch.randn(batch_size, seq_length, input_dim).to(device)
     dummy_lengths = torch.tensor([seq_length] * batch_size).to(device)
+    dummy_tgt = torch.randint(0, 100, (batch_size, seq_length//2)).to(device)  # Dummy target
+    dummy_tgt_lengths = torch.tensor([seq_length//2] * batch_size).to(device)
     
-    # Get torchinfo summary
+    # Get torchinfo summary (encoder + decoder)
     model_stats = summary(
         model,
-        input_data=(dummy_input, dummy_lengths),
+        input_data=(dummy_input, dummy_lengths, dummy_tgt, dummy_tgt_lengths),
         col_names=["input_size", "output_size", "num_params", "trainable"],
         col_width=20,
         row_settings=["var_names"],
@@ -858,7 +1168,8 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     print(f"Non-trainable Parameters:   {non_trainable_params:>15,}")
     print(f"Model Size:                 {size_mb:>15.2f} MB")
     print(f"Input Shape:                {tuple(dummy_input.shape)}")
-    print(f"Output Shape:               {model(dummy_input, dummy_lengths).shape}")
+    print(f"CTC Output Shape:           {model.encode(dummy_input, dummy_lengths).shape}")
+    print(f"Attention Output Shape:     {model.decode(dummy_tgt, model.encode(dummy_input, dummy_lengths), dummy_tgt_lengths, dummy_lengths).shape}")
     print("="*70 + "\n")
     
     summary_str = str(model_stats)
@@ -869,7 +1180,9 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
         "non_trainable_params": non_trainable_params,
         "model_size_mb": size_mb,
         "input_shape": list(dummy_input.shape),
-        "output_shape": list(model(dummy_input, dummy_lengths).shape)
+        "ctc_output_shape": list(model.encode(dummy_input, dummy_lengths).shape),
+        "attention_output_shape": list(model.decode(dummy_tgt, model.encode(dummy_input, dummy_lengths), dummy_tgt_lengths, dummy_lengths).shape),
+        "architecture": "joint_ctc_attention_transformer"
     }
     
     return summary_str, summary_dict
@@ -903,15 +1216,17 @@ def main():
     LANDMARKS_DEV = "./landmarks_dev"
     VOCAB_FILE = "vocab.json"
     STATS_FILE = "normalization_stats.npz"
-    BATCH_SIZE = 64
+    BATCH_SIZE = 32  # Reduced batch size for joint model
     NUM_EPOCHS = 30
     INPUT_DIM = 1659
     D_MODEL = 512
     NHEAD = 8
-    NUM_LAYERS = 8  # Increased from 6
+    NUM_ENCODER_LAYERS = 6
+    NUM_DECODER_LAYERS = 6
     DROPOUT = 0.1
     DIM_FEEDFORWARD = 2048
     BEAM_WIDTH = 10
+    CTC_WEIGHT = 0.3  # Balance between CTC (0.3) and Attention (0.7)
     SEED = 42
     
     # Set random seeds
@@ -920,10 +1235,10 @@ def main():
     torch.manual_seed(SEED)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(SEED)
-    
+
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"
-    RUN_NAME = "transformer_ctc_improved_v2"
+    RUN_NAME = "joint_ctc_attention_transformer_v1"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -936,6 +1251,7 @@ def main():
         torch.backends.cuda.matmul.allow_tf32 = True
         torch.backends.cudnn.allow_tf32 = True
 
+    # MLflow setup
     os.environ['MLFLOW_TRACKING_USERNAME'] = 'roman'
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
@@ -965,7 +1281,8 @@ def main():
             "input_dim": INPUT_DIM,
             "d_model": D_MODEL,
             "nhead": NHEAD,
-            "num_layers": NUM_LAYERS,
+            "num_encoder_layers": NUM_ENCODER_LAYERS,
+            "num_decoder_layers": NUM_DECODER_LAYERS,
             "dropout": DROPOUT,
             "dim_feedforward": DIM_FEEDFORWARD,
             "optimizer": "AdamW",
@@ -974,12 +1291,14 @@ def main():
             "scheduler": "Warmup+Plateau",
             "warmup_ratio": 0.1,
             "augmentation": "temporal+spatial+masking",
-            "loss_function": "CTC",
+            "loss_function": "joint_ctc_attention",
+            "ctc_weight": CTC_WEIGHT,
+            "attention_weight": 1-CTC_WEIGHT,
             "beam_width": BEAM_WIDTH,
             "normalization": "z-score",
             "seed": SEED,
             "activation": "gelu",
-            "architecture": "pre-norm"
+            "architecture": "joint_ctc_attention_transformer"
         })
         
         mlflow.log_param("device", str(device))
@@ -1047,18 +1366,19 @@ def main():
             pin_memory=use_pin_memory
         )
 
-        # Create model
+        # Create joint model
         print("\n" + "="*50)
-        print("Creating Model")
+        print("Creating Joint CTC/Attention Model")
         print("="*50)
 
         num_glosses = len(train_dataset.gloss_vocab)
-        model = SignLanguageTranslator(
+        model = SignLanguageTranslationModel(
             input_dim=INPUT_DIM,
             num_glosses=num_glosses,
             d_model=D_MODEL,
             nhead=NHEAD,
-            num_encoder_layers=NUM_LAYERS,
+            num_encoder_layers=NUM_ENCODER_LAYERS,
+            num_decoder_layers=NUM_DECODER_LAYERS,
             dropout=DROPOUT,
             dim_feedforward=DIM_FEEDFORWARD
         ).to(device)
@@ -1074,11 +1394,11 @@ def main():
         
         mlflow.log_params(summary_dict)
         
-        model_summary_path = "model_summary.txt"
+        model_summary_path = "model_summary_joint.txt"
         with open(model_summary_path, 'w', encoding='utf-8') as f:
             f.write(summary_str)
             f.write("\n\n" + "="*70 + "\n")
-            f.write("DETAILED STATISTICS\n")
+            f.write("JOINT CTC/ATTENTION ARCHITECTURE\n")
             f.write("="*70 + "\n")
             for key, value in summary_dict.items():
                 f.write(f"{key}: {value}\n")
@@ -1086,10 +1406,10 @@ def main():
 
         # Train model
         print("\n" + "="*50)
-        print("Starting Training")
+        print("Starting Joint Training")
         print("="*50)
 
-        best_wer = train_model(
+        best_wer, best_bleu = train_model(
             model,
             train_loader,
             val_loader,
@@ -1097,24 +1417,27 @@ def main():
             device,
             train_dataset.gloss_vocab,
             train_dataset.idx_to_gloss,
-            beam_width=BEAM_WIDTH
+            beam_width=BEAM_WIDTH,
+            ctc_weight=CTC_WEIGHT
         )
 
         print(f"\n{'='*50}")
-        print(f"Training Complete! Best WER: {best_wer:.4f}")
+        print(f"Joint Training Complete!")
+        print(f"Best Attention WER: {best_wer:.4f}, Best BLEU: {best_bleu:.4f}")
         print(f"{'='*50}")
         
-        mlflow.log_metric("final_best_wer", best_wer)
-        mlflow.pytorch.log_model(model, "model")
+        mlflow.log_metric("final_best_att_wer", best_wer)
+        mlflow.log_metric("final_best_bleu", best_bleu)
+        mlflow.pytorch.log_model(model, "joint_model")
         
         mlflow.set_tags({
-            "model_type": "transformer",
+            "model_type": "joint_transformer",
             "task": "sign_language_translation",
             "dataset": "phoenix-2014",
             "status": "completed",
-            "improvements": "normalization+beam_search+warmup+gelu+prenorm"
+            "improvements": "joint_ctc_attention+teacher_forcing+bleu_eval",
+            "ctc_weight": str(CTC_WEIGHT)
         })
-
 
 if __name__ == "__main__":
     main()

@@ -14,37 +14,36 @@ import mlflow.pytorch
 from torchinfo import summary
 import platform
 import psutil
+import random
 
 # ==================== DATASET ====================
 
 class LandmarkDataset(Dataset):
     """Dataset loader for preprocessed landmarks"""
     def __init__(self, landmarks_dir, vocab_file=None, build_vocab=False, 
-                 augment=False, all_dirs_for_vocab=None, max_samples=None, random_subset=False):
+                 augment=False, all_dirs_for_vocab=None, max_samples=None, 
+                 random_subset=False, seed=42, compute_stats=False, stats_file=None):
         self.landmarks_dir = landmarks_dir
         self.samples = sorted(glob.glob(os.path.join(landmarks_dir, "*.npz")))
         self.augment = augment
+        self.seed = seed
 
-        # Initialize augmentation
+        # Initialize augmentation with stronger parameters
         if self.augment:
-            self.temporal_aug = TemporalAugmentation(speed_range=(0.85, 1.15), prob=0.5)
+            self.temporal_aug = TemporalAugmentation(speed_range=(0.7, 1.3), prob=0.5)
 
         # Limit samples
         if max_samples is not None:
             if random_subset:
-                # Random subset for better representation
                 random.seed(seed)
                 self.samples = random.sample(self.samples, 
                                            min(max_samples, len(self.samples)))
                 print(f"Random subset: {len(self.samples)} samples (seed={seed})")
             else:
-                # First N samples
                 self.samples = self.samples[:max_samples]
                 print(f"First {len(self.samples)} samples")
                 
-                
         if build_vocab:
-            # Build vocab from all directories if provided
             if all_dirs_for_vocab:
                 self.gloss_vocab = self._build_vocab_from_multiple_dirs(all_dirs_for_vocab)
             else:
@@ -55,8 +54,66 @@ class LandmarkDataset(Dataset):
 
         self.idx_to_gloss = {v: k for k, v in self.gloss_vocab.items()}
         
+        # Compute normalization statistics
+        if compute_stats:
+            self.mean, self.std = self._compute_normalization_stats()
+            self._save_stats(stats_file)
+        elif stats_file and os.path.exists(stats_file):
+            self.mean, self.std = self._load_stats(stats_file)
+        else:
+            print("Warning: No normalization stats provided. Using zero mean and unit std.")
+            self.mean = 0.0
+            self.std = 1.0
+        
+    def _compute_normalization_stats(self):
+        """Compute mean and std for landmark normalization"""
+        print("Computing normalization statistics...")
+        all_landmarks = []
+        
+        # Sample subset for efficiency (use 10% of data or max 1000 samples)
+        sample_size = min(len(self.samples), max(100, len(self.samples) // 10))
+        sampled_files = random.sample(self.samples, sample_size)
+        
+        for sample_path in tqdm(sampled_files, desc="Computing stats"):
+            data = np.load(sample_path, allow_pickle=True)
+            landmarks = data['landmarks'].astype(np.float32)
+            
+            # NEW: Apply relative/scale normalization before computing stats
+            landmarks = self._normalize_landmarks(landmarks)
+            
+            all_landmarks.append(landmarks)
+        
+        # Concatenate all landmarks
+        all_landmarks = np.concatenate(all_landmarks, axis=0)
+        
+        # Compute statistics
+        mean = np.mean(all_landmarks, axis=0)
+        std = np.std(all_landmarks, axis=0)
+        
+        # Avoid division by zero
+        std = np.where(std < 1e-6, 1.0, std)
+        
+        print(f"Computed statistics from {sample_size} samples")
+        print(f"Mean shape: {mean.shape}, Std shape: {std.shape}")
+        
+        return mean, std
+    
+    def _save_stats(self, stats_file):
+        """Save normalization statistics"""
+        if stats_file:
+            np.savez(stats_file, mean=self.mean, std=self.std)
+            print(f"Normalization stats saved to {stats_file}")
+    
+    def _load_stats(self, stats_file):
+        """Load normalization statistics"""
+        data = np.load(stats_file)
+        mean = data['mean']
+        std = data['std']
+        print(f"Normalization stats loaded from {stats_file}")
+        return mean, std
+        
     def _build_vocab_from_multiple_dirs(self, directories):
-        """Build vocabulary from multiple directories (train, dev, test)"""
+        """Build vocabulary from multiple directories"""
         glosses = set()
         for directory in directories:
             samples = sorted(glob.glob(os.path.join(directory, "*.npz")))
@@ -112,22 +169,136 @@ class LandmarkDataset(Dataset):
             vocab = json.load(f)
         print(f"Vocabulary loaded from {vocab_file}, size: {len(vocab)}")
         return vocab
+        
+    def _normalize_landmarks(self, landmarks):
+        """
+        Complete preprocessing pipeline for MediaPipe landmarks
+        landmarks: [num_frames, 1659] flattened array
+        
+        Landmark structure (YOUR specific order):
+        - Hands (both): 0-125 (126 features = 2 hands × 21 landmarks × 3)
+        - Face: 126-1559 (1434 features = 478 landmarks × 3)
+        - Pose: 1560-1658 (99 features = 33 landmarks × 3)
+        """
+        num_frames = landmarks.shape[0]
+        feature_dim = landmarks.shape[1]
+        
+        # Reshape to [num_frames, num_landmarks, 3]
+        num_landmarks = feature_dim // 3  # Should be 553 = (126 + 1434 + 99) / 3
+        landmarks_3d = landmarks.reshape(num_frames, num_landmarks, 3)
+        
+        processed = []
+        
+        for frame_idx in range(num_frames):
+            frame_landmarks = landmarks_3d[frame_idx].copy()
+            
+            # YOUR landmark order: Hands (both) → Face → Pose
+            # Hands: indices 0-41 (42 landmarks = 2 hands × 21)
+            hands_start, hands_end = 0, 42  # 126 features / 3 = 42 landmarks
+            # Face: indices 42-519 (478 landmarks)
+            face_start, face_end = 42, 520  # 42 + 478 = 520
+            # Pose: indices 520-552 (33 landmarks)
+            pose_start, pose_end = 520, 553  # 520 + 33 = 553
+            
+            # Step 1: Relative positioning
+            
+            # === HANDS (both stored together) ===
+            # Left hand: landmarks 0-20, Right hand: landmarks 21-41
+            hands = frame_landmarks[hands_start:hands_end].copy()
+            
+            # Check if hands are detected (not all zeros)
+            if not np.all(np.isclose(hands, 0, atol=1e-6)):
+                # Split into left and right hand
+                left_hand = hands[0:21].copy()
+                right_hand = hands[21:42].copy()
+                
+                # Normalize left hand relative to left wrist (index 0)
+                if not np.all(np.isclose(left_hand, 0, atol=1e-6)):
+                    left_hand = left_hand - left_hand[0]  # Relative to wrist
+                
+                # Normalize right hand relative to right wrist (index 0 within right hand)
+                if not np.all(np.isclose(right_hand, 0, atol=1e-6)):
+                    right_hand = right_hand - right_hand[0]  # Relative to wrist
+                
+                # Recombine
+                hands = np.concatenate([left_hand, right_hand])
+                frame_landmarks[hands_start:hands_end] = hands
+            
+            # === FACE ===
+            face = frame_landmarks[face_start:face_end].copy()
+            if not np.all(np.isclose(face, 0, atol=1e-6)):
+                # Normalize relative to nose tip (landmark 1 in face mesh)
+                # With refined landmarks, nose tip is still at index 1
+                reference = face[1].copy()  # Nose tip
+                face = face - reference
+                frame_landmarks[face_start:face_end] = face
+            
+            # === POSE ===
+            pose = frame_landmarks[pose_start:pose_end].copy()
+            if not np.all(np.isclose(pose, 0, atol=1e-6)):
+                # Normalize relative to mid-shoulder point
+                # MediaPipe Pose: landmark 11 = left shoulder, 12 = right shoulder
+                left_shoulder = pose[11].copy()
+                right_shoulder = pose[12].copy()
+                
+                # Use midpoint of shoulders as reference
+                reference = (left_shoulder + right_shoulder) / 2.0
+                pose = pose - reference
+                frame_landmarks[pose_start:pose_end] = pose
+            
+            # Step 2: Scale normalization for each part independently
+            parts = [
+                (hands_start, hands_end, "hands"),
+                (face_start, face_end, "face"),
+                (pose_start, pose_end, "pose")
+            ]
+            
+            for start, end, name in parts:
+                part = frame_landmarks[start:end].copy()
+                
+                # Use L2 norm (Euclidean distance) for scale normalization
+                # Compute distance of each landmark from origin (after centering)
+                distances = np.linalg.norm(part, axis=-1)
+                max_dist = np.max(distances)
+                
+                if max_dist > 1e-6:
+                    part = part / max_dist
+                    frame_landmarks[start:end] = part
+            
+            processed.append(frame_landmarks)
+        
+        processed = np.array(processed)
+        
+        # Reshape back to [num_frames, 1659]
+        processed = processed.reshape(num_frames, -1)
+        
+        return processed
 
     def __len__(self):
         return len(self.samples)
 
     def __getitem__(self, idx):
         data = np.load(self.samples[idx], allow_pickle=True)
-        landmarks = data['landmarks']
+        landmarks = data['landmarks'].astype(np.float32)
+
+        # Apply relative + scale normalization FIRST
+        landmarks = self._normalize_landmarks(landmarks)
+    
+        # Apply normalization
+        landmarks = (landmarks - self.mean) / self.std
 
         # Apply augmentation during training
         if self.augment:
             # Temporal augmentation
             landmarks = self.temporal_aug(landmarks)
 
-            # Spatial noise
+            # Stronger spatial noise
             if np.random.random() > 0.5:
-                landmarks = add_spatial_noise(landmarks, noise_std=0.005)
+                landmarks = add_spatial_noise(landmarks, noise_std=0.015)
+            
+            # Random masking (mask some frames)
+            if np.random.random() > 0.7:
+                landmarks = random_masking(landmarks, mask_prob=0.1)
 
         landmarks = torch.FloatTensor(landmarks)
         
@@ -174,6 +345,7 @@ class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=5000, dropout=0.1):
         super().__init__()
         self.dropout = nn.Dropout(p=dropout)
+        self.scale = math.sqrt(d_model)  # Scale to prevent positional encoding from dominating
 
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len).unsqueeze(1).float()
@@ -184,62 +356,77 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
-        x = x + self.pe[:, :x.size(1)]
+        x = x * self.scale + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
 
 class SignLanguageTranslator(nn.Module):
-    """Transformer-based Sign Language Translation Model"""
+    """Improved Transformer-based Sign Language Translation Model"""
     def __init__(self, input_dim, num_glosses, d_model=512, nhead=8,
-                 num_encoder_layers=6, dropout=0.1):
+                 num_encoder_layers=8, dropout=0.1, dim_feedforward=2048):
         super().__init__()
 
-        # Input projection
+        # Input projection with residual connection
         self.input_proj = nn.Sequential(
             nn.Linear(input_dim, d_model),
             nn.LayerNorm(d_model),
             nn.Dropout(dropout)
         )
 
-        # Temporal convolution for local feature extraction
-        self.temporal_conv = nn.Sequential(
-            nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
-            nn.ReLU(),
-            nn.Dropout(dropout)
-        )
+        # Enhanced temporal convolution with multiple kernel sizes
+        # Each conv outputs d_model//3, but we need to ensure they sum to d_model
+        conv_channels = [d_model // 3, d_model // 3, d_model - 2 * (d_model // 3)]  # Ensures exact sum
+        self.temporal_conv = nn.ModuleList([
+            nn.Conv1d(d_model, conv_channels[i], kernel_size=k, padding=k//2)
+            for i, k in enumerate([3, 5, 7])
+        ])
+        self.conv_norm = nn.LayerNorm(d_model)
+        self.conv_dropout = nn.Dropout(dropout)
 
         # Positional encoding
         self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
 
-        # Transformer encoder
+        # Transformer encoder with more layers
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
-            dim_feedforward=d_model * 4,
+            dim_feedforward=dim_feedforward,
             dropout=dropout,
-            activation='relu',
+            activation='gelu',  # GELU instead of ReLU
             batch_first=True,
-            norm_first=True
+            norm_first=True  # Pre-norm architecture
         )
         self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
 
-        # CTC head for gloss prediction
+        # Enhanced CTC head
         self.ctc_head = nn.Sequential(
             nn.Linear(d_model, d_model),
-            nn.ReLU(),
+            nn.LayerNorm(d_model),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(d_model, num_glosses)
         )
 
         self.d_model = d_model
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights properly"""
+        for p in self.parameters():
+            if p.dim() > 1:
+                nn.init.xavier_uniform_(p)
 
     def forward(self, src, src_lengths):
         # Input projection: [B, T, input_dim] -> [B, T, d_model]
         x = self.input_proj(src)
 
-        # Temporal convolution
-        x_conv = self.temporal_conv(x.transpose(1, 2)).transpose(1, 2)
-        x = x + x_conv
+        # Multi-scale temporal convolution
+        x_t = x.transpose(1, 2)  # [B, d_model, T]
+        conv_outputs = [conv(x_t) for conv in self.temporal_conv]
+        x_conv = torch.cat(conv_outputs, dim=1).transpose(1, 2)  # [B, T, d_model]
+        
+        # Residual connection with normalization
+        x = x + self.conv_dropout(self.conv_norm(x_conv))
 
         # Positional encoding
         x = self.pos_encoder(x)
@@ -258,15 +445,15 @@ class SignLanguageTranslator(nn.Module):
     def _generate_padding_mask(self, lengths, max_len):
         """Generate padding mask for variable length sequences"""
         batch_size = len(lengths)
-        mask = torch.arange(max_len).expand(batch_size, max_len) >= lengths.unsqueeze(1)
+        mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths.unsqueeze(1)
         return mask
 
 
 # ==================== DATA AUGMENTATION ====================
 
 class TemporalAugmentation:
-    """Temporal data augmentation"""
-    def __init__(self, speed_range=(0.85, 1.15), prob=0.5):
+    """Enhanced temporal data augmentation"""
+    def __init__(self, speed_range=(0.7, 1.3), prob=0.5):
         self.speed_range = speed_range
         self.prob = prob
 
@@ -285,16 +472,100 @@ class TemporalAugmentation:
         return augmented
 
 
-def add_spatial_noise(landmarks, noise_std=0.005):
-    """Add Gaussian noise to landmarks"""
+def add_spatial_noise(landmarks, noise_std=0.015):
+    """Add stronger Gaussian noise to landmarks"""
     noise = np.random.normal(0, noise_std, landmarks.shape)
     return landmarks + noise
+
+
+def random_masking(landmarks, mask_prob=0.1):
+    """Randomly mask some frames"""
+    num_frames = landmarks.shape[0]
+    mask = np.random.random(num_frames) > mask_prob
+    # Keep at least one frame
+    if not mask.any():
+        mask[0] = True
+    return landmarks[mask]
+
+
+# ==================== BEAM SEARCH DECODER ====================
+
+class CTCBeamDecoder:
+    """Simple beam search decoder for CTC"""
+    def __init__(self, blank_id=1, beam_width=10):
+        self.blank_id = blank_id
+        self.beam_width = beam_width
+    
+    def decode(self, log_probs, lengths):
+        """
+        Decode using beam search
+        Args:
+            log_probs: [B, T, num_classes] log probabilities
+            lengths: [B] sequence lengths
+        Returns:
+            List of decoded sequences
+        """
+        batch_size = log_probs.size(0)
+        decoded = []
+        
+        for b in range(batch_size):
+            seq_len = lengths[b].item()
+            probs = log_probs[b, :seq_len].cpu().numpy()
+            
+            # Beam search
+            beam = [([self.blank_id], 0.0)]  # (sequence, score)
+            
+            for t in range(seq_len):
+                new_beam = []
+                
+                for seq, score in beam:
+                    for c in range(probs.shape[1]):
+                        new_score = score + probs[t, c]
+                        
+                        # Extend sequence
+                        if c == self.blank_id:
+                            new_seq = seq
+                        elif len(seq) > 0 and c == seq[-1]:
+                            # Repeated character
+                            new_seq = seq
+                        else:
+                            new_seq = seq + [c]
+                        
+                        new_beam.append((new_seq, new_score))
+                
+                # Keep top beam_width
+                new_beam = sorted(new_beam, key=lambda x: x[1], reverse=True)[:self.beam_width]
+                beam = new_beam
+            
+            # Get best sequence
+            best_seq = beam[0][0]
+            # Remove blanks
+            best_seq = [c for c in best_seq if c != self.blank_id]
+            decoded.append(best_seq)
+        
+        return decoded
+
+
+def decode_predictions_beam(ctc_output, lengths, vocab, blank_id=1, beam_width=10):
+    """Decode CTC output using beam search"""
+    log_probs = F.log_softmax(ctc_output, dim=-1)
+    decoder = CTCBeamDecoder(blank_id=blank_id, beam_width=beam_width)
+    
+    predictions = decoder.decode(log_probs, lengths)
+    
+    # Convert to glosses
+    decoded = []
+    for pred_seq in predictions:
+        glosses = [vocab.get(p, '<unk>') for p in pred_seq]
+        decoded.append(glosses)
+    
+    return decoded
 
 
 # ==================== TRAINING ====================
 
 def decode_predictions(ctc_output, lengths, vocab, blank_id=1):
-    """Decode CTC output using greedy decoding"""
+    """Decode CTC output using greedy decoding (fallback)"""
     batch_size = ctc_output.size(0)
     predictions = torch.argmax(ctc_output, dim=-1)
 
@@ -348,7 +619,7 @@ def compute_wer(predictions, targets):
     return errors / max(total_words, 1)
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch):
+def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler=None):
     """Train for one epoch"""
     model.train()
     total_loss = 0
@@ -377,11 +648,18 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+        
+        # Step scheduler if provided (for warmup)
+        if scheduler is not None:
+            scheduler.step()
 
         total_loss += loss.item()
         num_batches += 1
 
-        pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+        pbar.set_postfix({
+            'loss': f'{loss.item():.4f}',
+            'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
+        })
         
         # Log batch loss to MLflow every 50 batches
         if batch_idx % 50 == 0:
@@ -391,7 +669,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch)
     return total_loss / num_batches
 
 
-def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
+def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=True, beam_width=10):
     """Validate the model"""
     model.eval()
     total_loss = 0
@@ -418,8 +696,12 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
             total_loss += loss.item()
             num_batches += 1
 
-            # Decode predictions
-            predictions = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
+            # Decode predictions with beam search
+            if use_beam_search:
+                predictions = decode_predictions_beam(ctc_logits, landmark_lengths, idx_to_gloss, 
+                                                     blank_id=1, beam_width=beam_width)
+            else:
+                predictions = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
 
             # Convert targets to glosses
             for i in range(glosses.size(0)):
@@ -436,16 +718,35 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
     return avg_loss, wer
 
 
-def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
+def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, 
+                save_dir='checkpoints', beam_width=10):
     """Full training loop with MLflow tracking"""
     os.makedirs(save_dir, exist_ok=True)
 
     criterion = CTCLoss(blank=1, zero_infinity=True)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, betas=(0.9, 0.98), eps=1e-9)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3)
+    
+    # Lower learning rate with AdamW
+    optimizer = torch.optim.AdamW(model.parameters(), lr=5e-5, betas=(0.9, 0.98), 
+                                  eps=1e-9, weight_decay=0.01)
+    
+    # Warmup scheduler
+    num_training_steps = num_epochs * len(train_loader)
+    num_warmup_steps = num_training_steps // 10  # 10% warmup
+    
+    def lr_lambda(current_step):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return max(0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps)))
+    
+    warmup_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    
+    # Plateau scheduler for after warmup
+    plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', factor=0.5, patience=5)
 
     best_wer = float('inf')
+    patience_counter = 0
+    max_patience = 10
 
     for epoch in range(num_epochs):
         print(f"\n{'='*50}")
@@ -453,11 +754,12 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         print(f"{'='*50}")
 
         # Train
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch)
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, warmup_scheduler)
         print(f"Train Loss: {train_loss:.4f}")
 
-        # Validate
-        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss)
+        # Validate with beam search
+        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, 
+                                     use_beam_search=True, beam_width=beam_width)
         print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
 
         # Log metrics to MLflow
@@ -466,12 +768,14 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         mlflow.log_metric("val_wer", val_wer, step=epoch)
         mlflow.log_metric("learning_rate", optimizer.param_groups[0]['lr'], step=epoch)
 
-        # Learning rate scheduling
-        scheduler.step(val_loss)
+        # Plateau scheduling after warmup
+        if epoch * len(train_loader) > num_warmup_steps:
+            plateau_scheduler.step(val_loss)
 
         # Save best model
         if val_wer < best_wer:
             best_wer = val_wer
+            patience_counter = 0
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
@@ -482,10 +786,14 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
             checkpoint_path = os.path.join(save_dir, 'best_model.pt')
             torch.save(checkpoint, checkpoint_path)
             print(f"✓ Saved best model with WER: {best_wer:.4f}")
-            
-            # Log best model to MLflow
-            # mlflow.log_artifact(checkpoint_path)
             mlflow.log_metric("best_wer", best_wer)
+        else:
+            patience_counter += 1
+            
+        # Early stopping
+        if patience_counter >= max_patience:
+            print(f"Early stopping triggered after {epoch+1} epochs")
+            break
 
         # Save checkpoint every 5 epochs
         if (epoch + 1) % 5 == 0:
@@ -547,10 +855,8 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     print(f"Output Shape:               {model(dummy_input, dummy_lengths).shape}")
     print("="*70 + "\n")
     
-    # Return summary as string for logging
     summary_str = str(model_stats)
     
-    # Create detailed summary dictionary
     summary_dict = {
         "total_params": total_params,
         "trainable_params": trainable_params,
@@ -570,17 +876,28 @@ def main():
     LANDMARKS_TRAIN = "./landmarks_train"
     LANDMARKS_DEV = "./landmarks_dev"
     VOCAB_FILE = "vocab.json"
-    BATCH_SIZE = 16
+    STATS_FILE = "normalization_stats.npz"
+    BATCH_SIZE = 32
     NUM_EPOCHS = 50
-    INPUT_DIM = 1659  # 126 (hands) + 1434 (face) + 99 (pose)
+    INPUT_DIM = 1659
     D_MODEL = 512
     NHEAD = 8
-    NUM_LAYERS = 6
+    NUM_LAYERS = 8  # Increased from 6
     DROPOUT = 0.1
+    DIM_FEEDFORWARD = 2048
+    BEAM_WIDTH = 10
+    SEED = 42
+    
+    # Set random seeds
+    random.seed(SEED)
+    np.random.seed(SEED)
+    torch.manual_seed(SEED)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(SEED)
     
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"
-    RUN_NAME = "transformer_ctc_baseline"
+    RUN_NAME = "transformer_ctc_improved_v2"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -588,10 +905,7 @@ def main():
     os.environ['MLFLOW_TRACKING_USERNAME'] = 'roman'
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
-
-    # Set MLflow experiment
     mlflow.set_experiment(EXPERIMENT_NAME)
-    
     
     # Start MLflow run
     with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME):
@@ -610,7 +924,6 @@ def main():
             mlflow.log_param("cudnn_version", torch.backends.cudnn.version())
             mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2))
             
-            
         # Log hyperparameters
         mlflow.log_params({
             "batch_size": BATCH_SIZE,
@@ -620,39 +933,50 @@ def main():
             "nhead": NHEAD,
             "num_layers": NUM_LAYERS,
             "dropout": DROPOUT,
-            "optimizer": "Adam",
-            "learning_rate": 1e-4,
-            "scheduler": "ReduceLROnPlateau",
-            "augmentation": "temporal+spatial",
-            "loss_function": "CTC"
+            "dim_feedforward": DIM_FEEDFORWARD,
+            "optimizer": "AdamW",
+            "learning_rate": 5e-5,
+            "weight_decay": 0.01,
+            "scheduler": "Warmup+Plateau",
+            "warmup_ratio": 0.1,
+            "augmentation": "temporal+spatial+masking",
+            "loss_function": "CTC",
+            "beam_width": BEAM_WIDTH,
+            "normalization": "z-score",
+            "seed": SEED,
+            "activation": "gelu",
+            "architecture": "pre-norm"
         })
         
-        # Log device info
         mlflow.log_param("device", str(device))
         mlflow.log_param("cuda_available", torch.cuda.is_available())
-        if torch.cuda.is_available():
-            mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
 
         # Create datasets
         print("\n" + "="*50)
         print("Loading Datasets")
         print("="*50)
 
-        # Create datasets with augmentation
+        # Check if stats file exists
+        compute_stats = not os.path.exists(STATS_FILE)
+
         train_dataset = LandmarkDataset(
             LANDMARKS_TRAIN,
             vocab_file=VOCAB_FILE,
             build_vocab=True,
-            augment=True,  # Enable augmentation for training
-            # max_samples=500,
-            # random_subset=False
+            augment=True,
+            compute_stats=compute_stats,
+            stats_file=STATS_FILE,
+            seed=SEED
         )
 
         val_dataset = LandmarkDataset(
             LANDMARKS_DEV,
             vocab_file=VOCAB_FILE,
             build_vocab=False,
-            augment=False  # No augmentation for validation
+            augment=False,
+            compute_stats=False,
+            stats_file=STATS_FILE,
+            seed=SEED
         )
         
         # Log dataset info
@@ -662,11 +986,13 @@ def main():
             "vocab_size": len(train_dataset.gloss_vocab)
         })
         
-        # Log vocabulary file as artifact
+        # Log artifacts
         mlflow.log_artifact(VOCAB_FILE)
+        if os.path.exists(STATS_FILE):
+            mlflow.log_artifact(STATS_FILE)
 
         use_pin_memory = torch.cuda.is_available()
-        # Create data loaders
+        
         train_loader = DataLoader(
             train_dataset,
             batch_size=BATCH_SIZE,
@@ -697,7 +1023,8 @@ def main():
             d_model=D_MODEL,
             nhead=NHEAD,
             num_encoder_layers=NUM_LAYERS,
-            dropout=DROPOUT
+            dropout=DROPOUT,
+            dim_feedforward=DIM_FEEDFORWARD
         ).to(device)
 
         # Generate and log model summary
@@ -709,10 +1036,8 @@ def main():
             seq_length=100
         )
         
-        # Log model statistics to MLflow
         mlflow.log_params(summary_dict)
         
-        # Save model summary to file and log as artifact
         model_summary_path = "model_summary.txt"
         with open(model_summary_path, 'w', encoding='utf-8') as f:
             f.write(summary_str)
@@ -735,25 +1060,23 @@ def main():
             NUM_EPOCHS,
             device,
             train_dataset.gloss_vocab,
-            train_dataset.idx_to_gloss
+            train_dataset.idx_to_gloss,
+            beam_width=BEAM_WIDTH
         )
 
         print(f"\n{'='*50}")
         print(f"Training Complete! Best WER: {best_wer:.4f}")
         print(f"{'='*50}")
         
-        # Log final best WER
         mlflow.log_metric("final_best_wer", best_wer)
-        
-        # Log the final model
         mlflow.pytorch.log_model(model, "model")
         
-        # Set tags for easy filtering
         mlflow.set_tags({
             "model_type": "transformer",
             "task": "sign_language_translation",
             "dataset": "phoenix-2014",
-            "status": "completed"
+            "status": "completed",
+            "improvements": "normalization+beam_search+warmup+gelu+prenorm"
         })
 
 

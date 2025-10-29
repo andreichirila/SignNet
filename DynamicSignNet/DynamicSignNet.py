@@ -669,7 +669,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     return total_loss / num_batches
 
 
-def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=True, beam_width=10):
+def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False, beam_width=10):
     """Validate the model"""
     model.eval()
     total_loss = 0

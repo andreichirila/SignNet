@@ -1,0 +1,7 @@
+numpy
+torch
+torchvision
+tqdm
+mlflow
+torchinfo
+psutil

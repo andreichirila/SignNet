@@ -583,6 +583,8 @@ def main():
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
 
+    os.environ['MLFLOW_TRACKING_USERNAME'] = 'roman'
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
     # Set MLflow experiment
     mlflow.set_experiment(EXPERIMENT_NAME)

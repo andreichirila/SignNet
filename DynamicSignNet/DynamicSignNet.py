@@ -1011,7 +1011,7 @@ def main():
             batch_size=BATCH_SIZE,
             shuffle=True,
             collate_fn=collate_fn,
-            num_workers=8,
+            num_workers=4,
             pin_memory=use_pin_memory,
             prefetch_factor=4,  # Add prefetching
             persistent_workers=True  # Keep workers alive between epochs

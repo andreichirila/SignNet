@@ -15,6 +15,7 @@ from torchinfo import summary
 import platform
 import psutil
 import random
+import subprocess
 from torch.amp import autocast, GradScaler
 
 
@@ -663,9 +664,10 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
             'lr': f'{optimizer.param_groups[0]["lr"]:.2e}'
         })
         
-        if batch_idx % 50 == 0:
+        if batch_idx % 20 == 0:
             step = epoch * len(train_loader) + batch_idx
             mlflow.log_metric("batch_loss", loss.item(), step=step)
+            log_gpu_stats(step)
 
     return total_loss / num_batches
 
@@ -872,6 +874,26 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     
     return summary_str, summary_dict
 
+def log_gpu_stats(step):
+    """Log detailed GPU stats from nvidia-smi"""
+    if not torch.cuda.is_available():
+        return
+    
+    try:
+        # Get GPU utilization
+        result = subprocess.check_output([
+            'nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu',
+            '--format=csv,noheader,nounits'
+        ], encoding='utf-8')
+        
+        gpu_util, mem_used, mem_total, temp = result.strip().split(',')
+        
+        mlflow.log_metric("gpu_utilization_%", float(gpu_util), step=step)
+        mlflow.log_metric("gpu_memory_used_mb", float(mem_used), step=step)
+        mlflow.log_metric("gpu_memory_total_mb", float(mem_total), step=step)
+        mlflow.log_metric("gpu_temperature_c", float(temp), step=step)
+    except:
+        pass  # Silently fail if nvidia-smi not available
 
 # ==================== MAIN ====================
 

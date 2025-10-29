@@ -627,7 +627,6 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     total_loss = 0
     num_batches = 0
     
-    # Add gradient scaler for mixed precision
     scaler = GradScaler(device.type)
 
     pbar = tqdm(train_loader, desc="Training")
@@ -637,22 +636,22 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
         landmark_lengths = landmark_lengths.to(device)
         gloss_lengths = gloss_lengths.to(device)
 
-        optimizer.zero_grad()
-
-        # Use autocast for mixed precision
+        # Forward pass with mixed precision
         with autocast(device.type):
             ctc_logits = model(landmarks, landmark_lengths)
             ctc_logits = ctc_logits.transpose(0, 1)
             log_probs = F.log_softmax(ctc_logits, dim=-1)
             loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
 
-        # Scaled backward pass
+        # Backward pass
+        optimizer.zero_grad()  # Move zero_grad here
         scaler.scale(loss).backward()
         scaler.unscale_(optimizer)
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
         scaler.update()
         
+        # Call scheduler AFTER optimizer.step() AND scaler.update()
         if scheduler is not None:
             scheduler.step()
 
@@ -669,6 +668,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
             mlflow.log_metric("batch_loss", loss.item(), step=step)
 
     return total_loss / num_batches
+
 
 
 

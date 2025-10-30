@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader, Subset
+from torch.utils.data import Dataset, DataLoader
 from torch.nn import CTCLoss
 import glob
 import json
@@ -14,6 +14,7 @@ import mlflow.pytorch
 from torchinfo import summary
 import platform
 import psutil
+import random
 
 # ==================== DATASET ====================
 
@@ -27,24 +28,20 @@ class LandmarkDataset(Dataset):
 
         # Initialize augmentation
         if self.augment:
-            self.temporal_aug = TemporalAugmentation(speed_range=(0.85, 1.15), prob=0.5)
+            self.temporal_aug = AdvancedTemporalAugmentation(prob=0.8)
 
         # Limit samples
         if max_samples is not None:
             if random_subset:
-                # Random subset for better representation
-                random.seed(seed)
+                random.seed(42)
                 self.samples = random.sample(self.samples, 
                                            min(max_samples, len(self.samples)))
-                print(f"Random subset: {len(self.samples)} samples (seed={seed})")
+                print(f"Random subset: {len(self.samples)} samples (seed=42)")
             else:
-                # First N samples
                 self.samples = self.samples[:max_samples]
                 print(f"First {len(self.samples)} samples")
                 
-                
         if build_vocab:
-            # Build vocab from all directories if provided
             if all_dirs_for_vocab:
                 self.gloss_vocab = self._build_vocab_from_multiple_dirs(all_dirs_for_vocab)
             else:
@@ -122,12 +119,7 @@ class LandmarkDataset(Dataset):
 
         # Apply augmentation during training
         if self.augment:
-            # Temporal augmentation
             landmarks = self.temporal_aug(landmarks)
-
-            # Spatial noise
-            if np.random.random() > 0.5:
-                landmarks = add_spatial_noise(landmarks, noise_std=0.005)
 
         landmarks = torch.FloatTensor(landmarks)
         
@@ -181,19 +173,17 @@ class PositionalEncoding(nn.Module):
                             -(math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        # Use register_buffer so pe moves with model.to(device)
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
-        # self.pe is now automatically on the correct device
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
 
 class SignLanguageTranslator(nn.Module):
     """Transformer-based Sign Language Translation Model"""
-    def __init__(self, input_dim, num_glosses, d_model=512, nhead=8,
-                 num_encoder_layers=6, dropout=0.1):
+    def __init__(self, input_dim, num_glosses, d_model=384, nhead=8,
+                 num_encoder_layers=6, dropout=0.5):
         super().__init__()
 
         # Input projection
@@ -219,7 +209,7 @@ class SignLanguageTranslator(nn.Module):
             nhead=nhead,
             dim_feedforward=d_model * 4,
             dropout=dropout,
-            activation='relu',
+            activation='gelu',
             batch_first=True,
             norm_first=True
         )
@@ -260,38 +250,40 @@ class SignLanguageTranslator(nn.Module):
     def _generate_padding_mask(self, lengths, max_len):
         """Generate padding mask for variable length sequences"""
         batch_size = len(lengths)
-        # FIX: Explicitly specify device to match input tensor
         mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths.unsqueeze(1)
         return mask
 
 
 # ==================== DATA AUGMENTATION ====================
 
-class TemporalAugmentation:
-    """Temporal data augmentation"""
-    def __init__(self, speed_range=(0.85, 1.15), prob=0.5):
-        self.speed_range = speed_range
+class AdvancedTemporalAugmentation:
+    """More aggressive augmentation to reduce overfitting"""
+    def __init__(self, prob=0.8):
         self.prob = prob
 
     def __call__(self, landmarks):
         if np.random.random() > self.prob:
             return landmarks
 
-        # Random temporal scaling
-        speed = np.random.uniform(*self.speed_range)
+        # Speed variation (aggressive)
+        speed = np.random.uniform(0.65, 1.35)
         num_frames = landmarks.shape[0]
         new_num_frames = max(1, int(num_frames / speed))
-
         indices = np.linspace(0, num_frames - 1, new_num_frames)
-        augmented = np.array([landmarks[min(int(i), num_frames-1)] for i in indices])
+        landmarks = np.array([landmarks[min(int(i), num_frames-1)] for i in indices])
 
-        return augmented
+        # Stronger spatial noise
+        noise = np.random.normal(0, 0.015, landmarks.shape)
+        landmarks = landmarks + noise
 
+        # Random frame dropout (remove 5-10% of frames randomly)
+        if np.random.random() < 0.3:
+            keep_ratio = np.random.uniform(0.9, 0.95)
+            mask = np.random.rand(landmarks.shape[0]) < keep_ratio
+            if mask.sum() > 0:
+                landmarks = landmarks[mask]
 
-def add_spatial_noise(landmarks, noise_std=0.005):
-    """Add Gaussian noise to landmarks"""
-    noise = np.random.normal(0, noise_std, landmarks.shape)
-    return landmarks + noise
+        return landmarks
 
 
 # ==================== TRAINING ====================
@@ -327,7 +319,6 @@ def compute_wer(predictions, targets):
     total_words = 0
 
     for pred, tgt in zip(predictions, targets):
-        # Simple edit distance calculation
         pred_words = pred if isinstance(pred, list) else pred.split()
         tgt_words = tgt if isinstance(tgt, list) else tgt.split()
 
@@ -351,7 +342,31 @@ def compute_wer(predictions, targets):
     return errors / max(total_words, 1)
 
 
-def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch):
+class EarlyStopping:
+    """Early stopping with patience"""
+    def __init__(self, patience=8, min_delta=0.001):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_val_wer = float('inf')
+        self.best_epoch = 0
+
+    def __call__(self, val_wer, epoch):
+        if val_wer < (self.best_val_wer - self.min_delta):
+            self.best_val_wer = val_wer
+            self.best_epoch = epoch
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                print(f"Early stopping at epoch {epoch}")
+                print(f"Best WER was {self.best_val_wer:.4f} at epoch {self.best_epoch}")
+                return True
+        return False
+
+
+def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler):
     """Train for one epoch"""
     model.train()
     total_loss = 0
@@ -380,13 +395,14 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
+        scheduler.step()
 
         total_loss += loss.item()
         num_batches += 1
 
         pbar.set_postfix({'loss': f'{loss.item():.4f}'})
         
-        # Log batch loss to MLflow every 50 batches
+        # Log batch loss to MLflow
         if batch_idx % 50 == 0:
             step = epoch * len(train_loader) + batch_idx
             mlflow.log_metric("batch_loss", loss.item(), step=step)
@@ -440,44 +456,71 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
 
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
+    """Full training loop with fixed scheduler"""
     os.makedirs(save_dir, exist_ok=True)
-    
+
     criterion = CTCLoss(blank=1, zero_infinity=True)
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5, weight_decay=1e-4)
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5)
     
-    early_stopping = EarlyStopping(patience=5, min_delta=0.001)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), 
+        lr=2e-4,
+        betas=(0.9, 0.999),
+        weight_decay=2e-4
+    )
+    
+    # FIXED SCHEDULER: Warmup + Exponential decay (NO RESTARTS)
+    def get_lr_scheduler(optimizer, num_epochs, steps_per_epoch):
+        total_steps = num_epochs * steps_per_epoch
+        warmup_steps = int(0.1 * total_steps)  # 10% warmup
+        
+        def lr_lambda(step):
+            if step < warmup_steps:
+                return float(step) / float(max(1, warmup_steps))
+            # Exponential decay after warmup
+            progress = (step - warmup_steps) / (total_steps - warmup_steps)
+            return max(0.1, (1.0 - progress) ** 0.5)
+        
+        return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
+    
+    scheduler = get_lr_scheduler(optimizer, num_epochs, len(train_loader))
+    early_stopping = EarlyStopping(patience=8, min_delta=0.001)
     best_wer = float('inf')
 
     for epoch in range(num_epochs):
-        print(f"\nEpoch {epoch+1}/{num_epochs}")
+        print(f"\n{'='*50}")
+        print(f"Epoch {epoch+1}/{num_epochs}")
+        print(f"{'='*50}")
 
-        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch)
+        # Train
+        train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler)
         print(f"Train Loss: {train_loss:.4f}")
 
+        # Validate
         val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss)
         print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
+        print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
 
-        mlflow.log_metric("learning_rate", optimizer.param_groups[0]['lr'], step=epoch)
+        # Log metrics
         mlflow.log_metrics({
             "train_loss": train_loss,
             "val_loss": val_loss,
             "val_wer": val_wer,
+            "learning_rate": optimizer.param_groups[0]['lr']
         }, step=epoch)
 
+        # Save best model
         if val_wer < best_wer:
             best_wer = val_wer
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
+                'val_loss': val_loss,
                 'val_wer': val_wer,
             }
+            torch.save(checkpoint, os.path.join(save_dir, 'best_model.pt'))
+            print(f"✓ Saved best model with WER: {best_wer:.4f}")
             mlflow.log_metric("best_wer", best_wer)
-            #torch.save(checkpoint, os.path.join(save_dir, 'best_model.pt'))
-            #print(f"✓ Best model saved: WER {best_wer:.4f}")
-
-        scheduler.step()
 
         # Early stopping
         if early_stopping(val_wer, epoch):
@@ -506,7 +549,6 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
         verbose=0
     )
     
-    # Print summary
     print(model_stats)
     
     # Additional statistics
@@ -530,10 +572,8 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     print(f"Output Shape:               {model(dummy_input, dummy_lengths).shape}")
     print("="*70 + "\n")
     
-    # Return summary as string for logging
     summary_str = str(model_stats)
     
-    # Create detailed summary dictionary
     summary_dict = {
         "total_params": total_params,
         "trainable_params": trainable_params,
@@ -545,27 +585,6 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     
     return summary_str, summary_dict
 
-class EarlyStopping:
-    def __init__(self, patience=5, min_delta=0.001):
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-        self.best_val_wer = float('inf')
-        self.best_epoch = 0
-
-    def __call__(self, val_wer, epoch):
-        if val_wer < (self.best_val_wer - self.min_delta):
-            self.best_val_wer = val_wer
-            self.best_epoch = epoch
-            self.counter = 0
-            return False
-        else:
-            self.counter += 1
-            if self.counter >= self.patience:
-                print(f"Early stopping at epoch {epoch}")
-                print(f"Best WER was {self.best_val_wer:.4f} at epoch {self.best_epoch}")
-                return True
-        return False
 
 # ==================== MAIN ====================
 
@@ -575,16 +594,21 @@ def main():
     LANDMARKS_DEV = "./landmarks_dev"
     VOCAB_FILE = "vocab.json"
     BATCH_SIZE = 16
-    NUM_EPOCHS = 100
-    INPUT_DIM = 1659  # 126 (hands) + 1434 (face) + 99 (pose)
-    D_MODEL = 512      # Reduced from 768
-    NHEAD = 8          # Reduced from 12
-    NUM_LAYERS = 8     # Reduced from 12
-    DROPOUT = 0.35     # But keep dropout high
+    NUM_EPOCHS = 150
+    INPUT_DIM = 1659
+    
+    # Smaller model with aggressive regularization
+    D_MODEL = 384
+    NHEAD = 8
+    NUM_LAYERS = 6
+    DROPOUT = 0.5
+    
+    LEARNING_RATE = 2e-4
+    WEIGHT_DECAY = 2e-4
     
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"
-    RUN_NAME = "transformer_ctc_baseline_increased_model_size"
+    RUN_NAME = "transformer_ctc_fixed_scheduler_aggressive_regularization"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -593,11 +617,8 @@ def main():
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
-    # Set MLflow experiment
     mlflow.set_experiment(EXPERIMENT_NAME)
     
-    
-    # Start MLflow run
     with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME):
         # System information
         mlflow.log_param("python_version", platform.python_version())
@@ -613,8 +634,7 @@ def main():
             mlflow.log_param("cuda_version", torch.version.cuda)
             mlflow.log_param("cudnn_version", torch.backends.cudnn.version())
             mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2))
-            
-            
+
         # Log hyperparameters
         mlflow.log_params({
             "batch_size": BATCH_SIZE,
@@ -624,10 +644,11 @@ def main():
             "nhead": NHEAD,
             "num_layers": NUM_LAYERS,
             "dropout": DROPOUT,
-            "optimizer": "Adam",
-            "learning_rate": 1e-4,
-            "scheduler": "ReduceLROnPlateau",
-            "augmentation": "temporal+spatial",
+            "learning_rate": LEARNING_RATE,
+            "weight_decay": WEIGHT_DECAY,
+            "optimizer": "AdamW",
+            "scheduler": "LambdaLR_with_warmup",
+            "augmentation": "advanced_temporal",
             "loss_function": "CTC"
         })
         
@@ -642,35 +663,29 @@ def main():
         print("Loading Datasets")
         print("="*50)
 
-        # Create datasets with augmentation
         train_dataset = LandmarkDataset(
             LANDMARKS_TRAIN,
             vocab_file=VOCAB_FILE,
             build_vocab=True,
-            augment=True,  # Enable augmentation for training
-            # max_samples=500,
-            # random_subset=False
+            augment=False
         )
 
         val_dataset = LandmarkDataset(
             LANDMARKS_DEV,
             vocab_file=VOCAB_FILE,
             build_vocab=False,
-            augment=False  # No augmentation for validation
+            augment=False
         )
         
-        # Log dataset info
         mlflow.log_params({
             "train_samples": len(train_dataset),
             "val_samples": len(val_dataset),
             "vocab_size": len(train_dataset.gloss_vocab)
         })
         
-        # Log vocabulary file as artifact
         mlflow.log_artifact(VOCAB_FILE)
 
         use_pin_memory = torch.cuda.is_available()
-        # Create data loaders
         train_loader = DataLoader(
             train_dataset,
             batch_size=BATCH_SIZE,
@@ -704,7 +719,6 @@ def main():
             dropout=DROPOUT
         ).to(device)
 
-        # Generate and log model summary
         summary_str, summary_dict = generate_model_summary(
             model, 
             INPUT_DIM, 
@@ -713,10 +727,8 @@ def main():
             seq_length=100
         )
         
-        # Log model statistics to MLflow
         mlflow.log_params(summary_dict)
         
-        # Save model summary to file and log as artifact
         model_summary_path = "model_summary.txt"
         with open(model_summary_path, 'w', encoding='utf-8') as f:
             f.write(summary_str)
@@ -746,13 +758,9 @@ def main():
         print(f"Training Complete! Best WER: {best_wer:.4f}")
         print(f"{'='*50}")
         
-        # Log final best WER
         mlflow.log_metric("final_best_wer", best_wer)
-        
-        # Log the final model
         mlflow.pytorch.log_model(model, "model")
         
-        # Set tags for easy filtering
         mlflow.set_tags({
             "model_type": "transformer",
             "task": "sign_language_translation",

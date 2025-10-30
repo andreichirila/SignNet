@@ -486,7 +486,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_
             gloss_lengths = gloss_lengths.to(device)
 
             # Forward pass
-            ctc_logits = model(landmarks, landmark_length)
+            ctc_logits = model(landmarks, landmark_lengths)  # FIXED: was landmark_length
 
             # Calculate loss
             ctc_logits_t = ctc_logits.transpose(0, 1)
@@ -520,6 +520,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_
     wer = compute_wer(all_predictions, all_targets)
 
     return avg_loss, wer
+
 
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):

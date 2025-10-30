@@ -627,7 +627,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
             }
             torch.save(checkpoint, os.path.join(save_dir, 'best_model.pt'))
             print(f"✓ Saved best model with WER: {best_wer:.4f}")
-            mlflow.log_metric("best_wer_greedy", best_wer)
+            mlflow.log_metric("best_wer", best_wer)
 
         # Early stopping
         if early_stopping(val_wer, epoch):

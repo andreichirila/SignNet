@@ -319,7 +319,7 @@ class LandmarkDataset(Dataset):
         
         # Handle unknown glosses safely
         glosses = []
-        for g in glosses:
+        for g in clean_glosses:
             g_str = str(g)
             glosses.append(self.gloss_vocab.get(g_str, self.gloss_vocab['<unk>']))
         

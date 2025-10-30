@@ -286,30 +286,87 @@ class AdvancedTemporalAugmentation:
         return landmarks
 
 
-# ==================== TRAINING ====================
+# ==================== DECODING ====================
 
-def decode_predictions(ctc_output, lengths, vocab, blank_id=1):
-    """Decode CTC output using greedy decoding"""
+def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1, 
+                             beam_width=30, confidence_threshold=0.4, use_length_penalty=True):
+    """
+    Hybrid decoding: Beam search + confidence filtering + length penalty.
+    Best balance between accuracy and efficiency.
+    
+    Args:
+        ctc_output: [B, T, C] tensor of CTC logits
+        lengths: [B] tensor of sequence lengths
+        idx_to_gloss: dict mapping index to gloss string
+        blank_id: ID of blank token (default 1)
+        beam_width: number of beams to keep (default 30)
+        confidence_threshold: minimum confidence to keep prediction (default 0.4)
+        use_length_penalty: whether to penalize very short sequences (default True)
+    """
     batch_size = ctc_output.size(0)
-    predictions = torch.argmax(ctc_output, dim=-1)
-
+    log_probs = F.log_softmax(ctc_output, dim=-1)
+    max_probs = torch.max(F.softmax(ctc_output, dim=-1), dim=-1)[0]
+    
     decoded = []
-    for i in range(batch_size):
-        pred = predictions[i, :lengths[i]]
-
-        # Remove blanks and repeated tokens
-        pred_seq = []
-        prev = None
-        for p in pred:
-            p = p.item()
-            if p != blank_id and p != prev:
-                pred_seq.append(p)
-            prev = p
-
-        # Convert to glosses
-        glosses = [vocab.get(p, '<unk>') for p in pred_seq]
-        decoded.append(glosses)
-
+    
+    for batch_idx in range(batch_size):
+        seq_len = lengths[batch_idx]
+        probs = log_probs[batch_idx, :seq_len, :]
+        conf = max_probs[batch_idx, :seq_len]
+        
+        # Beam: (prefix_tuple, score, length)
+        beam = [("", 0.0, 0)]
+        
+        for t in range(len(probs)):
+            new_beam = {}
+            
+            # Skip low-confidence frames
+            if conf[t].item() < confidence_threshold:
+                # Keep the prefix with small penalty
+                for prefix, score, length in beam:
+                    key = (prefix, length)
+                    if key not in new_beam:
+                        new_beam[key] = score - 0.1
+                beam = [(p, s, l) for (p, l), s in sorted(new_beam.items(), key=lambda x: x[1], reverse=True)[:beam_width]]
+                continue
+            
+            for c_idx in range(ctc_output.size(2)):
+                for prefix, score, length in beam:
+                    if c_idx == blank_id:
+                        new_prefix = prefix
+                        new_length = length
+                    else:
+                        gloss = idx_to_gloss.get(c_idx, '<unk>')
+                        
+                        # Don't add consecutive duplicates
+                        if prefix and prefix[-1] == gloss:
+                            new_prefix = prefix
+                            new_length = length
+                        else:
+                            new_prefix = prefix + (gloss,)
+                            new_length = length + 1
+                    
+                    # Score components
+                    ctc_score = probs[t, c_idx].item()
+                    length_penalty = 0.0
+                    
+                    if use_length_penalty:
+                        # Penalize very short sequences
+                        if new_length == 0:
+                            length_penalty = -0.1
+                    
+                    new_score = score + ctc_score + length_penalty
+                    
+                    key = (new_prefix, new_length)
+                    if key not in new_beam or new_beam[key] < new_score:
+                        new_beam[key] = new_score
+            
+            # Keep top beams
+            beam = [(p, s, l) for (p, l), s in sorted(new_beam.items(), key=lambda x: x[1], reverse=True)[:beam_width]]
+        
+        best_seq = beam[0][0] if beam else ""
+        decoded.append(list(best_seq))
+    
     return decoded
 
 
@@ -366,6 +423,8 @@ class EarlyStopping:
         return False
 
 
+# ==================== TRAINING ====================
+
 def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler):
     """Train for one epoch"""
     model.train()
@@ -410,8 +469,8 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     return total_loss / num_batches
 
 
-def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
-    """Validate the model"""
+def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_type='hybrid'):
+    """Validate the model with specified decoder"""
     model.eval()
     total_loss = 0
     num_batches = 0
@@ -427,7 +486,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
             gloss_lengths = gloss_lengths.to(device)
 
             # Forward pass
-            ctc_logits = model(landmarks, landmark_lengths)
+            ctc_logits = model(landmarks, landmark_length)
 
             # Calculate loss
             ctc_logits_t = ctc_logits.transpose(0, 1)
@@ -437,8 +496,16 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
             total_loss += loss.item()
             num_batches += 1
 
-            # Decode predictions
-            predictions = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
+            # Decode predictions with hybrid decoder
+            predictions = decode_predictions_hybrid(
+                ctc_logits, 
+                landmark_lengths, 
+                idx_to_gloss, 
+                blank_id=1,
+                beam_width=30,
+                confidence_threshold=0.4,
+                use_length_penalty=True
+            )
 
             # Convert targets to glosses
             for i in range(glosses.size(0)):
@@ -456,7 +523,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
 
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
-    """Full training loop with fixed scheduler"""
+    """Full training loop with fixed scheduler and hybrid decoder"""
     os.makedirs(save_dir, exist_ok=True)
 
     criterion = CTCLoss(blank=1, zero_infinity=True)
@@ -495,9 +562,9 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler)
         print(f"Train Loss: {train_loss:.4f}")
 
-        # Validate
-        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss)
-        print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
+        # Validate with hybrid decoder
+        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_type='hybrid')
+        print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f} (hybrid decoder)")
         print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
 
         # Log metrics
@@ -608,7 +675,7 @@ def main():
     
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"
-    RUN_NAME = "transformer_ctc_fixed_scheduler_aggressive_regularization"
+    RUN_NAME = "transformer_ctc_hybrid_decoder"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -648,15 +715,13 @@ def main():
             "weight_decay": WEIGHT_DECAY,
             "optimizer": "AdamW",
             "scheduler": "LambdaLR_with_warmup",
+            "decoder": "hybrid_beam_search",
             "augmentation": "advanced_temporal",
             "loss_function": "CTC"
         })
         
-        # Log device info
         mlflow.log_param("device", str(device))
         mlflow.log_param("cuda_available", torch.cuda.is_available())
-        if torch.cuda.is_available():
-            mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
 
         # Create datasets
         print("\n" + "="*50)
@@ -667,7 +732,7 @@ def main():
             LANDMARKS_TRAIN,
             vocab_file=VOCAB_FILE,
             build_vocab=True,
-            augment=False
+            augment=True
         )
 
         val_dataset = LandmarkDataset(
@@ -765,6 +830,7 @@ def main():
             "model_type": "transformer",
             "task": "sign_language_translation",
             "dataset": "phoenix-2014",
+            "decoder": "hybrid_beam_search",
             "status": "completed"
         })
 

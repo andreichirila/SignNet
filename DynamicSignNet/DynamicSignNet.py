@@ -501,7 +501,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
             }
             checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pt')
             torch.save(checkpoint, checkpoint_path)
-            mlflow.log_artifact(checkpoint_path)
+            # mlflow.log_artifact(checkpoint_path)
 
     return best_wer
 

@@ -611,7 +611,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         mlflow.log_metrics({
             "train_loss": train_loss,
             "val_loss": val_loss,
-            "val_wer_greedy": val_wer,
+            "val_wer": val_wer,
             "learning_rate": optimizer.param_groups[0]['lr']
         }, step=epoch)
 

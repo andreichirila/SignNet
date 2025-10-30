@@ -971,95 +971,261 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
 
     return total_loss / num_batches
 
-def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, 
-             use_beam_search=False, beam_width=10, joint_eval=True):
-    """Validate the model with mixed precision and joint evaluation"""
+
+
+def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
+             use_beam_search=False, beam_width=10, joint_eval=True, 
+             debug=True, debug_samples=5):
+    """
+    Validate the model with detailed debugging output
+
+    Args:
+        debug: Enable detailed per-sample output
+        debug_samples: Number of samples to show detailed output for
+    """
     model.eval()
     total_loss = 0
     num_batches = 0
+
     all_ctc_predictions = []
     all_att_predictions = []
     all_targets = []
 
+    # Track prediction statistics
+    debug_info = {
+        'correct_ctc': 0,
+        'correct_att': 0,
+        'partially_correct_ctc': 0,
+        'partially_correct_att': 0,
+        'total_samples': 0,
+        'examples': []
+    }
+
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
-        for landmarks, landmark_lengths, glosses, gloss_lengths in pbar:
+
+        for batch_idx, (landmarks, landmark_lengths, glosses, gloss_lengths) in enumerate(pbar):
             landmarks = landmarks.to(device)
             glosses = glosses.to(device)
             landmark_lengths = landmark_lengths.to(device)
             gloss_lengths = gloss_lengths.to(device)
 
-            # Forward pass with mixed precision
+            batch_size = landmarks.size(0)
+
             with autocast(device.type):
+                # Prepare decoder inputs
                 decoder_input = glosses[:, :-1]
                 decoder_target = glosses[:, 1:]
                 adjusted_tgt_lengths = gloss_lengths - 1
-                
-                ctc_logits, attention_logits = model(landmarks, landmark_lengths, 
-                                                   decoder_input, 
-                                                   adjusted_tgt_lengths, 
-                                                   training=True)
-                
-                # CTC targets for loss computation
-                ctc_targets = glosses
-                
-                # Compute joint loss
-                loss = criterion(ctc_logits, attention_logits, 
-                               ctc_targets, decoder_target,
-                               landmark_lengths, gloss_lengths)
+
+                # Forward pass
+                ctc_logits, attention_logits = model(
+                    landmarks, landmark_lengths, 
+                    decoder_input, adjusted_tgt_lengths,
+                    training=True
+                )
+
+                # Compute loss
+                ctc_targets = glosses  # CTC uses full glosses
+                loss = criterion(ctc_logits, attention_logits, ctc_targets, 
+                               decoder_target, landmark_lengths, gloss_lengths)
 
             total_loss += loss.item()
             num_batches += 1
 
-            # Decode predictions
-            # CTC predictions
+            # Get predictions
             if use_beam_search:
-                ctc_preds = decode_predictions_beam(ctc_logits, landmark_lengths, 
-                                                  idx_to_gloss, blank_id=1, 
-                                                  beam_width=beam_width)
+                ctc_preds = decode_predictions_beam(
+                    ctc_logits, landmark_lengths, idx_to_gloss,
+                    blank_id=1, beam_width=beam_width
+                )
             else:
                 ctc_preds = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
-            
+
             all_ctc_predictions.extend(ctc_preds)
 
             # Attention predictions (greedy decode)
             if joint_eval and attention_logits is not None:
-                # For validation, we can also run greedy decoding on the decoder
                 memory = model.encode(landmarks, landmark_lengths)
-                att_decoded = greedy_decode_attention(model, memory, landmark_lengths,
-                                                    max_len=max(gloss_lengths)+10,
-                                                    device=device)
-                
-                # Convert attention predictions to glosses
+                att_decoded = greedy_decode_attention(
+                    model, memory, landmark_lengths,
+                    max_len=max(gloss_lengths) + 10,
+                    device=device
+                )
+
                 att_preds = []
                 for i in range(att_decoded.size(0)):
                     seq = att_decoded[i, :gloss_lengths[i]].cpu().numpy()
                     gloss_seq = [idx_to_gloss.get(int(t), '<unk>') for t in seq if t != 0]
                     att_preds.append(gloss_seq)
+
                 all_att_predictions.extend(att_preds)
             else:
-                all_att_predictions.extend(ctc_preds)  # Fallback to CTC
+                all_att_predictions.extend(ctc_preds)  # Fallback
 
-            # Convert targets to glosses
+            # Convert targets
             for i in range(glosses.size(0)):
                 target = glosses[i, :gloss_lengths[i]].cpu().numpy()
                 target_glosses = [idx_to_gloss.get(int(t), '<unk>') for t in target]
                 all_targets.append(target_glosses)
 
-            pbar.set_postfix({'loss': f'{loss.item():.4f}'})
+            # ============================================================
+            # DEBUGGING OUTPUT - Detailed per-sample analysis
+            # ============================================================
+            if debug and len(debug_info['examples']) < debug_samples:
+                for i in range(min(batch_size, debug_samples - len(debug_info['examples']))):
+                    sample_idx = batch_idx * val_loader.batch_size + i
+
+                    target = all_targets[-(batch_size - i)]
+                    ctc_pred = ctc_preds[i]
+                    att_pred = att_preds[i] if joint_eval else ctc_pred
+
+                    # Check correctness
+                    ctc_correct = (ctc_pred == target)
+                    att_correct = (att_pred == target)
+
+                    # Check partial correctness (at least 50% matching)
+                    ctc_matches = sum(1 for a, b in zip(ctc_pred, target) if a == b)
+                    att_matches = sum(1 for a, b in zip(att_pred, target) if a == b)
+
+                    ctc_partial = (ctc_matches / max(len(target), 1)) >= 0.5
+                    att_partial = (att_matches / max(len(target), 1)) >= 0.5
+
+                    debug_info['examples'].append({
+                        'sample_idx': sample_idx,
+                        'target': target,
+                        'ctc_pred': ctc_pred,
+                        'att_pred': att_pred,
+                        'ctc_correct': ctc_correct,
+                        'att_correct': att_correct,
+                        'ctc_match_rate': ctc_matches / max(len(target), 1),
+                        'att_match_rate': att_matches / max(len(target), 1),
+                        'frames': landmark_lengths[i].item(),
+                        'target_len': gloss_lengths[i].item()
+                    })
+
+                    if ctc_correct:
+                        debug_info['correct_ctc'] += 1
+                    elif ctc_partial:
+                        debug_info['partially_correct_ctc'] += 1
+
+                    if att_correct:
+                        debug_info['correct_att'] += 1
+                    elif att_partial:
+                        debug_info['partially_correct_att'] += 1
+
+            debug_info['total_samples'] = len(all_targets)
+
+            pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     avg_loss = total_loss / num_batches
-    
+
     # Compute metrics
     ctc_wer = compute_wer(all_ctc_predictions, all_targets)
     att_wer = compute_wer(all_att_predictions, all_targets) if joint_eval else ctc_wer
-    bleu_score = compute_bleu(all_att_predictions if joint_eval else all_ctc_predictions, all_targets)
+    bleu_score = compute_bleu(all_att_predictions if joint_eval else all_ctc_predictions, 
+                              all_targets)
 
-    # Log detailed metrics
+    # ============================================================
+    # PRINT DETAILED DEBUG INFORMATION
+    # ============================================================
+    if debug:
+        print("\n" + "="*80)
+        print("VALIDATION DEBUGGING OUTPUT")
+        print("="*80)
+
+        print(f"\n📊 Overall Metrics:")
+        print(f"   Validation Loss: {avg_loss:.4f}")
+        print(f"   CTC WER: {ctc_wer:.4f} ({100*(1-ctc_wer):.2f}% accuracy)")
+        print(f"   Attention WER: {att_wer:.4f} ({100*(1-att_wer):.2f}% accuracy)")
+        print(f"   BLEU Score: {bleu_score:.4f}")
+
+        print(f"\n✅ Correct Predictions (from {debug_samples} samples):")
+        print(f"   CTC: {debug_info['correct_ctc']}/{debug_samples} " +
+              f"({100*debug_info['correct_ctc']/debug_samples:.1f}%)")
+        print(f"   Attention: {debug_info['correct_att']}/{debug_samples} " +
+              f"({100*debug_info['correct_att']/debug_samples:.1f}%)")
+
+        print(f"\n⚠️  Partially Correct (≥50% match):")
+        print(f"   CTC: {debug_info['partially_correct_ctc']}/{debug_samples}")
+        print(f"   Attention: {debug_info['partially_correct_att']}/{debug_samples}")
+
+        print(f"\n" + "-"*80)
+        print("DETAILED SAMPLE ANALYSIS")
+        print("-"*80)
+
+        for idx, example in enumerate(debug_info['examples'], 1):
+            status_ctc = "✅" if example['ctc_correct'] else ("⚠️" if example['ctc_match_rate'] >= 0.5 else "❌")
+            status_att = "✅" if example['att_correct'] else ("⚠️" if example['att_match_rate'] >= 0.5 else "❌")
+
+            print(f"\nSample {idx} (Index: {example['sample_idx']}):")
+            print(f"  Frames: {example['frames']}, Target Length: {example['target_len']}")
+            print(f"  Frames/Gloss Ratio: {example['frames']/example['target_len']:.2f}")
+
+            print(f"\n  Target:     {' '.join(example['target'])}")
+            print(f"  CTC Pred:   {' '.join(example['ctc_pred'])} {status_ctc}")
+            print(f"  Att Pred:   {' '.join(example['att_pred'])} {status_att}")
+
+            print(f"\n  CTC Match: {example['ctc_match_rate']*100:.1f}%")
+            print(f"  Att Match: {example['att_match_rate']*100:.1f}%")
+
+            # Highlight differences
+            if not example['ctc_correct']:
+                print("\n  CTC Differences:")
+                for i, (pred, tgt) in enumerate(zip(example['ctc_pred'], example['target'])):
+                    if pred != tgt:
+                        print(f"    Position {i}: predicted '{pred}' but expected '{tgt}'")
+
+            if not example['att_correct'] and joint_eval:
+                print("\n  Attention Differences:")
+                for i, (pred, tgt) in enumerate(zip(example['att_pred'], example['target'])):
+                    if pred != tgt:
+                        print(f"    Position {i}: predicted '{pred}' but expected '{tgt}'")
+
+        print("\n" + "="*80)
+
+        # Common error analysis
+        print("\n🔍 COMMON ERROR PATTERNS:")
+
+        # Find most common mispredictions
+        ctc_errors = {}
+        att_errors = {}
+
+        for example in debug_info['examples']:
+            # CTC errors
+            for pred, tgt in zip(example['ctc_pred'], example['target']):
+                if pred != tgt:
+                    key = f"{tgt} → {pred}"
+                    ctc_errors[key] = ctc_errors.get(key, 0) + 1
+
+            # Attention errors
+            if joint_eval:
+                for pred, tgt in zip(example['att_pred'], example['target']):
+                    if pred != tgt:
+                        key = f"{tgt} → {pred}"
+                        att_errors[key] = att_errors.get(key, 0) + 1
+
+        if ctc_errors:
+            print("\n  Top CTC Mispredictions:")
+            for error, count in sorted(ctc_errors.items(), key=lambda x: x[1], reverse=True)[:5]:
+                print(f"    {error}: {count} times")
+
+        if att_errors and joint_eval:
+            print("\n  Top Attention Mispredictions:")
+            for error, count in sorted(att_errors.items(), key=lambda x: x[1], reverse=True)[:5]:
+                print(f"    {error}: {count} times")
+
+        print("\n" + "="*80)
+
+    # Log to MLflow
     mlflow.log_metric("val_ctc_wer", ctc_wer)
     mlflow.log_metric("val_att_wer", att_wer)
     mlflow.log_metric("val_bleu", bleu_score)
-    
+
+    if debug:
+        mlflow.log_metric("val_ctc_exact_match", debug_info['correct_ctc'] / debug_samples)
+        mlflow.log_metric("val_att_exact_match", debug_info['correct_att'] / debug_samples)
+
     return avg_loss, ctc_wer, att_wer, bleu_score
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, 
@@ -1327,7 +1493,7 @@ def main():
     VOCAB_FILE = "vocab.json"
     STATS_FILE = "normalization_stats.npz"
     BATCH_SIZE = 16  # Reduced batch size for joint model
-    NUM_EPOCHS = 30
+    NUM_EPOCHS = 100
     INPUT_DIM = 1659
     D_MODEL = 512
     NHEAD = 8
@@ -1426,7 +1592,7 @@ def main():
             LANDMARKS_TRAIN,
             vocab_file=VOCAB_FILE,
             build_vocab=True,
-            augment=True,
+            augment=False,
             compute_stats=compute_stats,
             stats_file=STATS_FILE,
             seed=SEED

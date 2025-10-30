@@ -7,6 +7,9 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from torch.nn import CTCLoss
 import glob
 import json
+import csv
+from datetime import datetime
+from pathlib import Path
 import math
 from tqdm import tqdm
 import mlflow
@@ -961,7 +964,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
             'lr': f'{current_lr:.2e}'
         })
         
-        if batch_idx % 20 == 0:
+        if batch_idx % 100 == 0:
             step = epoch * len(train_loader) + batch_idx
             mlflow.log_metric("batch_loss", loss.item(), step=step)
             mlflow.log_metric("batch_ctc_loss", ctc_loss_only.item(), step=step)
@@ -975,13 +978,17 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
 
 def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
              use_beam_search=False, beam_width=10, joint_eval=True, 
-             debug=True, debug_samples=5):
+             debug=True, debug_samples=5, save_predictions=True, 
+             output_dir="validation_outputs", epoch=None):
     """
-    Validate the model with detailed debugging output
+    Validate the model with detailed debugging output and save predictions
 
     Args:
         debug: Enable detailed per-sample output
         debug_samples: Number of samples to show detailed output for
+        save_predictions: Save all predictions to files for analysis
+        output_dir: Directory to save prediction files
+        epoch: Current epoch number (for filename)
     """
     model.eval()
     total_loss = 0
@@ -990,6 +997,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
     all_ctc_predictions = []
     all_att_predictions = []
     all_targets = []
+    all_sample_info = []  # Store metadata for each sample
 
     # Track prediction statistics
     debug_info = {
@@ -1063,15 +1071,24 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
             else:
                 all_att_predictions.extend(ctc_preds)  # Fallback
 
-            # Convert targets
+            # Convert targets and store sample info
             for i in range(glosses.size(0)):
                 target = glosses[i, :gloss_lengths[i]].cpu().numpy()
                 target_glosses = [idx_to_gloss.get(int(t), '<unk>') for t in target]
                 all_targets.append(target_glosses)
 
-            # ============================================================
-            # DEBUGGING OUTPUT - Detailed per-sample analysis
-            # ============================================================
+                # Store metadata for this sample
+                sample_info = {
+                    'batch_idx': batch_idx,
+                    'sample_in_batch': i,
+                    'global_idx': batch_idx * val_loader.batch_size + i,
+                    'num_frames': landmark_lengths[i].item(),
+                    'target_length': gloss_lengths[i].item(),
+                    'frames_per_gloss': landmark_lengths[i].item() / max(gloss_lengths[i].item(), 1),
+                }
+                all_sample_info.append(sample_info)
+
+            # Debugging output for first few samples
             if debug and len(debug_info['examples']) < debug_samples:
                 for i in range(min(batch_size, debug_samples - len(debug_info['examples']))):
                     sample_idx = batch_idx * val_loader.batch_size + i
@@ -1084,7 +1101,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
                     ctc_correct = (ctc_pred == target)
                     att_correct = (att_pred == target)
 
-                    # Check partial correctness (at least 50% matching)
+                    # Check partial correctness
                     ctc_matches = sum(1 for a, b in zip(ctc_pred, target) if a == b)
                     att_matches = sum(1 for a, b in zip(att_pred, target) if a == b)
 
@@ -1115,7 +1132,6 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
                         debug_info['partially_correct_att'] += 1
 
             debug_info['total_samples'] = len(all_targets)
-
             pbar.set_postfix(loss=f"{loss.item():.4f}")
 
     avg_loss = total_loss / num_batches
@@ -1127,7 +1143,220 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
                               all_targets)
 
     # ============================================================
-    # PRINT DETAILED DEBUG INFORMATION
+    # SAVE PREDICTIONS TO FILE
+    # ============================================================
+    if save_predictions:
+        # Create output directory
+        output_path = Path(output_dir)
+        output_path.mkdir(exist_ok=True)
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        epoch_str = f"_epoch{epoch:03d}" if epoch is not None else ""
+
+        # 1. Save all predictions to JSON
+        json_file = output_path / f"predictions{epoch_str}_{timestamp}.json"
+        predictions_data = {
+            'epoch': epoch,
+            'timestamp': timestamp,
+            'metrics': {
+                'val_loss': avg_loss,
+                'ctc_wer': ctc_wer,
+                'att_wer': att_wer,
+                'bleu_score': bleu_score
+            },
+            'predictions': []
+        }
+
+        for i, (target, ctc_pred, att_pred, info) in enumerate(
+            zip(all_targets, all_ctc_predictions, all_att_predictions, all_sample_info)):
+
+            ctc_correct = (ctc_pred == target)
+            att_correct = (att_pred == target)
+
+            ctc_matches = sum(1 for a, b in zip(ctc_pred, target) if a == b)
+            att_matches = sum(1 for a, b in zip(att_pred, target) if a == b)
+
+            predictions_data['predictions'].append({
+                'sample_id': i,
+                'global_idx': info['global_idx'],
+                'num_frames': info['num_frames'],
+                'target_length': info['target_length'],
+                'frames_per_gloss': info['frames_per_gloss'],
+                'target': target,
+                'ctc_prediction': ctc_pred,
+                'att_prediction': att_pred,
+                'ctc_correct': ctc_correct,
+                'att_correct': att_correct,
+                'ctc_match_rate': ctc_matches / max(len(target), 1),
+                'att_match_rate': att_matches / max(len(target), 1),
+                'ctc_matches': ctc_matches,
+                'att_matches': att_matches
+            })
+
+        with open(json_file, 'w', encoding='utf-8') as f:
+            json.dump(predictions_data, f, indent=2, ensure_ascii=False)
+
+        print(f"\n💾 Saved all predictions to: {json_file}")
+
+        # 2. Save CSV for easy analysis
+        csv_file = output_path / f"predictions{epoch_str}_{timestamp}.csv"
+        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+            writer.writerow([
+                'Sample_ID', 'Frames', 'Target_Length', 'Frames_Per_Gloss',
+                'Target', 'CTC_Prediction', 'Att_Prediction',
+                'CTC_Correct', 'Att_Correct', 
+                'CTC_Match_Rate', 'Att_Match_Rate'
+            ])
+
+            for pred in predictions_data['predictions']:
+                writer.writerow([
+                    pred['sample_id'],
+                    pred['num_frames'],
+                    pred['target_length'],
+                    f"{pred['frames_per_gloss']:.2f}",
+                    ' '.join(pred['target']),
+                    ' '.join(pred['ctc_prediction']),
+                    ' '.join(pred['att_prediction']),
+                    'YES' if pred['ctc_correct'] else 'NO',
+                    'YES' if pred['att_correct'] else 'NO',
+                    f"{pred['ctc_match_rate']:.2%}",
+                    f"{pred['att_match_rate']:.2%}"
+                ])
+
+        print(f"💾 Saved predictions CSV to: {csv_file}")
+
+        # 3. Save separate files for correct and failed predictions
+        correct_file = output_path / f"correct{epoch_str}_{timestamp}.txt"
+        failed_file = output_path / f"failed{epoch_str}_{timestamp}.txt"
+
+        with open(correct_file, 'w', encoding='utf-8') as f_correct, \
+             open(failed_file, 'w', encoding='utf-8') as f_failed:
+
+            f_correct.write(f"CORRECT PREDICTIONS - Epoch {epoch}\n")
+            f_correct.write(f"Timestamp: {timestamp}\n")
+            f_correct.write(f"CTC WER: {ctc_wer:.4f}, Att WER: {att_wer:.4f}, BLEU: {bleu_score:.4f}\n")
+            f_correct.write("="*80 + "\n\n")
+
+            f_failed.write(f"FAILED PREDICTIONS - Epoch {epoch}\n")
+            f_failed.write(f"Timestamp: {timestamp}\n")
+            f_failed.write(f"CTC WER: {ctc_wer:.4f}, Att WER: {att_wer:.4f}, BLEU: {bleu_score:.4f}\n")
+            f_failed.write("="*80 + "\n\n")
+
+            correct_count = 0
+            failed_count = 0
+
+            for pred in predictions_data['predictions']:
+                # Consider a prediction successful if either CTC or Attention is correct
+                is_correct = pred['ctc_correct'] or pred['att_correct']
+
+                sample_text = f"Sample {pred['sample_id']} (Frames: {pred['num_frames']}, " \
+                             f"Length: {pred['target_length']}, Ratio: {pred['frames_per_gloss']:.2f})\n"
+                sample_text += f"Target:     {' '.join(pred['target'])}\n"
+                sample_text += f"CTC Pred:   {' '.join(pred['ctc_prediction'])} "
+                sample_text += f"({'✓' if pred['ctc_correct'] else '✗'} {pred['ctc_match_rate']:.1%})\n"
+                sample_text += f"Att Pred:   {' '.join(pred['att_prediction'])} "
+                sample_text += f"({'✓' if pred['att_correct'] else '✗'} {pred['att_match_rate']:.1%})\n"
+
+                if not pred['ctc_correct'] or not pred['att_correct']:
+                    # Add error analysis
+                    sample_text += "\nDifferences:\n"
+                    if not pred['ctc_correct']:
+                        sample_text += "  CTC: "
+                        for i, (p, t) in enumerate(zip(pred['ctc_prediction'], pred['target'])):
+                            if p != t:
+                                sample_text += f"[{i}:{t}→{p}] "
+                        sample_text += "\n"
+                    if not pred['att_correct']:
+                        sample_text += "  Att: "
+                        for i, (p, t) in enumerate(zip(pred['att_prediction'], pred['target'])):
+                            if p != t:
+                                sample_text += f"[{i}:{t}→{p}] "
+                        sample_text += "\n"
+
+                sample_text += "\n" + "-"*80 + "\n\n"
+
+                if is_correct:
+                    f_correct.write(sample_text)
+                    correct_count += 1
+                else:
+                    f_failed.write(sample_text)
+                    failed_count += 1
+
+            f_correct.write(f"\nTotal Correct: {correct_count}/{len(predictions_data['predictions'])} "
+                           f"({100*correct_count/len(predictions_data['predictions']):.2f}%)\n")
+            f_failed.write(f"\nTotal Failed: {failed_count}/{len(predictions_data['predictions'])} "
+                          f"({100*failed_count/len(predictions_data['predictions']):.2f}%)\n")
+
+        print(f"💾 Saved correct predictions to: {correct_file}")
+        print(f"💾 Saved failed predictions to: {failed_file}")
+
+        # 4. Save error analysis summary
+        error_summary_file = output_path / f"error_analysis{epoch_str}_{timestamp}.txt"
+        with open(error_summary_file, 'w', encoding='utf-8') as f:
+            f.write(f"ERROR ANALYSIS SUMMARY - Epoch {epoch}\n")
+            f.write(f"Timestamp: {timestamp}\n")
+            f.write("="*80 + "\n\n")
+
+            f.write(f"Overall Metrics:\n")
+            f.write(f"  Validation Loss: {avg_loss:.4f}\n")
+            f.write(f"  CTC WER: {ctc_wer:.4f} ({100*(1-ctc_wer):.2f}% accuracy)\n")
+            f.write(f"  Attention WER: {att_wer:.4f} ({100*(1-att_wer):.2f}% accuracy)\n")
+            f.write(f"  BLEU Score: {bleu_score:.4f}\n\n")
+
+            # Common errors
+            ctc_errors = {}
+            att_errors = {}
+
+            for pred in predictions_data['predictions']:
+                # CTC errors
+                for p, t in zip(pred['ctc_prediction'], pred['target']):
+                    if p != t:
+                        key = f"{t} → {p}"
+                        ctc_errors[key] = ctc_errors.get(key, 0) + 1
+
+                # Attention errors
+                for p, t in zip(pred['att_prediction'], pred['target']):
+                    if p != t:
+                        key = f"{t} → {p}"
+                        att_errors[key] = att_errors.get(key, 0) + 1
+
+            f.write("Top 20 CTC Mispredictions:\n")
+            for i, (error, count) in enumerate(sorted(ctc_errors.items(), 
+                                                      key=lambda x: x[1], reverse=True)[:20], 1):
+                f.write(f"  {i:2d}. {error:<40} {count:>4} times\n")
+
+            f.write("\nTop 20 Attention Mispredictions:\n")
+            for i, (error, count) in enumerate(sorted(att_errors.items(), 
+                                                      key=lambda x: x[1], reverse=True)[:20], 1):
+                f.write(f"  {i:2d}. {error:<40} {count:>4} times\n")
+
+            # Frame ratio analysis for errors
+            f.write("\n" + "="*80 + "\n")
+            f.write("Error Distribution by Frame/Gloss Ratio:\n\n")
+
+            ratio_bins = [0, 5, 10, 15, 20, 50, 1000]
+            ratio_labels = ['0-5', '5-10', '10-15', '15-20', '20-50', '50+']
+
+            for i in range(len(ratio_bins)-1):
+                bin_samples = [p for p in predictions_data['predictions']
+                              if ratio_bins[i] <= p['frames_per_gloss'] < ratio_bins[i+1]]
+                if bin_samples:
+                    bin_errors = sum(1 for p in bin_samples if not (p['ctc_correct'] or p['att_correct']))
+                    f.write(f"  {ratio_labels[i]:>6} frames/gloss: {bin_errors}/{len(bin_samples)} errors "
+                           f"({100*bin_errors/len(bin_samples):.1f}%)\n")
+
+        print(f"💾 Saved error analysis to: {error_summary_file}")
+
+        # Log file paths to MLflow
+        mlflow.log_artifact(str(json_file))
+        mlflow.log_artifact(str(csv_file))
+        mlflow.log_artifact(str(correct_file))
+        mlflow.log_artifact(str(failed_file))
+        mlflow.log_artifact(str(error_summary_file))
+
+    # ============================================================
+    # PRINT DETAILED DEBUG INFORMATION (as before)
     # ============================================================
     if debug:
         print("\n" + "="*80)
@@ -1151,7 +1380,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
         print(f"   Attention: {debug_info['partially_correct_att']}/{debug_samples}")
 
         print(f"\n" + "-"*80)
-        print("DETAILED SAMPLE ANALYSIS")
+        print("SAMPLE PREDICTIONS (first few)")
         print("-"*80)
 
         for idx, example in enumerate(debug_info['examples'], 1):
@@ -1159,8 +1388,8 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
             status_att = "✅" if example['att_correct'] else ("⚠️" if example['att_match_rate'] >= 0.5 else "❌")
 
             print(f"\nSample {idx} (Index: {example['sample_idx']}):")
-            print(f"  Frames: {example['frames']}, Target Length: {example['target_len']}")
-            print(f"  Frames/Gloss Ratio: {example['frames']/example['target_len']:.2f}")
+            print(f"  Frames: {example['frames']}, Target Length: {example['target_len']}, " +
+                  f"Ratio: {example['frames']/example['target_len']:.2f}")
 
             print(f"\n  Target:     {' '.join(example['target'])}")
             print(f"  CTC Pred:   {' '.join(example['ctc_pred'])} {status_ctc}")
@@ -1169,62 +1398,13 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
             print(f"\n  CTC Match: {example['ctc_match_rate']*100:.1f}%")
             print(f"  Att Match: {example['att_match_rate']*100:.1f}%")
 
-            # Highlight differences
-            if not example['ctc_correct']:
-                print("\n  CTC Differences:")
-                for i, (pred, tgt) in enumerate(zip(example['ctc_pred'], example['target'])):
-                    if pred != tgt:
-                        print(f"    Position {i}: predicted '{pred}' but expected '{tgt}'")
-
-            if not example['att_correct'] and joint_eval:
-                print("\n  Attention Differences:")
-                for i, (pred, tgt) in enumerate(zip(example['att_pred'], example['target'])):
-                    if pred != tgt:
-                        print(f"    Position {i}: predicted '{pred}' but expected '{tgt}'")
-
-        print("\n" + "="*80)
-
-        # Common error analysis
-        print("\n🔍 COMMON ERROR PATTERNS:")
-
-        # Find most common mispredictions
-        ctc_errors = {}
-        att_errors = {}
-
-        for example in debug_info['examples']:
-            # CTC errors
-            for pred, tgt in zip(example['ctc_pred'], example['target']):
-                if pred != tgt:
-                    key = f"{tgt} → {pred}"
-                    ctc_errors[key] = ctc_errors.get(key, 0) + 1
-
-            # Attention errors
-            if joint_eval:
-                for pred, tgt in zip(example['att_pred'], example['target']):
-                    if pred != tgt:
-                        key = f"{tgt} → {pred}"
-                        att_errors[key] = att_errors.get(key, 0) + 1
-
-        if ctc_errors:
-            print("\n  Top CTC Mispredictions:")
-            for error, count in sorted(ctc_errors.items(), key=lambda x: x[1], reverse=True)[:5]:
-                print(f"    {error}: {count} times")
-
-        if att_errors and joint_eval:
-            print("\n  Top Attention Mispredictions:")
-            for error, count in sorted(att_errors.items(), key=lambda x: x[1], reverse=True)[:5]:
-                print(f"    {error}: {count} times")
-
         print("\n" + "="*80)
 
     # Log to MLflow
+    mlflow.log_metric("val_loss", avg_loss)
     mlflow.log_metric("val_ctc_wer", ctc_wer)
     mlflow.log_metric("val_att_wer", att_wer)
     mlflow.log_metric("val_bleu", bleu_score)
-
-    if debug:
-        mlflow.log_metric("val_ctc_exact_match", debug_info['correct_ctc'] / debug_samples)
-        mlflow.log_metric("val_att_exact_match", debug_info['correct_att'] / debug_samples)
 
     return avg_loss, ctc_wer, att_wer, bleu_score
 

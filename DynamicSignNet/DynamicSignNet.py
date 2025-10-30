@@ -22,7 +22,14 @@ import subprocess
 from torch.amp import autocast, GradScaler
 
 # ==================== DATASET ====================
-
+def clean_gloss_sequence(glosses):
+    """Remove session markers but keep visual markers"""
+    return [str(g) for g in glosses if not is_session_marker(g)]
+    
+def is_session_marker(token):
+    """Tokens to remove: __ON__, __OFF__ (no visual correspondence)"""
+    return isinstance(token, str) and token in ['__ON__', '__OFF__']
+    
 class LandmarkDataset(Dataset):
     """Dataset loader for preprocessed landmarks with attention targets"""
     def __init__(self, landmarks_dir, vocab_file=None, build_vocab=False, 
@@ -308,10 +315,11 @@ class LandmarkDataset(Dataset):
                 landmarks = random_masking(landmarks, mask_prob=0.1)
 
         landmarks = torch.FloatTensor(landmarks)
+        clean_glosses = clean_gloss_sequence(data['glosses'])
         
         # Handle unknown glosses safely
         glosses = []
-        for g in data['glosses']:
+        for g in glosses:
             g_str = str(g)
             glosses.append(self.gloss_vocab.get(g_str, self.gloss_vocab['<unk>']))
         

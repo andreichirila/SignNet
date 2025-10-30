@@ -191,41 +191,38 @@ class PositionalEncoding(nn.Module):
 
 
 class SignLanguageTranslator(nn.Module):
-    """Transformer-based Sign Language Translation Model"""
-    def __init__(self, input_dim, num_glosses, d_model=512, nhead=8,
-                 num_encoder_layers=6, dropout=0.1):
+    def __init__(self, input_dim, num_glosses, d_model=768, nhead=12,
+                 num_encoder_layers=12, dropout=0.4):  # Increased dropout
         super().__init__()
 
-        # Input projection
+        # Input projection with BatchNorm
         self.input_proj = nn.Sequential(
             nn.Linear(input_dim, d_model),
-            nn.LayerNorm(d_model),
-            nn.Dropout(dropout)
-        )
-
-        # Temporal convolution for local feature extraction
-        self.temporal_conv = nn.Sequential(
-            nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
+            nn.BatchNorm1d(d_model),  # Use BatchNorm instead of LayerNorm
             nn.ReLU(),
             nn.Dropout(dropout)
         )
 
-        # Positional encoding
-        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
+        # Temporal convolution with BatchNorm
+        self.temporal_conv = nn.Sequential(
+            nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
+            nn.BatchNorm1d(d_model),  # Added
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
 
-        # Transformer encoder
+        # ... rest remains same but use GELU instead of ReLU ...
+        
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=d_model * 4,
             dropout=dropout,
-            activation='relu',
+            activation='gelu',  # Use GELU instead of relu
             batch_first=True,
             norm_first=True
         )
-        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
-
-        # CTC head for gloss prediction
+        
         self.ctc_head = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.ReLU(),
@@ -440,68 +437,46 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss):
 
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
-    """Full training loop with MLflow tracking"""
     os.makedirs(save_dir, exist_ok=True)
-
+    
     criterion = CTCLoss(blank=1, zero_infinity=True)
-    optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, betas=(0.9, 0.98), eps=1e-9)
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=3)
-
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-5, weight_decay=1e-4)
+    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=5)
+    
+    early_stopping = EarlyStopping(patience=5, min_delta=0.001)
     best_wer = float('inf')
 
     for epoch in range(num_epochs):
-        print(f"\n{'='*50}")
-        print(f"Epoch {epoch+1}/{num_epochs}")
-        print(f"{'='*50}")
+        print(f"\nEpoch {epoch+1}/{num_epochs}")
 
-        # Train
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch)
         print(f"Train Loss: {train_loss:.4f}")
 
-        # Validate
         val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss)
         print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
 
-        # Log metrics to MLflow
-        mlflow.log_metric("train_loss", train_loss, step=epoch)
-        mlflow.log_metric("val_loss", val_loss, step=epoch)
-        mlflow.log_metric("val_wer", val_wer, step=epoch)
-        mlflow.log_metric("learning_rate", optimizer.param_groups[0]['lr'], step=epoch)
+        mlflow.log_metrics({
+            "train_loss": train_loss,
+            "val_loss": val_loss,
+            "val_wer": val_wer,
+        }, step=epoch)
 
-        # Learning rate scheduling
-        scheduler.step(val_loss)
-
-        # Save best model
         if val_wer < best_wer:
             best_wer = val_wer
             checkpoint = {
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': val_loss,
                 'val_wer': val_wer,
             }
-            checkpoint_path = os.path.join(save_dir, 'best_model.pt')
-            torch.save(checkpoint, checkpoint_path)
-            print(f"✓ Saved best model with WER: {best_wer:.4f}")
-            
-            # Log best model to MLflow
-            # mlflow.log_artifact(checkpoint_path)
-            mlflow.log_metric("best_wer", best_wer)
+            #torch.save(checkpoint, os.path.join(save_dir, 'best_model.pt'))
+            #print(f"✓ Best model saved: WER {best_wer:.4f}")
 
-        # Save checkpoint every 5 epochs
-        if (epoch + 1) % 5 == 0:
-            checkpoint = {
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'val_loss': val_loss,
-                'val_wer': val_wer,
-            }
-            checkpoint_path = os.path.join(save_dir, f'checkpoint_epoch_{epoch+1}.pt')
-            torch.save(checkpoint, checkpoint_path)
-            # mlflow.log_artifact(checkpoint_path)
+        scheduler.step()
+
+        # Early stopping
+        if early_stopping(val_wer, epoch):
+            break
 
     return best_wer
 
@@ -565,6 +540,27 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     
     return summary_str, summary_dict
 
+class EarlyStopping:
+    def __init__(self, patience=5, min_delta=0.001):
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.best_val_wer = float('inf')
+        self.best_epoch = 0
+
+    def __call__(self, val_wer, epoch):
+        if val_wer < (self.best_val_wer - self.min_delta):
+            self.best_val_wer = val_wer
+            self.best_epoch = epoch
+            self.counter = 0
+            return False
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                print(f"Early stopping at epoch {epoch}")
+                print(f"Best WER was {self.best_val_wer:.4f} at epoch {self.best_epoch}")
+                return True
+        return False
 
 # ==================== MAIN ====================
 
@@ -574,12 +570,12 @@ def main():
     LANDMARKS_DEV = "./landmarks_dev"
     VOCAB_FILE = "vocab.json"
     BATCH_SIZE = 16
-    NUM_EPOCHS = 50
+    NUM_EPOCHS = 100
     INPUT_DIM = 1659  # 126 (hands) + 1434 (face) + 99 (pose)
-    D_MODEL = 768
-    NHEAD = 12
-    NUM_LAYERS = 12
-    DROPOUT = 0.15
+    D_MODEL = 512      # Reduced from 768
+    NHEAD = 8          # Reduced from 12
+    NUM_LAYERS = 8     # Reduced from 12
+    DROPOUT = 0.35     # But keep dropout high
     
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"

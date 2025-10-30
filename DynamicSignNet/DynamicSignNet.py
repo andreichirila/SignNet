@@ -458,6 +458,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss)
         print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f}")
 
+        mlflow.log_metric("learning_rate", optimizer.param_groups[0]['lr'], step=epoch)
         mlflow.log_metrics({
             "train_loss": train_loss,
             "val_loss": val_loss,
@@ -472,6 +473,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
                 'optimizer_state_dict': optimizer.state_dict(),
                 'val_wer': val_wer,
             }
+            mlflow.log_metric("best_wer", best_wer)
             #torch.save(checkpoint, os.path.join(save_dir, 'best_model.pt'))
             #print(f"✓ Best model saved: WER {best_wer:.4f}")
 

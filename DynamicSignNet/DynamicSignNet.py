@@ -314,8 +314,8 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
         probs = log_probs[batch_idx, :seq_len, :]
         conf = max_probs[batch_idx, :seq_len]
         
-        # Beam: (prefix_tuple, score, length)
-        beam = [("", 0.0, 0)]
+        # Beam: (prefix_tuple, score, length) - always use tuple for prefix
+        beam = [(tuple(), 0.0, 0)]
         
         for t in range(len(probs)):
             new_beam = {}
@@ -339,7 +339,7 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
                         gloss = idx_to_gloss.get(c_idx, '<unk>')
                         
                         # Don't add consecutive duplicates
-                        if prefix and prefix[-1] == gloss:
+                        if len(prefix) > 0 and prefix[-1] == gloss:
                             new_prefix = prefix
                             new_length = length
                         else:
@@ -364,10 +364,11 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
             # Keep top beams
             beam = [(p, s, l) for (p, l), s in sorted(new_beam.items(), key=lambda x: x[1], reverse=True)[:beam_width]]
         
-        best_seq = beam[0][0] if beam else ""
+        best_seq = beam[0][0] if beam else tuple()
         decoded.append(list(best_seq))
     
     return decoded
+
 
 
 def compute_wer(predictions, targets):

@@ -579,7 +579,7 @@ def main():
     DROPOUT = 0.1
     
     # MLflow configuration
-    EXPERIMENT_NAME = "SignNetAdvanced"
+    EXPERIMENT_NAME = "SignNetAdvanced++"
     RUN_NAME = "transformer_ctc_baseline"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

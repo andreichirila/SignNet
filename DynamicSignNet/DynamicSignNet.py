@@ -131,9 +131,10 @@ class LandmarkDataset(Dataset):
 
         landmarks = torch.FloatTensor(landmarks)
         
+        clean_glosses = clean_gloss_sequence(data['glosses'])
         # Handle unknown glosses safely
         glosses = []
-        for g in data['glosses']:
+        for g in clean_glosses:
             g_str = str(g)
             glosses.append(self.gloss_vocab.get(g_str, self.gloss_vocab['<unk>']))
         
@@ -567,7 +568,15 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
 
 
 # ==================== MAIN ====================
-
+def clean_gloss_sequence(glosses):
+    """Remove session markers but keep visual markers"""
+    return [str(g) for g in glosses if not is_session_marker(g)]
+    
+def is_session_marker(token):
+    """Tokens to remove: __ON__, __OFF__ (no visual correspondence)"""
+    return isinstance(token, str) and token in ['__ON__', '__OFF__']
+    
+    
 def main():
     # Configuration
     LANDMARKS_TRAIN = "./landmarks_train"
@@ -583,7 +592,7 @@ def main():
     
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"
-    RUN_NAME = "transformer_ctc_baseline"
+    RUN_NAME = "transformer_ctc_baseline_clean_gloss"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")

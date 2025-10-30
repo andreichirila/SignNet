@@ -288,11 +288,39 @@ class AdvancedTemporalAugmentation:
 
 # ==================== DECODING ====================
 
+def decode_predictions_greedy(ctc_output, lengths, idx_to_gloss, blank_id=1):
+    """
+    Fast greedy CTC decoding (original approach).
+    Use this during training for speed.
+    """
+    batch_size = ctc_output.size(0)
+    predictions = torch.argmax(ctc_output, dim=-1)
+
+    decoded = []
+    for i in range(batch_size):
+        pred = predictions[i, :lengths[i]]
+
+        # Remove blanks and repeated tokens
+        pred_seq = []
+        prev = None
+        for p in pred:
+            p = p.item()
+            if p != blank_id and p != prev:
+                pred_seq.append(p)
+            prev = p
+
+        # Convert to glosses
+        glosses = [idx_to_gloss.get(p, '<unk>') for p in pred_seq]
+        decoded.append(glosses)
+
+    return decoded
+
+
 def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1, 
                              beam_width=30, confidence_threshold=0.4, use_length_penalty=True):
     """
     Hybrid decoding: Beam search + confidence filtering + length penalty.
-    Best balance between accuracy and efficiency.
+    Best balance between accuracy and efficiency (use for final evaluation only).
     
     Args:
         ctc_output: [B, T, C] tensor of CTC logits
@@ -368,7 +396,6 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
         decoded.append(list(best_seq))
     
     return decoded
-
 
 
 def compute_wer(predictions, targets):
@@ -470,8 +497,12 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     return total_loss / num_batches
 
 
-def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_type='hybrid'):
-    """Validate the model with specified decoder"""
+def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False):
+    """
+    Validate the model.
+    use_beam_search=False for fast training validation (greedy)
+    use_beam_search=True for final evaluation (hybrid beam search)
+    """
     model.eval()
     total_loss = 0
     num_batches = 0
@@ -487,7 +518,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_
             gloss_lengths = gloss_lengths.to(device)
 
             # Forward pass
-            ctc_logits = model(landmarks, landmark_lengths)  # FIXED: was landmark_length
+            ctc_logits = model(landmarks, landmark_lengths)
 
             # Calculate loss
             ctc_logits_t = ctc_logits.transpose(0, 1)
@@ -497,16 +528,26 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_
             total_loss += loss.item()
             num_batches += 1
 
-            # Decode predictions with hybrid decoder
-            predictions = decode_predictions_hybrid(
-                ctc_logits, 
-                landmark_lengths, 
-                idx_to_gloss, 
-                blank_id=1,
-                beam_width=30,
-                confidence_threshold=0.4,
-                use_length_penalty=True
-            )
+            # Choose decoder based on setting
+            if use_beam_search:
+                # Slow but more accurate (for final evaluation)
+                predictions = decode_predictions_hybrid(
+                    ctc_logits, 
+                    landmark_lengths, 
+                    idx_to_gloss, 
+                    blank_id=1,
+                    beam_width=30,
+                    confidence_threshold=0.4,
+                    use_length_penalty=True
+                )
+            else:
+                # Fast greedy decoder (for training validation)
+                predictions = decode_predictions_greedy(
+                    ctc_logits,
+                    landmark_lengths,
+                    idx_to_gloss,
+                    blank_id=1
+                )
 
             # Convert targets to glosses
             for i in range(glosses.size(0)):
@@ -523,9 +564,8 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_
     return avg_loss, wer
 
 
-
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
-    """Full training loop with fixed scheduler and hybrid decoder"""
+    """Full training loop with fixed scheduler and fast greedy validation"""
     os.makedirs(save_dir, exist_ok=True)
 
     criterion = CTCLoss(blank=1, zero_infinity=True)
@@ -537,15 +577,13 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         weight_decay=2e-4
     )
     
-    # FIXED SCHEDULER: Warmup + Exponential decay (NO RESTARTS)
     def get_lr_scheduler(optimizer, num_epochs, steps_per_epoch):
         total_steps = num_epochs * steps_per_epoch
-        warmup_steps = int(0.1 * total_steps)  # 10% warmup
+        warmup_steps = int(0.1 * total_steps)
         
         def lr_lambda(step):
             if step < warmup_steps:
                 return float(step) / float(max(1, warmup_steps))
-            # Exponential decay after warmup
             progress = (step - warmup_steps) / (total_steps - warmup_steps)
             return max(0.1, (1.0 - progress) ** 0.5)
         
@@ -564,20 +602,20 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler)
         print(f"Train Loss: {train_loss:.4f}")
 
-        # Validate with hybrid decoder
-        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, decoder_type='hybrid')
-        print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f} (hybrid decoder)")
+        # Validate with GREEDY decoder (fast) during training
+        val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False)
+        print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f} (greedy decoder - fast)")
         print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
 
         # Log metrics
         mlflow.log_metrics({
             "train_loss": train_loss,
             "val_loss": val_loss,
-            "val_wer": val_wer,
+            "val_wer_greedy": val_wer,
             "learning_rate": optimizer.param_groups[0]['lr']
         }, step=epoch)
 
-        # Save best model
+        # Save best model based on greedy WER
         if val_wer < best_wer:
             best_wer = val_wer
             checkpoint = {
@@ -589,13 +627,31 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
             }
             torch.save(checkpoint, os.path.join(save_dir, 'best_model.pt'))
             print(f"✓ Saved best model with WER: {best_wer:.4f}")
-            mlflow.log_metric("best_wer", best_wer)
+            mlflow.log_metric("best_wer_greedy", best_wer)
 
         # Early stopping
         if early_stopping(val_wer, epoch):
             break
 
     return best_wer
+
+
+def evaluate_with_beam_search(model, val_loader, criterion, device, vocab, idx_to_gloss):
+    """
+    Final evaluation with slow beam search decoder.
+    Run this AFTER training to get accurate WER with hybrid decoder.
+    """
+    print("\n" + "="*70)
+    print("FINAL EVALUATION WITH BEAM SEARCH DECODER")
+    print("="*70)
+    
+    val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=True)
+    
+    print(f"Final Val Loss: {val_loss:.4f}")
+    print(f"Final Val WER (Hybrid Beam Search): {val_wer:.4f}")
+    print("="*70 + "\n")
+    
+    return val_loss, val_wer
 
 
 def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=100):
@@ -677,7 +733,7 @@ def main():
     
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"
-    RUN_NAME = "transformer_ctc_hybrid_decoder"
+    RUN_NAME = "transformer_ctc_fast_greedy_training"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -717,7 +773,8 @@ def main():
             "weight_decay": WEIGHT_DECAY,
             "optimizer": "AdamW",
             "scheduler": "LambdaLR_with_warmup",
-            "decoder": "hybrid_beam_search",
+            "decoder_training": "greedy_fast",
+            "decoder_final": "hybrid_beam_search",
             "augmentation": "advanced_temporal",
             "loss_function": "CTC"
         })
@@ -806,12 +863,12 @@ def main():
                 f.write(f"{key}: {value}\n")
         mlflow.log_artifact(model_summary_path)
 
-        # Train model
+        # Train model with FAST greedy decoder
         print("\n" + "="*50)
         print("Starting Training")
         print("="*50)
 
-        best_wer = train_model(
+        best_wer_greedy = train_model(
             model,
             train_loader,
             val_loader,
@@ -822,17 +879,36 @@ def main():
         )
 
         print(f"\n{'='*50}")
-        print(f"Training Complete! Best WER: {best_wer:.4f}")
+        print(f"Training Complete! Best Greedy WER: {best_wer_greedy:.4f}")
         print(f"{'='*50}")
         
-        mlflow.log_metric("final_best_wer", best_wer)
+        # Load best model
+        checkpoint = torch.load(os.path.join('checkpoints', 'best_model.pt'))
+        model.load_state_dict(checkpoint['model_state_dict'])
+        print("✓ Loaded best model for final evaluation")
+        
+        # Final evaluation with SLOW hybrid beam search decoder
+        val_loss_beam, val_wer_beam = evaluate_with_beam_search(
+            model,
+            val_loader,
+            CTCLoss(blank=1, zero_infinity=True),
+            device,
+            train_dataset.gloss_vocab,
+            train_dataset.idx_to_gloss
+        )
+        
+        mlflow.log_metric("final_best_wer_greedy", best_wer_greedy)
+        mlflow.log_metric("final_val_wer_beam_search", val_wer_beam)
+        mlflow.log_metric("wer_improvement_percent", ((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100)
+        
         mlflow.pytorch.log_model(model, "model")
         
         mlflow.set_tags({
             "model_type": "transformer",
             "task": "sign_language_translation",
             "dataset": "phoenix-2014",
-            "decoder": "hybrid_beam_search",
+            "decoder_training": "greedy",
+            "decoder_final": "hybrid_beam_search",
             "status": "completed"
         })
 

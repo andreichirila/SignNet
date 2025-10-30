@@ -181,9 +181,11 @@ class PositionalEncoding(nn.Module):
                             -(math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
+        # Use register_buffer so pe moves with model.to(device)
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
+        # self.pe is now automatically on the correct device
         x = x + self.pe[:, :x.size(1)]
         return self.dropout(x)
 
@@ -258,7 +260,8 @@ class SignLanguageTranslator(nn.Module):
     def _generate_padding_mask(self, lengths, max_len):
         """Generate padding mask for variable length sequences"""
         batch_size = len(lengths)
-        mask = torch.arange(max_len).expand(batch_size, max_len) >= lengths.unsqueeze(1)
+        # FIX: Explicitly specify device to match input tensor
+        mask = torch.arange(max_len, device=lengths.device).expand(batch_size, max_len) >= lengths.unsqueeze(1)
         return mask
 
 

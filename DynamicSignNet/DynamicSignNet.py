@@ -131,10 +131,9 @@ class LandmarkDataset(Dataset):
 
         landmarks = torch.FloatTensor(landmarks)
         
-        clean_glosses = clean_gloss_sequence(data['glosses'])
         # Handle unknown glosses safely
         glosses = []
-        for g in clean_glosses:
+        for g in data['glosses']:
             g_str = str(g)
             glosses.append(self.gloss_vocab.get(g_str, self.gloss_vocab['<unk>']))
         
@@ -568,15 +567,7 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
 
 
 # ==================== MAIN ====================
-def clean_gloss_sequence(glosses):
-    """Remove session markers but keep visual markers"""
-    return [str(g) for g in glosses if not is_session_marker(g)]
-    
-def is_session_marker(token):
-    """Tokens to remove: __ON__, __OFF__ (no visual correspondence)"""
-    return isinstance(token, str) and token in ['__ON__', '__OFF__']
-    
-    
+
 def main():
     # Configuration
     LANDMARKS_TRAIN = "./landmarks_train"
@@ -585,14 +576,14 @@ def main():
     BATCH_SIZE = 16
     NUM_EPOCHS = 50
     INPUT_DIM = 1659  # 126 (hands) + 1434 (face) + 99 (pose)
-    D_MODEL = 512
-    NHEAD = 8
-    NUM_LAYERS = 6
-    DROPOUT = 0.1
+    D_MODEL = 768
+    NHEAD = 12
+    NUM_LAYERS = 12
+    DROPOUT = 0.15
     
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetAdvanced++"
-    RUN_NAME = "transformer_ctc_baseline_clean_gloss"
+    RUN_NAME = "transformer_ctc_baseline_increased_model_size"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")

@@ -760,33 +760,40 @@ def greedy_decode_attention(model, memory, memory_lengths, max_len=100,
             if finished.all():
                 break
     
-    return ys
+    return ys[:, 1:]  # Remove first token (SOS)
+
 
 # ==================== EVALUATION ====================
 
 def decode_predictions(ctc_output, lengths, vocab, blank_id=1):
-    """Decode CTC output using greedy decoding (fallback)"""
+    """Decode CTC output using greedy decoding with proper CTC collapse"""
     batch_size = ctc_output.size(0)
     predictions = torch.argmax(ctc_output, dim=-1)
-
+    
     decoded = []
     for i in range(batch_size):
-        pred = predictions[i, :lengths[i]]
-
-        # Remove blanks and repeated tokens
+        pred = predictions[i, :lengths[i]].cpu().numpy()
+        
+        # ✅ CTC decoding: remove blanks and collapse repeated tokens
         pred_seq = []
-        prev = None
-        for p in pred:
-            p = p.item()
-            if p != blank_id and p != prev:
-                pred_seq.append(p)
-            prev = p
-
+        prev_token = None
+        for token in pred:
+            # Skip blank tokens
+            if token == blank_id:
+                prev_token = None
+                continue
+            
+            # Skip repeated tokens (CTC collapse rule)
+            if token != prev_token:
+                pred_seq.append(int(token))
+                prev_token = token
+        
         # Convert to glosses
         glosses = [vocab.get(p, '<unk>') for p in pred_seq]
         decoded.append(glosses)
-
+    
     return decoded
+
 
 def compute_wer(predictions, targets):
     """Compute Word Error Rate"""
@@ -1048,7 +1055,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
                     blank_id=1, beam_width=beam_width
                 )
             else:
-                ctc_preds = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss)
+                ctc_preds = decode_predictions(ctc_logits, landmark_lengths, idx_to_gloss, blank_id=1)
 
             all_ctc_predictions.extend(ctc_preds)
 
@@ -1058,23 +1065,38 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss,
                 att_decoded = greedy_decode_attention(
                     model, memory, landmark_lengths,
                     max_len=max(gloss_lengths) + 10,
+                    sos_id=2,
+                    eos_id=3,
                     device=device
                 )
-
+                
                 att_preds = []
                 for i in range(att_decoded.size(0)):
-                    seq = att_decoded[i, :gloss_lengths[i]].cpu().numpy()
-                    gloss_seq = [idx_to_gloss.get(int(t), '<unk>') for t in seq if t != 0]
+                    # ✅ FIXED: att_decoded already has <sos> removed (if you fixed the function)
+                    # Use actual decoded length, not gloss_lengths
+                    actual_length = min(att_decoded.size(1), gloss_lengths[i])
+                    seq = att_decoded[i, :actual_length].cpu().numpy()
+                    
+                    # ✅ FIXED: Filter out special tokens (pad=0, blank=1, sos=2, eos=3)
+                    special_tokens = {0, 1, 2, 3}
+                    gloss_seq = [idx_to_gloss.get(int(t), '<unk>') 
+                                 for t in seq 
+                                 if int(t) not in special_tokens]
                     att_preds.append(gloss_seq)
-
+                
                 all_att_predictions.extend(att_preds)
             else:
                 all_att_predictions.extend(ctc_preds)  # Fallback
 
-            # Convert targets and store sample info
+            # Convert targets (also filter special tokens)
             for i in range(glosses.size(0)):
                 target = glosses[i, :gloss_lengths[i]].cpu().numpy()
-                target_glosses = [idx_to_gloss.get(int(t), '<unk>') for t in target]
+                
+                # ✅ FIXED: Filter special tokens from targets too
+                special_tokens = {0, 1, 2, 3}
+                target_glosses = [idx_to_gloss.get(int(t), '<unk>') 
+                                  for t in target 
+                                  if int(t) not in special_tokens]
                 all_targets.append(target_glosses)
 
                 # Store metadata for this sample

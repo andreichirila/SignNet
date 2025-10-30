@@ -882,6 +882,7 @@ def main():
         print(f"Training Complete! Best Greedy WER: {best_wer_greedy:.4f}")
         print(f"{'='*50}")
         
+        mlflow.log_metric("final_best_wer", best_wer)
         # Load best model
         checkpoint = torch.load(os.path.join('checkpoints', 'best_model.pt'))
         model.load_state_dict(checkpoint['model_state_dict'])

@@ -191,38 +191,41 @@ class PositionalEncoding(nn.Module):
 
 
 class SignLanguageTranslator(nn.Module):
-    def __init__(self, input_dim, num_glosses, d_model=768, nhead=12,
-                 num_encoder_layers=12, dropout=0.4):  # Increased dropout
+    """Transformer-based Sign Language Translation Model"""
+    def __init__(self, input_dim, num_glosses, d_model=512, nhead=8,
+                 num_encoder_layers=6, dropout=0.1):
         super().__init__()
 
-        # Input projection with BatchNorm
+        # Input projection
         self.input_proj = nn.Sequential(
             nn.Linear(input_dim, d_model),
-            nn.BatchNorm1d(d_model),  # Use BatchNorm instead of LayerNorm
-            nn.ReLU(),
+            nn.LayerNorm(d_model),
             nn.Dropout(dropout)
         )
 
-        # Temporal convolution with BatchNorm
+        # Temporal convolution for local feature extraction
         self.temporal_conv = nn.Sequential(
             nn.Conv1d(d_model, d_model, kernel_size=5, padding=2),
-            nn.BatchNorm1d(d_model),  # Added
             nn.ReLU(),
             nn.Dropout(dropout)
         )
 
-        # ... rest remains same but use GELU instead of ReLU ...
-        
+        # Positional encoding
+        self.pos_encoder = PositionalEncoding(d_model, dropout=dropout)
+
+        # Transformer encoder
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=d_model * 4,
             dropout=dropout,
-            activation='gelu',  # Use GELU instead of relu
+            activation='relu',
             batch_first=True,
             norm_first=True
         )
-        
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_encoder_layers)
+
+        # CTC head for gloss prediction
         self.ctc_head = nn.Sequential(
             nn.Linear(d_model, d_model),
             nn.ReLU(),

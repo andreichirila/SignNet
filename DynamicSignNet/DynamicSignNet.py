@@ -288,6 +288,8 @@ class LandmarkDataset(Dataset):
     
         # Apply normalization
         landmarks = (landmarks - self.mean) / self.std
+        
+        landmarks = np.clip(landmarks, -5.0, 5.0)  # Clip outliers to ±5 std deviations
 
         # Apply augmentation during training
         if self.augment:
@@ -1069,7 +1071,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
     criterion = JointCTCLoss(ctc_weight=0.3, attention_weight=0.7, blank_id=1)
     
     # ==================== NEW: HIGHER LEARNING RATE ====================
-    base_lr = 5e-4  # CHANGED from 5e-5 to 5e-4 (10x increase)
+    base_lr = 1e-4
     optimizer = torch.optim.AdamW(
         model.parameters(), 
         lr=base_lr,  # Use base_lr directly
@@ -1272,13 +1274,11 @@ def log_gpu_stats(step):
     except:
         pass  # Silently fail if nvidia-smi not available
 
-def verify_data_normalization(train_loader, num_samples=5):
+def verify_data_normalization(train_loader, vocab_size, num_samples=5):
     """Verify that data normalization is correct"""
     print("\n" + "="*50)
     print("DATA NORMALIZATION VERIFICATION")
     print("="*50)
-    
-    # REMOVED: model.eval() - not needed, we're just checking data
     
     for i, (landmarks, landmark_lengths, glosses, gloss_lengths) in enumerate(train_loader):
         if i >= num_samples:
@@ -1305,13 +1305,18 @@ def verify_data_normalization(train_loader, num_samples=5):
         if landmarks.min() < -10 or landmarks.max() > 10:
             print("  ⚠️  WARNING: Landmarks may not be normalized (extreme values)")
         
-        # Check vocabulary range
-        if glosses.max() >= 1000:  # Adjust based on your vocab size
-            print(f"  ⚠️  WARNING: Very high gloss ID detected: {glosses.max().item()}")
+        # ✅ FIXED: Check vocabulary range with passed vocab_size
+        max_gloss = glosses.max().item()
+        if max_gloss >= vocab_size:
+            print(f"  ⚠️  CRITICAL: Gloss ID ({max_gloss}) >= vocab size ({vocab_size})!")
+        elif max_gloss > vocab_size * 0.95:
+            print(f"  ℹ️  INFO: High gloss ID detected: {max_gloss}/{vocab_size}")
+        
         if glosses.min() < 0:
             print("  ⚠️  WARNING: Negative gloss ID detected!")
     
     print("="*50 + "\n")
+
     
 # ==================== MAIN ====================
 
@@ -1462,7 +1467,7 @@ def main():
             persistent_workers=True  # Keep workers alive between epochs
         )
         
-        verify_data_normalization(train_loader, num_samples=5)
+        verify_data_normalization(train_loader, vocab_size=len(train_dataset.gloss_vocab), num_samples=5)
 
         val_loader = DataLoader(
             val_dataset,

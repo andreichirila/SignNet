@@ -20,12 +20,31 @@ import random
 # ==================== DATASET ====================
 
 class LandmarkDataset(Dataset):
-    """Dataset loader for preprocessed landmarks"""
+    """Dataset loader for preprocessed landmarks with train/val/test split support"""
 
-    def __init__(self, landmarks_dir, vocab_file=None, build_vocab=False,
-                 augment=False, all_dirs_for_vocab=None, max_samples=None, random_subset=False):
-        self.landmarks_dir = landmarks_dir
-        self.samples = sorted(glob.glob(os.path.join(landmarks_dir, "*.npz")))
+    def __init__(self, landmarks_dir=None, vocab_file=None, build_vocab=False,
+                 augment=False, all_dirs_for_vocab=None, max_samples=None,
+                 random_subset=False, samples_list=None):
+        """
+        Args:
+            landmarks_dir: Directory containing .npz files (if loading from directory)
+            vocab_file: Path to vocabulary JSON file
+            build_vocab: Whether to build vocabulary from scratch
+            augment: Whether to apply augmentation
+            all_dirs_for_vocab: Not used anymore (kept for compatibility)
+            max_samples: Maximum number of samples to use
+            random_subset: Whether to randomly sample max_samples
+            samples_list: Pre-filtered list of sample paths (for train/val/test splits)
+        """
+        if samples_list is not None:
+            # Use pre-filtered samples (for train/val/test splits)
+            self.samples = samples_list
+            self.landmarks_dir = None
+        else:
+            # Load from directory
+            self.landmarks_dir = landmarks_dir
+            self.samples = sorted(glob.glob(os.path.join(landmarks_dir, "*.npz")))
+
         self.augment = augment
 
         # Initialize augmentation
@@ -33,7 +52,7 @@ class LandmarkDataset(Dataset):
             self.temporal_aug = AdvancedTemporalAugmentation(prob=0.8)
 
         # Limit samples
-        if max_samples is not None:
+        if max_samples is not None and samples_list is None:
             if random_subset:
                 random.seed(42)
                 self.samples = random.sample(self.samples,
@@ -44,41 +63,15 @@ class LandmarkDataset(Dataset):
                 print(f"First {len(self.samples)} samples")
 
         if build_vocab:
-            if all_dirs_for_vocab:
-                self.gloss_vocab = self._build_vocab_from_multiple_dirs(all_dirs_for_vocab)
-            else:
-                self.gloss_vocab = self._build_vocab()
+            self.gloss_vocab = self._build_vocab()
             self._save_vocab(vocab_file)
         else:
             self.gloss_vocab = self._load_vocab(vocab_file)
 
         self.idx_to_gloss = {v: k for k, v in self.gloss_vocab.items()}
 
-    def _build_vocab_from_multiple_dirs(self, directories):
-        """Build vocabulary from multiple directories (train, dev, test)"""
-        glosses = set()
-        for directory in directories:
-            samples = sorted(glob.glob(os.path.join(directory, "*.npz")))
-            for sample_path in tqdm(samples, desc=f"Building vocab from {directory}"):
-                data = np.load(sample_path, allow_pickle=True)
-                glosses.update(data['glosses'])
-
-        gloss_to_idx = {
-            '<pad>': 0,
-            '<blank>': 1,
-            '<sos>': 2,
-            '<eos>': 3,
-            '<unk>': 4
-        }
-
-        for idx, gloss in enumerate(sorted(glosses)):
-            gloss_to_idx[gloss] = idx + 5
-
-        print(f"Vocabulary size: {len(gloss_to_idx)} (from {len(directories)} directories)")
-        return gloss_to_idx
-
     def _build_vocab(self):
-        """Build vocabulary from all glosses in dataset"""
+        """Build vocabulary from all glosses in current samples"""
         glosses = set()
         for sample_path in tqdm(self.samples, desc="Building vocab"):
             data = np.load(sample_path, allow_pickle=True)
@@ -126,7 +119,7 @@ class LandmarkDataset(Dataset):
 
         landmarks = torch.FloatTensor(landmarks)
 
-        # Optional: convert handedness strings to numeric encoding
+        # Convert handedness strings to numeric encoding
         # e.g., LEFT=0, RIGHT=1, NONE=2
         if handedness is not None:
             mapping = {'LEFT': 0, 'RIGHT': 1, 'NONE': 2}
@@ -141,6 +134,7 @@ class LandmarkDataset(Dataset):
             glosses.append(self.gloss_vocab.get(g_str, self.gloss_vocab['<unk>']))
 
         return landmarks, handedness, torch.LongTensor(glosses)
+
 
 def collate_fn(batch):
     landmarks, handedness, glosses = zip(*batch)
@@ -173,6 +167,57 @@ def collate_fn(batch):
     return (padded_landmarks, torch.LongTensor(landmark_lengths),
             padded_handedness, padded_glosses, torch.LongTensor(gloss_lengths))
 
+
+def split_dataset(landmarks_dir, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15, seed=42):
+    """
+    Split dataset into train, validation, and test sets.
+
+    Args:
+        landmarks_dir: Directory containing .npz files
+        train_ratio: Proportion of data for training (default 0.7)
+        val_ratio: Proportion of data for validation (default 0.15)
+        test_ratio: Proportion of data for testing (default 0.15)
+        seed: Random seed for reproducibility
+
+    Returns:
+        train_samples, val_samples, test_samples: Lists of file paths
+    """
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, \
+        "Ratios must sum to 1.0"
+
+    # Get all samples
+    all_samples = sorted(glob.glob(os.path.join(landmarks_dir, "*.npz")))
+
+    print(f"\nDataset Split Configuration:")
+    print(f"{'=' * 50}")
+    print(f"Total samples: {len(all_samples)}")
+    print(f"Train ratio: {train_ratio:.1%}")
+    print(f"Val ratio: {val_ratio:.1%}")
+    print(f"Test ratio: {test_ratio:.1%}")
+    print(f"Random seed: {seed}")
+
+    # Shuffle with fixed seed
+    random.seed(seed)
+    random.shuffle(all_samples)
+
+    # Calculate split indices
+    n_total = len(all_samples)
+    n_train = int(n_total * train_ratio)
+    n_val = int(n_total * val_ratio)
+
+    # Split
+    train_samples = all_samples[:n_train]
+    val_samples = all_samples[n_train:n_train + n_val]
+    test_samples = all_samples[n_train + n_val:]
+
+    print(f"\nSplit Results:")
+    print(f"{'=' * 50}")
+    print(f"Train samples: {len(train_samples)} ({len(train_samples) / n_total:.1%})")
+    print(f"Val samples: {len(val_samples)} ({len(val_samples) / n_total:.1%})")
+    print(f"Test samples: {len(test_samples)} ({len(test_samples) / n_total:.1%})")
+    print(f"{'=' * 50}\n")
+
+    return train_samples, val_samples, test_samples
 
 
 # ==================== MODEL ====================
@@ -754,13 +799,17 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
 
 def main():
     # Configuration
-    LANDMARKS_TRAIN = "./landmarks_train"
-    LANDMARKS_DEV = "./landmarks_dev"
+    LANDMARKS_DIR = "./word_landmarks_extracted"  # Single directory with all data
     VOCAB_FILE = "vocab.json"
     BATCH_SIZE = 16
     NUM_EPOCHS = 150
-    # Handedness one-hot: 2 hands × 3 classes = 6 features per frame
     INPUT_DIM = 1659  # 126 hand + 1434 face + 99 pose (handedness is separate)
+
+    # Dataset split ratios
+    TRAIN_RATIO = 0.7  # 70% for training
+    VAL_RATIO = 0.15  # 15% for validation
+    TEST_RATIO = 0.15  # 15% for testing
+    SPLIT_SEED = 42  # For reproducibility
 
     # Smaller model with aggressive regularization
     D_MODEL = 384
@@ -773,7 +822,7 @@ def main():
 
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = "transformer_ctc_fast_greedy_training"
+    RUN_NAME = "transformer_ctc_word_level_single_dataset"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -816,26 +865,64 @@ def main():
             "decoder_training": "greedy_fast",
             "decoder_final": "hybrid_beam_search",
             "augmentation": "advanced_temporal",
-            "loss_function": "CTC"
+            "loss_function": "CTC",
+            "train_ratio": TRAIN_RATIO,
+            "val_ratio": VAL_RATIO,
+            "test_ratio": TEST_RATIO,
+            "split_seed": SPLIT_SEED
         })
 
         mlflow.log_param("device", str(device))
         mlflow.log_param("cuda_available", torch.cuda.is_available())
 
-        # Create datasets
+        # Split dataset
         print("\n" + "=" * 50)
-        print("Loading Datasets")
+        print("Splitting Dataset")
+        print("=" * 50)
+
+        train_samples, val_samples, test_samples = split_dataset(
+            LANDMARKS_DIR,
+            train_ratio=TRAIN_RATIO,
+            val_ratio=VAL_RATIO,
+            test_ratio=TEST_RATIO,
+            seed=SPLIT_SEED
+        )
+
+        # Create datasets with vocabulary built from ALL data (train+val+test)
+        print("\n" + "=" * 50)
+        print("Building Vocabulary from ALL Data")
+        print("=" * 50)
+
+        # First, build vocabulary from all samples
+        all_samples = train_samples + val_samples + test_samples
+        vocab_builder_dataset = LandmarkDataset(
+            samples_list=all_samples,
+            vocab_file=VOCAB_FILE,
+            build_vocab=True,
+            augment=False
+        )
+
+        # Now create train/val/test datasets with the built vocabulary
+        print("\n" + "=" * 50)
+        print("Loading Train/Val/Test Datasets")
         print("=" * 50)
 
         train_dataset = LandmarkDataset(
-            LANDMARKS_TRAIN,
+            samples_list=train_samples,
             vocab_file=VOCAB_FILE,
-            build_vocab=True,
-            augment=True
+            build_vocab=False,
+            augment=True  # Augmentation only for training
         )
 
         val_dataset = LandmarkDataset(
-            LANDMARKS_DEV,
+            samples_list=val_samples,
+            vocab_file=VOCAB_FILE,
+            build_vocab=False,
+            augment=False
+        )
+
+        test_dataset = LandmarkDataset(
+            samples_list=test_samples,
             vocab_file=VOCAB_FILE,
             build_vocab=False,
             augment=False
@@ -844,6 +931,8 @@ def main():
         mlflow.log_params({
             "train_samples": len(train_dataset),
             "val_samples": len(val_dataset),
+            "test_samples": len(test_dataset),
+            "total_samples": len(train_dataset) + len(val_dataset) + len(test_dataset),
             "vocab_size": len(train_dataset.gloss_vocab)
         })
 
@@ -861,6 +950,15 @@ def main():
 
         val_loader = DataLoader(
             val_dataset,
+            batch_size=BATCH_SIZE,
+            shuffle=False,
+            collate_fn=collate_fn,
+            num_workers=4,
+            pin_memory=use_pin_memory
+        )
+
+        test_loader = DataLoader(
+            test_dataset,
             batch_size=BATCH_SIZE,
             shuffle=False,
             collate_fn=collate_fn,
@@ -922,13 +1020,16 @@ def main():
         print(f"Training Complete! Best Greedy WER: {best_wer_greedy:.4f}")
         print(f"{'=' * 50}")
 
-        mlflow.log_metric("final_best_wer", best_wer)
         # Load best model
         checkpoint = torch.load(os.path.join('checkpoints', 'best_model.pt'))
         model.load_state_dict(checkpoint['model_state_dict'])
         print("✓ Loaded best model for final evaluation")
 
-        # Final evaluation with SLOW hybrid beam search decoder
+        # Final evaluation with SLOW hybrid beam search decoder on VALIDATION set
+        print("\n" + "=" * 70)
+        print("FINAL VALIDATION EVALUATION (Beam Search)")
+        print("=" * 70)
+
         val_loss_beam, val_wer_beam = evaluate_with_beam_search(
             model,
             val_loader,
@@ -938,16 +1039,43 @@ def main():
             train_dataset.idx_to_gloss
         )
 
+        # Final evaluation on TEST set
+        print("\n" + "=" * 70)
+        print("FINAL TEST EVALUATION (Beam Search)")
+        print("=" * 70)
+
+        test_loss_beam, test_wer_beam = evaluate_with_beam_search(
+            model,
+            test_loader,
+            CTCLoss(blank=1, zero_infinity=True),
+            device,
+            train_dataset.gloss_vocab,
+            train_dataset.idx_to_gloss
+        )
+
+        # Log all final metrics
         mlflow.log_metric("final_best_wer_greedy", best_wer_greedy)
         mlflow.log_metric("final_val_wer_beam_search", val_wer_beam)
-        mlflow.log_metric("wer_improvement_percent", ((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100)
+        mlflow.log_metric("final_test_wer_beam_search", test_wer_beam)
+        mlflow.log_metric("val_wer_improvement_percent",
+                          ((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100)
 
+        print(f"\n{'=' * 70}")
+        print("FINAL RESULTS SUMMARY")
+        print(f"{'=' * 70}")
+        print(f"Best Validation WER (Greedy):      {best_wer_greedy:.4f}")
+        print(f"Final Validation WER (Beam):       {val_wer_beam:.4f}")
+        print(f"Final Test WER (Beam):             {test_wer_beam:.4f}")
+        print(f"Improvement (Val Greedy→Beam):     {((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100:.2f}%")
+        print(f"{'=' * 70}\n")
+
+        # Save model
         mlflow.pytorch.log_model(model, "model")
 
         mlflow.set_tags({
             "model_type": "transformer",
             "task": "sign_language_translation",
-            "dataset": "phoenix-2014",
+            "dataset": "custom_word_level",
             "decoder_training": "greedy",
             "decoder_final": "hybrid_beam_search",
             "status": "completed"
@@ -956,3 +1084,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

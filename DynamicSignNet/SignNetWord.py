@@ -398,7 +398,7 @@ def main():
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
-    with mlflow.start_run(run_name=RUN_NAME) as run:
+    with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME) as run:
         # ========================================================================
         # Log System Information
         # ========================================================================
@@ -445,8 +445,8 @@ def main():
             word = dataset.idx_to_word[label.item()]
             word_counts[word] += 1
 
-        top_5_words = [word for word, _ in word_counts.most_common(5)]
-        print(f"  Top 5 words: {top_5_words}")
+        top_10_words = [word for word, _ in word_counts.most_common(10)]
+        print(f"  Top 10 words: {top_10_words}")
         for word, count in word_counts.most_common(5):
             print(f"    {word:20} : {count:4} samples")
 
@@ -455,7 +455,7 @@ def main():
         # ========================================================================
         print(f"\n[STEP 3] Filtering to top 5 words...")
         old_to_new_idx = {}
-        for new_idx, word in enumerate(top_5_words):
+        for new_idx, word in enumerate(top_10_words):
             old_idx = dataset.word_to_idx[word]
             old_to_new_idx[old_idx] = new_idx
 
@@ -500,7 +500,7 @@ def main():
             train_label_counts[label.item()] += 1
 
         print(f"\n  Training set distribution:")
-        for new_idx, word in enumerate(top_5_words):
+        for new_idx, word in enumerate(top_10_words):
             count = train_label_counts[new_idx]
             percentage = 100 * count / len(train_subset) if len(train_subset) > 0 else 0
             print(f"    Label {new_idx}: {word:20} : {count:4} samples ({percentage:5.1f}%)")
@@ -537,7 +537,7 @@ def main():
         # STEP 6: Build model
         # ========================================================================
         print(f"\n[STEP 6] Building model...")
-        num_classes = len(top_5_words)
+        num_classes = len(top_10_words)
         model = LSTMSignClassifier(
             input_size=1659,
             hidden_size=HIDDEN_SIZE,
@@ -628,14 +628,14 @@ def main():
         print(f"  Final Val Loss: {val_losses[-1]:.4f}")
         print(f"  Final Train Acc: {train_accs[-1]:.2%}")
         print(f"  Final Val Acc: {val_accs[-1]:.2%}")
-        print(f"\n  Classes ({num_classes}): {top_5_words}")
+        print(f"\n  Classes ({num_classes}): {top_10_words}")
 
         # Generate and save plots
         print(f"\n[PLOTTING] Generating training curves...")
         plot_path = plot_training_curves(train_losses, val_losses, train_accs, val_accs, PLOTS_DIR)
 
         # Log summary metrics
-        log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_5_words, best_epoch, best_val_acc)
+        log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_10_words, best_epoch, best_val_acc)
 
         # Save models and metrics
         final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_top5_final.pth")
@@ -651,7 +651,7 @@ def main():
         )
 
         class_info = {
-            "classes": top_5_words,
+            "classes": top_10_words,
             "num_classes": num_classes,
             "best_val_acc": float(best_val_acc),
             "best_epoch": int(best_epoch),
@@ -683,7 +683,7 @@ def main():
             "dataset_type": "MediaPipe_Landmarks",
             "split_strategy": "Stratified",
             "status": "completed",
-            "classes": ",".join(top_5_words),
+            "classes": ",".join(top_10_words),
         })
 
         print(f"\n  Best model: {best_model_path}")

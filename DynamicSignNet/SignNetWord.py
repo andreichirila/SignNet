@@ -494,7 +494,7 @@ def main():
         val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
 
         # Check class distribution
-        train_label_counts = [0, 0, 0, 0, 0]
+        train_label_counts = [0, 0, 0, 0, 0, 0,0,0,0,0]
         for idx in range(len(train_subset)):
             _, label = train_subset[idx]
             train_label_counts[label.item()] += 1

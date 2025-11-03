@@ -361,7 +361,7 @@ def log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_5_wo
 def main():
     """Main training pipeline with MLflow tracking."""
     print("=" * 80)
-    print("SIGN LANGUAGE TRANSLATION - TOP 5 WORDS CLASSIFIER (WITH MLFLOW)")
+    print("SIGN LANGUAGE TRANSLATION - TOP 10 WORDS CLASSIFIER (WITH MLFLOW)")
     print("=" * 80)
 
     # ============================================================================
@@ -381,9 +381,9 @@ def main():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
     LEARNING_RATE = 1e-3
-    NUM_EPOCHS = 50
+    NUM_EPOCHS = 150
     HIDDEN_SIZE = 128  # Reduced for better generalization
-    NUM_LAYERS = 1     # Reduced for better generalization
+    NUM_LAYERS = 2     # Reduced for better generalization
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models"
     PLOTS_DIR = "./plots"

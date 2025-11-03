@@ -3,7 +3,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
 from torch.nn import CTCLoss
 import glob
 import json
@@ -15,6 +15,7 @@ from torchinfo import summary
 import platform
 import psutil
 import random
+from collections import defaultdict
 
 
 # ==================== DATASET ====================
@@ -118,7 +119,7 @@ class LandmarkDataset(Dataset):
             mapping = {'LEFT': 0, 'RIGHT': 1, 'NONE': 2}
             handedness = np.vectorize(lambda x: mapping.get(x, 2))(handedness)
         else:
-            handedness = np.zeros((landmarks.shape[0], 2), dtype=np.int64)  # default NONE
+            handedness = np.zeros((landmarks.shape[0], 2), dtype=np.int64)
 
         # Apply augmentation to BOTH landmarks and handedness
         if self.augment:
@@ -143,7 +144,7 @@ def collate_fn(batch):
     feature_dim = landmarks[0].shape[1]
 
     padded_landmarks = torch.zeros(len(landmarks), max_len, feature_dim)
-    padded_handedness = torch.full((len(landmarks), max_len, 2), 2, dtype=torch.long)  # Pad with 'NONE' = 2
+    padded_handedness = torch.full((len(landmarks), max_len, 2), 2, dtype=torch.long)
 
     landmark_lengths = []
     gloss_lengths = []
@@ -166,58 +167,6 @@ def collate_fn(batch):
 
     return (padded_landmarks, torch.LongTensor(landmark_lengths),
             padded_handedness, padded_glosses, torch.LongTensor(gloss_lengths))
-
-
-def split_dataset(landmarks_dir, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15, seed=42):
-    """
-    Split dataset into train, validation, and test sets.
-
-    Args:
-        landmarks_dir: Directory containing .npz files
-        train_ratio: Proportion of data for training (default 0.7)
-        val_ratio: Proportion of data for validation (default 0.15)
-        test_ratio: Proportion of data for testing (default 0.15)
-        seed: Random seed for reproducibility
-
-    Returns:
-        train_samples, val_samples, test_samples: Lists of file paths
-    """
-    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, \
-        "Ratios must sum to 1.0"
-
-    # Get all samples
-    all_samples = sorted(glob.glob(os.path.join(landmarks_dir, "*.npz")))
-
-    print(f"\nDataset Split Configuration:")
-    print(f"{'=' * 50}")
-    print(f"Total samples: {len(all_samples)}")
-    print(f"Train ratio: {train_ratio:.1%}")
-    print(f"Val ratio: {val_ratio:.1%}")
-    print(f"Test ratio: {test_ratio:.1%}")
-    print(f"Random seed: {seed}")
-
-    # Shuffle with fixed seed
-    random.seed(seed)
-    random.shuffle(all_samples)
-
-    # Calculate split indices
-    n_total = len(all_samples)
-    n_train = int(n_total * train_ratio)
-    n_val = int(n_total * val_ratio)
-
-    # Split
-    train_samples = all_samples[:n_train]
-    val_samples = all_samples[n_train:n_train + n_val]
-    test_samples = all_samples[n_train + n_val:]
-
-    print(f"\nSplit Results:")
-    print(f"{'=' * 50}")
-    print(f"Train samples: {len(train_samples)} ({len(train_samples) / n_total:.1%})")
-    print(f"Val samples: {len(val_samples)} ({len(val_samples) / n_total:.1%})")
-    print(f"Test samples: {len(test_samples)} ({len(test_samples) / n_total:.1%})")
-    print(f"{'=' * 50}\n")
-
-    return train_samples, val_samples, test_samples
 
 
 # ==================== MODEL ====================
@@ -251,7 +200,7 @@ class SignLanguageTranslator(nn.Module):
 
         # Input projection
         self.input_proj = nn.Sequential(
-            nn.Linear(input_dim + 6, d_model),  # input_dim=1659, +6 for handedness one-hot
+            nn.Linear(input_dim + 6, d_model),
             nn.LayerNorm(d_model),
             nn.Dropout(dropout)
         )
@@ -293,8 +242,8 @@ class SignLanguageTranslator(nn.Module):
         handedness_onehot = torch.nn.functional.one_hot(handedness, num_classes=3).float()
         handedness_onehot = handedness_onehot.view(handedness.shape[0], handedness.shape[1], -1)
 
-        x = torch.cat([src, handedness_onehot], dim=2)  # 1659 + 6 = 1665
-        x = self.input_proj(x)  # Projects from 1665 to d_model
+        x = torch.cat([src, handedness_onehot], dim=2)
+        x = self.input_proj(x)
 
         # Temporal convolution
         x_conv = self.temporal_conv(x.transpose(1, 2)).transpose(1, 2)
@@ -332,14 +281,6 @@ class AdvancedTemporalAugmentation:
     def __call__(self, landmarks, handedness=None):
         """
         Apply temporal augmentation to landmarks and optionally handedness.
-
-        Args:
-            landmarks: [T, F] numpy array
-            handedness: [T, 2] numpy array (optional)
-
-        Returns:
-            landmarks: augmented landmarks
-            handedness: augmented handedness (if provided)
         """
         if np.random.random() > self.prob:
             if handedness is not None:
@@ -359,11 +300,11 @@ class AdvancedTemporalAugmentation:
         if handedness is not None:
             handedness = handedness[indices]
 
-        # Stronger spatial noise (only to landmarks, not handedness)
+        # Stronger spatial noise (only to landmarks)
         noise = np.random.normal(0, 0.015, landmarks.shape)
         landmarks = landmarks + noise
 
-        # Random frame dropout (remove 5-10% of frames randomly)
+        # Random frame dropout
         if np.random.random() < 0.3:
             keep_ratio = np.random.uniform(0.9, 0.95)
             mask = np.random.rand(landmarks.shape[0]) < keep_ratio
@@ -377,13 +318,147 @@ class AdvancedTemporalAugmentation:
         return landmarks
 
 
+# ==================== STRATEGY 1: WEIGHTED SAMPLING ====================
+
+def create_balanced_sampler(dataset):
+    """
+    Create a weighted sampler to balance class distribution during training.
+    """
+    class_counts = {}
+    sample_classes = []
+
+    for sample_path in tqdm(dataset.samples, desc="Analyzing class distribution"):
+        data = np.load(sample_path, allow_pickle=True)
+        gloss = str(data['glosses'][0]) if len(data['glosses']) > 0 else '<unk>'
+
+        sample_classes.append(gloss)
+        class_counts[gloss] = class_counts.get(gloss, 0) + 1
+
+    # Calculate weights: inverse frequency
+    class_weights = {cls: 1.0 / count for cls, count in class_counts.items()}
+    sample_weights = [class_weights[cls] for cls in sample_classes]
+
+    # Print statistics
+    print("\n" + "=" * 70)
+    print("CLASS DISTRIBUTION ANALYSIS")
+    print("=" * 70)
+    print(f"Total classes: {len(class_counts)}")
+    print(f"Total samples: {len(sample_classes)}")
+
+    sorted_classes = sorted(class_counts.items(), key=lambda x: x[1], reverse=True)
+    print(f"\nTop 10 most frequent classes:")
+    for cls, count in sorted_classes[:10]:
+        print(f"  {cls}: {count} samples ({count / len(sample_classes) * 100:.2f}%)")
+
+    print(f"\nTop 10 least frequent classes:")
+    for cls, count in sorted_classes[-10:]:
+        print(f"  {cls}: {count} samples ({count / len(sample_classes) * 100:.2f}%)")
+    print("=" * 70 + "\n")
+
+    sampler = WeightedRandomSampler(
+        weights=sample_weights,
+        num_samples=len(sample_weights),
+        replacement=True
+    )
+
+    return sampler, class_counts
+
+
+# ==================== STRATEGY 2: FOCAL LOSS ====================
+
+class FocalCTCLoss(nn.Module):
+    """Focal CTC Loss: Down-weights easy examples, focuses on hard ones"""
+
+    def __init__(self, blank=1, gamma=2.0, alpha=0.25, zero_infinity=True):
+        super().__init__()
+        self.blank = blank
+        self.gamma = gamma
+        self.alpha = alpha
+        self.zero_infinity = zero_infinity
+        self.ctc = CTCLoss(blank=blank, reduction='none', zero_infinity=zero_infinity)
+
+    def forward(self, log_probs, targets, input_lengths, target_lengths):
+        # Get CTC loss per sample
+        ctc_loss = self.ctc(log_probs, targets, input_lengths, target_lengths)
+
+        # Apply focal weight
+        p_t = torch.exp(-ctc_loss)
+        focal_weight = (1 - p_t) ** self.gamma
+        focal_loss = self.alpha * focal_weight * ctc_loss
+
+        return focal_loss.mean()
+
+
+# ==================== STRATEGY 3: CLASS-AWARE AUGMENTATION ====================
+
+class ClassAwareAugmentation:
+    """Apply stronger augmentation to rare classes"""
+
+    def __init__(self, class_counts, rare_threshold=10):
+        self.class_counts = class_counts
+        self.rare_threshold = rare_threshold
+        self.strong_aug = AdvancedTemporalAugmentation(prob=0.95)
+        self.normal_aug = AdvancedTemporalAugmentation(prob=0.8)
+
+    def __call__(self, landmarks, handedness, gloss):
+        is_rare = self.class_counts.get(gloss, 0) <= self.rare_threshold
+
+        if is_rare:
+            return self.strong_aug(landmarks, handedness)
+        else:
+            return self.normal_aug(landmarks, handedness)
+
+
+# ==================== STRATEGY 4: OVERSAMPLING ====================
+
+def create_oversampled_samples(samples, target_min_samples=15):
+    """
+    Oversample rare classes by duplicating their samples.
+    """
+    class_to_samples = {}
+
+    for sample_path in tqdm(samples, desc="Analyzing for oversampling"):
+        data = np.load(sample_path, allow_pickle=True)
+        gloss = str(data['glosses'][0]) if len(data['glosses']) > 0 else '<unk>'
+
+        if gloss not in class_to_samples:
+            class_to_samples[gloss] = []
+        class_to_samples[gloss].append(sample_path)
+
+    new_samples = []
+    oversampled_classes = []
+
+    for gloss, class_samples in class_to_samples.items():
+        num_samples = len(class_samples)
+
+        if num_samples < target_min_samples:
+            repeats = (target_min_samples + num_samples - 1) // num_samples
+            oversampled = class_samples * repeats
+            oversampled = oversampled[:target_min_samples]
+            new_samples.extend(oversampled)
+            oversampled_classes.append(f"{gloss}: {num_samples} → {len(oversampled)}")
+        else:
+            new_samples.extend(class_samples)
+
+    if oversampled_classes:
+        print("\n" + "=" * 70)
+        print("OVERSAMPLED CLASSES")
+        print("=" * 70)
+        for info in oversampled_classes[:20]:  # Show first 20
+            print(f"  {info}")
+        if len(oversampled_classes) > 20:
+            print(f"  ... and {len(oversampled_classes) - 20} more")
+        print("=" * 70 + "\n")
+
+    print(f"Total samples after oversampling: {len(samples)} → {len(new_samples)}\n")
+
+    return new_samples
+
+
 # ==================== DECODING ====================
 
 def decode_predictions_greedy(ctc_output, lengths, idx_to_gloss, blank_id=1):
-    """
-    Fast greedy CTC decoding (original approach).
-    Use this during training for speed.
-    """
+    """Fast greedy CTC decoding"""
     batch_size = ctc_output.size(0)
     predictions = torch.argmax(ctc_output, dim=-1)
 
@@ -391,7 +466,6 @@ def decode_predictions_greedy(ctc_output, lengths, idx_to_gloss, blank_id=1):
     for i in range(batch_size):
         pred = predictions[i, :lengths[i]]
 
-        # Remove blanks and repeated tokens
         pred_seq = []
         prev = None
         for p in pred:
@@ -400,7 +474,6 @@ def decode_predictions_greedy(ctc_output, lengths, idx_to_gloss, blank_id=1):
                 pred_seq.append(p)
             prev = p
 
-        # Convert to glosses
         glosses = [idx_to_gloss.get(p, '<unk>') for p in pred_seq]
         decoded.append(glosses)
 
@@ -409,19 +482,7 @@ def decode_predictions_greedy(ctc_output, lengths, idx_to_gloss, blank_id=1):
 
 def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
                               beam_width=30, confidence_threshold=0.4, use_length_penalty=True):
-    """
-    Hybrid decoding: Beam search + confidence filtering + length penalty.
-    Best balance between accuracy and efficiency (use for final evaluation only).
-
-    Args:
-        ctc_output: [B, T, C] tensor of CTC logits
-        lengths: [B] tensor of sequence lengths
-        idx_to_gloss: dict mapping index to gloss string
-        blank_id: ID of blank token (default 1)
-        beam_width: number of beams to keep (default 30)
-        confidence_threshold: minimum confidence to keep prediction (default 0.4)
-        use_length_penalty: whether to penalize very short sequences (default True)
-    """
+    """Hybrid decoding: Beam search + confidence filtering"""
     batch_size = ctc_output.size(0)
     log_probs = F.log_softmax(ctc_output, dim=-1)
     max_probs = torch.max(F.softmax(ctc_output, dim=-1), dim=-1)[0]
@@ -433,15 +494,12 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
         probs = log_probs[batch_idx, :seq_len, :]
         conf = max_probs[batch_idx, :seq_len]
 
-        # Beam: (prefix_tuple, score, length) - always use tuple for prefix
         beam = [(tuple(), 0.0, 0)]
 
         for t in range(len(probs)):
             new_beam = {}
 
-            # Skip low-confidence frames
             if conf[t].item() < confidence_threshold:
-                # Keep the prefix with small penalty
                 for prefix, score, length in beam:
                     key = (prefix, length)
                     if key not in new_beam:
@@ -458,7 +516,6 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
                     else:
                         gloss = idx_to_gloss.get(c_idx, '<unk>')
 
-                        # Don't add consecutive duplicates
                         if len(prefix) > 0 and prefix[-1] == gloss:
                             new_prefix = prefix
                             new_length = length
@@ -466,14 +523,11 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
                             new_prefix = prefix + (gloss,)
                             new_length = length + 1
 
-                    # Score components
                     ctc_score = probs[t, c_idx].item()
                     length_penalty = 0.0
 
-                    if use_length_penalty:
-                        # Penalize very short sequences
-                        if new_length == 0:
-                            length_penalty = -0.1
+                    if use_length_penalty and new_length == 0:
+                        length_penalty = -0.1
 
                     new_score = score + ctc_score + length_penalty
 
@@ -481,7 +535,6 @@ def decode_predictions_hybrid(ctc_output, lengths, idx_to_gloss, blank_id=1,
                     if key not in new_beam or new_beam[key] < new_score:
                         new_beam[key] = new_score
 
-            # Keep top beams
             beam = [(p, s, l) for (p, l), s in sorted(new_beam.items(), key=lambda x: x[1], reverse=True)[:beam_width]]
 
         best_seq = beam[0][0] if beam else tuple()
@@ -553,27 +606,22 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     num_batches = 0
 
     pbar = tqdm(train_loader, desc="Training")
-    # FIX: Add handedness to unpacking
     for batch_idx, (landmarks, landmark_lengths, handedness, glosses, gloss_lengths) in enumerate(pbar):
         landmarks = landmarks.to(device)
-        handedness = handedness.to(device)  # Add this line
+        handedness = handedness.to(device)
         glosses = glosses.to(device)
         landmark_lengths = landmark_lengths.to(device)
         gloss_lengths = gloss_lengths.to(device)
 
         optimizer.zero_grad()
 
-        # Forward pass - FIX: Pass handedness
         ctc_logits = model(landmarks, handedness, landmark_lengths)
 
-        # CTC loss expects [T, B, C] format and log probabilities
         ctc_logits = ctc_logits.transpose(0, 1)
         log_probs = F.log_softmax(ctc_logits, dim=-1)
 
-        # Calculate CTC loss
         loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
 
-        # Backward pass
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         optimizer.step()
@@ -584,7 +632,6 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
 
         pbar.set_postfix({'loss': f'{loss.item():.4f}'})
 
-        # Log batch loss to MLflow
         if batch_idx % 50 == 0:
             step = epoch * len(train_loader) + batch_idx
             mlflow.log_metric("batch_loss", loss.item(), step=step)
@@ -592,13 +639,8 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     return total_loss / num_batches
 
 
-
 def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False):
-    """
-    Validate the model.
-    use_beam_search=False for fast training validation (greedy)
-    use_beam_search=True for final evaluation (hybrid beam search)
-    """
+    """Validate the model"""
     model.eval()
     total_loss = 0
     num_batches = 0
@@ -607,18 +649,15 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
-        # FIX: Add handedness to unpacking
         for landmarks, landmark_lengths, handedness, glosses, gloss_lengths in pbar:
             landmarks = landmarks.to(device)
-            handedness = handedness.to(device)  # Add this line
+            handedness = handedness.to(device)
             glosses = glosses.to(device)
             landmark_lengths = landmark_lengths.to(device)
             gloss_lengths = gloss_lengths.to(device)
 
-            # Forward pass - FIX: Pass handedness
             ctc_logits = model(landmarks, handedness, landmark_lengths)
 
-            # Calculate loss
             ctc_logits_t = ctc_logits.transpose(0, 1)
             log_probs = F.log_softmax(ctc_logits_t, dim=-1)
             loss = criterion(log_probs, glosses, landmark_lengths, gloss_lengths)
@@ -626,28 +665,17 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
             total_loss += loss.item()
             num_batches += 1
 
-            # Choose decoder based on setting
             if use_beam_search:
-                # Slow but more accurate (for final evaluation)
                 predictions = decode_predictions_hybrid(
-                    ctc_logits,
-                    landmark_lengths,
-                    idx_to_gloss,
-                    blank_id=1,
-                    beam_width=30,
-                    confidence_threshold=0.4,
+                    ctc_logits, landmark_lengths, idx_to_gloss,
+                    blank_id=1, beam_width=30, confidence_threshold=0.4,
                     use_length_penalty=True
                 )
             else:
-                # Fast greedy decoder (for training validation)
                 predictions = decode_predictions_greedy(
-                    ctc_logits,
-                    landmark_lengths,
-                    idx_to_gloss,
-                    blank_id=1
+                    ctc_logits, landmark_lengths, idx_to_gloss, blank_id=1
                 )
 
-            # Convert targets to glosses
             for i in range(glosses.size(0)):
                 target = glosses[i, :gloss_lengths[i]].cpu().numpy()
                 target_glosses = [idx_to_gloss.get(int(t), '<unk>') for t in target]
@@ -662,12 +690,13 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
     return avg_loss, wer
 
 
-
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
-    """Full training loop with fixed scheduler and fast greedy validation"""
+    """Full training loop"""
     os.makedirs(save_dir, exist_ok=True)
 
     criterion = CTCLoss(blank=1, zero_infinity=True)
+    # Uncomment for Focal Loss (Strategy 2):
+    # criterion = FocalCTCLoss(blank=1, gamma=2.0, alpha=0.25, zero_infinity=True)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -697,16 +726,13 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
         print(f"Epoch {epoch + 1}/{num_epochs}")
         print(f"{'=' * 50}")
 
-        # Train
         train_loss = train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch, scheduler)
         print(f"Train Loss: {train_loss:.4f}")
 
-        # Validate with GREEDY decoder (fast) during training
         val_loss, val_wer = validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False)
         print(f"Val Loss: {val_loss:.4f}, Val WER: {val_wer:.4f} (greedy decoder - fast)")
         print(f"Learning Rate: {optimizer.param_groups[0]['lr']:.6f}")
 
-        # Log metrics
         mlflow.log_metrics({
             "train_loss": train_loss,
             "val_loss": val_loss,
@@ -714,7 +740,6 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
             "learning_rate": optimizer.param_groups[0]['lr']
         }, step=epoch)
 
-        # Save best model based on greedy WER
         if val_wer < best_wer:
             best_wer = val_wer
             checkpoint = {
@@ -728,7 +753,6 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
             print(f"✓ Saved best model with WER: {best_wer:.4f}")
             mlflow.log_metric("best_wer", best_wer)
 
-        # Early stopping
         if early_stopping(val_wer, epoch):
             break
 
@@ -736,10 +760,7 @@ def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_
 
 
 def evaluate_with_beam_search(model, val_loader, criterion, device, vocab, idx_to_gloss):
-    """
-    Final evaluation with slow beam search decoder.
-    Run this AFTER training to get accurate WER with hybrid decoder.
-    """
+    """Final evaluation with beam search decoder"""
     print("\n" + "=" * 70)
     print("FINAL EVALUATION WITH BEAM SEARCH DECODER")
     print("=" * 70)
@@ -759,12 +780,10 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     print("MODEL SUMMARY")
     print("=" * 70)
 
-    # Create dummy input - landmarks only (handedness added in model)
     dummy_input = torch.randn(batch_size, seq_length, input_dim).to(device)
     dummy_lengths = torch.tensor([seq_length] * batch_size).to(device)
     dummy_handedness = torch.randint(0, 3, (batch_size, seq_length, 2)).to(device)
 
-    # Get torchinfo summary
     model_stats = summary(
         model,
         input_data=(dummy_input, dummy_handedness, dummy_lengths),
@@ -776,17 +795,14 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
 
     print(model_stats)
 
-    # Additional statistics
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     non_trainable_params = total_params - trainable_params
 
-    # Calculate model size in MB
     param_size = sum(p.numel() * p.element_size() for p in model.parameters())
     buffer_size = sum(b.numel() * b.element_size() for b in model.buffers())
     size_mb = (param_size + buffer_size) / 1024 ** 2
 
-    # FIX: Pass all 3 required arguments to model
     with torch.no_grad():
         output = model(dummy_input, dummy_handedness, dummy_lengths)
 
@@ -817,24 +833,58 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     return summary_str, summary_dict
 
 
+def split_dataset(landmarks_dir, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15, seed=42):
+    """Split dataset into train, validation, and test sets"""
+    assert abs(train_ratio + val_ratio + test_ratio - 1.0) < 1e-6, "Ratios must sum to 1.0"
+
+    all_samples = sorted(glob.glob(os.path.join(landmarks_dir, "*.npz")))
+
+    print(f"\nDataset Split Configuration:")
+    print(f"{'=' * 50}")
+    print(f"Total samples: {len(all_samples)}")
+    print(f"Train ratio: {train_ratio:.1%}")
+    print(f"Val ratio: {val_ratio:.1%}")
+    print(f"Test ratio: {test_ratio:.1%}")
+    print(f"Random seed: {seed}")
+
+    random.seed(seed)
+    random.shuffle(all_samples)
+
+    n_total = len(all_samples)
+    n_train = int(n_total * train_ratio)
+    n_val = int(n_total * val_ratio)
+
+    train_samples = all_samples[:n_train]
+    val_samples = all_samples[n_train:n_train + n_val]
+    test_samples = all_samples[n_train + n_val:]
+
+    print(f"\nSplit Results:")
+    print(f"{'=' * 50}")
+    print(f"Train samples: {len(train_samples)} ({len(train_samples) / n_total:.1%})")
+    print(f"Val samples: {len(val_samples)} ({len(val_samples) / n_total:.1%})")
+    print(f"Test samples: {len(test_samples)} ({len(test_samples) / n_total:.1%})")
+    print(f"{'=' * 50}\n")
+
+    return train_samples, val_samples, test_samples
+
 
 # ==================== MAIN ====================
 
 def main():
     # Configuration
-    LANDMARKS_DIR = "./word_landmarks_extracted"  # Single directory with all data
+    LANDMARKS_DIR = "./word_landmarks_extracted"
     VOCAB_FILE = "vocab.json"
     BATCH_SIZE = 16
     NUM_EPOCHS = 150
-    INPUT_DIM = 1659  # 126 hand + 1434 face + 99 pose (handedness is separate)
+    INPUT_DIM = 1659
 
     # Dataset split ratios
-    TRAIN_RATIO = 0.7  # 70% for training
-    VAL_RATIO = 0.15  # 15% for validation
-    TEST_RATIO = 0.15  # 15% for testing
-    SPLIT_SEED = 42  # For reproducibility
+    TRAIN_RATIO = 0.7
+    VAL_RATIO = 0.15
+    TEST_RATIO = 0.15
+    SPLIT_SEED = 42
 
-    # Smaller model with aggressive regularization
+    # Model configuration
     D_MODEL = 384
     NHEAD = 8
     NUM_LAYERS = 6
@@ -843,9 +893,15 @@ def main():
     LEARNING_RATE = 2e-4
     WEIGHT_DECAY = 2e-4
 
+    # CLASS IMBALANCE STRATEGIES - CONFIGURE HERE
+    USE_WEIGHTED_SAMPLING = True  # Strategy 1: Recommended!
+    USE_FOCAL_LOSS = False  # Strategy 2: Set True to use focal loss
+    USE_OVERSAMPLING = True  # Strategy 4: Oversample rare classes
+    OVERSAMPLE_TARGET = 15  # Minimum samples per class after oversampling
+
     # MLflow configuration
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = "transformer_ctc_word_level_single_dataset"
+    RUN_NAME = "transformer_ctc_balanced_training"
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -864,7 +920,6 @@ def main():
         mlflow.log_param("cpu_count", os.cpu_count())
         mlflow.log_param("total_ram_gb", round(psutil.virtual_memory().total / (1024 ** 3), 2))
 
-        # GPU details
         if torch.cuda.is_available():
             mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
             mlflow.log_param("gpu_count", torch.cuda.device_count())
@@ -888,11 +943,15 @@ def main():
             "decoder_training": "greedy_fast",
             "decoder_final": "hybrid_beam_search",
             "augmentation": "advanced_temporal",
-            "loss_function": "CTC",
+            "loss_function": "FocalCTC" if USE_FOCAL_LOSS else "CTC",
             "train_ratio": TRAIN_RATIO,
             "val_ratio": VAL_RATIO,
             "test_ratio": TEST_RATIO,
-            "split_seed": SPLIT_SEED
+            "split_seed": SPLIT_SEED,
+            "use_weighted_sampling": USE_WEIGHTED_SAMPLING,
+            "use_focal_loss": USE_FOCAL_LOSS,
+            "use_oversampling": USE_OVERSAMPLING,
+            "oversample_target": OVERSAMPLE_TARGET if USE_OVERSAMPLING else None
         })
 
         mlflow.log_param("device", str(device))
@@ -911,12 +970,18 @@ def main():
             seed=SPLIT_SEED
         )
 
-        # Create datasets with vocabulary built from ALL data (train+val+test)
+        # STRATEGY 4: Oversampling (optional)
+        if USE_OVERSAMPLING:
+            print("\n" + "=" * 50)
+            print("Applying Oversampling Strategy")
+            print("=" * 50)
+            train_samples = create_oversampled_samples(train_samples, target_min_samples=OVERSAMPLE_TARGET)
+
+        # Build vocabulary from ALL data
         print("\n" + "=" * 50)
         print("Building Vocabulary from ALL Data")
         print("=" * 50)
 
-        # First, build vocabulary from all samples
         all_samples = train_samples + val_samples + test_samples
         vocab_builder_dataset = LandmarkDataset(
             samples_list=all_samples,
@@ -925,7 +990,7 @@ def main():
             augment=False
         )
 
-        # Now create train/val/test datasets with the built vocabulary
+        # Create train/val/test datasets
         print("\n" + "=" * 50)
         print("Loading Train/Val/Test Datasets")
         print("=" * 50)
@@ -934,7 +999,7 @@ def main():
             samples_list=train_samples,
             vocab_file=VOCAB_FILE,
             build_vocab=False,
-            augment=True  # Augmentation only for training
+            augment=True
         )
 
         val_dataset = LandmarkDataset(
@@ -962,14 +1027,39 @@ def main():
         mlflow.log_artifact(VOCAB_FILE)
 
         use_pin_memory = torch.cuda.is_available()
-        train_loader = DataLoader(
-            train_dataset,
-            batch_size=BATCH_SIZE,
-            shuffle=True,
-            collate_fn=collate_fn,
-            num_workers=4,
-            pin_memory=use_pin_memory
-        )
+
+        # STRATEGY 1: Weighted Sampling (optional)
+        if USE_WEIGHTED_SAMPLING:
+            print("\n" + "=" * 50)
+            print("Creating Balanced Sampler (Strategy 1)")
+            print("=" * 50)
+
+            train_sampler, class_counts = create_balanced_sampler(train_dataset)
+
+            mlflow.log_params({
+                "num_classes": len(class_counts),
+                "min_class_samples": min(class_counts.values()),
+                "max_class_samples": max(class_counts.values()),
+                "avg_samples_per_class": np.mean(list(class_counts.values()))
+            })
+
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=BATCH_SIZE,
+                sampler=train_sampler,
+                collate_fn=collate_fn,
+                num_workers=4,
+                pin_memory=use_pin_memory
+            )
+        else:
+            train_loader = DataLoader(
+                train_dataset,
+                batch_size=BATCH_SIZE,
+                shuffle=True,
+                collate_fn=collate_fn,
+                num_workers=4,
+                pin_memory=use_pin_memory
+            )
 
         val_loader = DataLoader(
             val_dataset,
@@ -1024,7 +1114,7 @@ def main():
                 f.write(f"{key}: {value}\n")
         mlflow.log_artifact(model_summary_path)
 
-        # Train model with FAST greedy decoder
+        # Train model
         print("\n" + "=" * 50)
         print("Starting Training")
         print("=" * 50)
@@ -1048,7 +1138,7 @@ def main():
         model.load_state_dict(checkpoint['model_state_dict'])
         print("✓ Loaded best model for final evaluation")
 
-        # Final evaluation with SLOW hybrid beam search decoder on VALIDATION set
+        # Final evaluation with beam search
         print("\n" + "=" * 70)
         print("FINAL VALIDATION EVALUATION (Beam Search)")
         print("=" * 70)
@@ -1062,7 +1152,6 @@ def main():
             train_dataset.idx_to_gloss
         )
 
-        # Final evaluation on TEST set
         print("\n" + "=" * 70)
         print("FINAL TEST EVALUATION (Beam Search)")
         print("=" * 70)
@@ -1073,38 +1162,4 @@ def main():
             CTCLoss(blank=1, zero_infinity=True),
             device,
             train_dataset.gloss_vocab,
-            train_dataset.idx_to_gloss
-        )
-
-        # Log all final metrics
-        mlflow.log_metric("final_best_wer_greedy", best_wer_greedy)
-        mlflow.log_metric("final_val_wer_beam_search", val_wer_beam)
-        mlflow.log_metric("final_test_wer_beam_search", test_wer_beam)
-        mlflow.log_metric("val_wer_improvement_percent",
-                          ((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100)
-
-        print(f"\n{'=' * 70}")
-        print("FINAL RESULTS SUMMARY")
-        print(f"{'=' * 70}")
-        print(f"Best Validation WER (Greedy):      {best_wer_greedy:.4f}")
-        print(f"Final Validation WER (Beam):       {val_wer_beam:.4f}")
-        print(f"Final Test WER (Beam):             {test_wer_beam:.4f}")
-        print(f"Improvement (Val Greedy→Beam):     {((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100:.2f}%")
-        print(f"{'=' * 70}\n")
-
-        # Save model
-        mlflow.pytorch.log_model(model, "model")
-
-        mlflow.set_tags({
-            "model_type": "transformer",
-            "task": "sign_language_translation",
-            "dataset": "custom_word_level",
-            "decoder_training": "greedy",
-            "decoder_final": "hybrid_beam_search",
-            "status": "completed"
-        })
-
-
-if __name__ == "__main__":
-    main()
-
+            train_dataset.idx_

@@ -1162,4 +1162,38 @@ def main():
             CTCLoss(blank=1, zero_infinity=True),
             device,
             train_dataset.gloss_vocab,
-            train_dataset.idx_
+            train_dataset.idx_to_gloss
+        )
+
+        # Log final metrics
+        mlflow.log_metric("final_best_wer_greedy", best_wer_greedy)
+        mlflow.log_metric("final_val_wer_beam_search", val_wer_beam)
+        mlflow.log_metric("final_test_wer_beam_search", test_wer_beam)
+        mlflow.log_metric("val_wer_improvement_percent",
+                          ((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100)
+
+        print(f"\n{'=' * 70}")
+        print("FINAL RESULTS SUMMARY")
+        print(f"{'=' * 70}")
+        print(f"Best Validation WER (Greedy):      {best_wer_greedy:.4f}")
+        print(f"Final Validation WER (Beam):       {val_wer_beam:.4f}")
+        print(f"Final Test WER (Beam):             {test_wer_beam:.4f}")
+        print(f"Improvement (Val Greedy→Beam):     {((best_wer_greedy - val_wer_beam) / best_wer_greedy) * 100:.2f}%")
+        print(f"{'=' * 70}\n")
+
+        # Save model
+        mlflow.pytorch.log_model(model, "model")
+
+        mlflow.set_tags({
+            "model_type": "transformer",
+            "task": "sign_language_translation",
+            "dataset": "custom_word_level",
+            "decoder_training": "greedy",
+            "decoder_final": "hybrid_beam_search",
+            "class_balancing": "weighted_sampling" if USE_WEIGHTED_SAMPLING else "none",
+            "status": "completed"
+        })
+
+
+if __name__ == "__main__":
+    main()

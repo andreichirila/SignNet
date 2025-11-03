@@ -448,10 +448,10 @@ def main():
     # HYPERPARAMETERS
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    BATCH_SIZE = 32
+    BATCH_SIZE = 64
     LEARNING_RATE = 1e-3
     NUM_EPOCHS = 150
-    HIDDEN_SIZE = 128
+    HIDDEN_SIZE = 256
     NUM_LAYERS = 2
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models"

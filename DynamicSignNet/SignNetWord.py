@@ -16,6 +16,75 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 
 
+class EarlyStopping:
+    """
+    Early stopping to prevent overfitting.
+    Monitors validation loss/accuracy and stops training if no improvement.
+    """
+    def __init__(self, patience=10, min_delta=0.001, metric="loss", mode="min"):
+        """
+        Args:
+            patience: Number of epochs with no improvement after which training stops
+            min_delta: Minimum change to qualify as an improvement
+            metric: "loss" or "accuracy" - which metric to monitor
+            mode: "min" for loss, "max" for accuracy
+        """
+        self.patience = patience
+        self.min_delta = min_delta
+        self.metric = metric
+        self.mode = mode
+        self.counter = 0
+        self.best_score = None
+        self.best_epoch = 0
+        self.early_stop = False
+
+        if mode == "min":
+            self.best_score = float('inf')
+        else:
+            self.best_score = -float('inf')
+
+    def __call__(self, current_score, epoch):
+        """
+        Check if training should stop.
+
+        Args:
+            current_score: Current validation loss or accuracy
+            epoch: Current epoch number
+
+        Returns:
+            True if training should stop, False otherwise
+        """
+        improved = False
+
+        if self.mode == "min":
+            # For loss: lower is better
+            if current_score < (self.best_score - self.min_delta):
+                improved = True
+                self.best_score = current_score
+                self.best_epoch = epoch
+                self.counter = 0
+        else:
+            # For accuracy: higher is better
+            if current_score > (self.best_score + self.min_delta):
+                improved = True
+                self.best_score = current_score
+                self.best_epoch = epoch
+                self.counter = 0
+
+        if not improved:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+                print(f"\n[EARLY STOPPING] No improvement for {self.patience} epochs")
+                print(f"  Best {self.metric}: {self.best_score:.4f} at epoch {self.best_epoch + 1}")
+                return True
+        else:
+            if improved:
+                print(f"  ✓ Best {self.metric} improved to {self.best_score:.4f}")
+
+        return False
+
+
 class SignLanguageDataset(Dataset):
     """
     Load preprocessed landmarks from NPZ files.
@@ -72,7 +141,7 @@ class SignLanguageDataset(Dataset):
 class RemappedDataset(torch.utils.data.Dataset):
     """
     Wraps a dataset and remaps labels from original indices to new indices.
-    Used to convert top-5 word indices to 0-4 range.
+    Used to convert top-N word indices to 0-(N-1) range.
     """
     def __init__(self, dataset, indices, remapping):
         self.dataset = dataset
@@ -180,7 +249,7 @@ class PadCollate:
             print(f"  Batch size: {len(batch)}")
             print(f"  Sequence lengths: min={seq_lengths.min()}, max={seq_lengths.max()}, mean={seq_lengths.float().mean():.1f}")
             print(f"  Padded shape: {landmarks_padded.shape}")
-            print(f"  Labels (should be 0-4): {labels.tolist()}")
+            print(f"  Labels (should be 0-{len(set(labels.tolist()))-1}): {labels.tolist()}")
 
         return landmarks_padded, labels, seq_lengths
 
@@ -316,7 +385,7 @@ def plot_training_curves(train_losses, val_losses, train_accs, val_accs, save_di
     return plot_path
 
 
-def log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_5_words, best_epoch, best_val_acc):
+def log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_n_words, best_epoch, best_val_acc):
     """Log comprehensive summary metrics to MLflow."""
 
     # Overall statistics
@@ -359,9 +428,9 @@ def log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_5_wo
 
 
 def main():
-    """Main training pipeline with MLflow tracking."""
+    """Main training pipeline with MLflow tracking and early stopping."""
     print("=" * 80)
-    print("SIGN LANGUAGE TRANSLATION - TOP 10 WORDS CLASSIFIER (WITH MLFLOW)")
+    print("SIGN LANGUAGE TRANSLATION - TOP N WORDS CLASSIFIER (WITH EARLY STOPPING)")
     print("=" * 80)
 
     # ============================================================================
@@ -382,18 +451,26 @@ def main():
     BATCH_SIZE = 32
     LEARNING_RATE = 1e-3
     NUM_EPOCHS = 150
-    HIDDEN_SIZE = 128  # Reduced for better generalization
-    NUM_LAYERS = 2     # Reduced for better generalization
+    HIDDEN_SIZE = 128
+    NUM_LAYERS = 2
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models"
     PLOTS_DIR = "./plots"
 
+    # Early stopping configuration
+    EARLY_STOPPING_PATIENCE = 15  # Stop if no improvement for 15 epochs
+    EARLY_STOPPING_MIN_DELTA = 0.001  # Minimum improvement threshold
+    EARLY_STOPPING_METRIC = "loss"  # Monitor "loss" or "accuracy"
+    EARLY_STOPPING_MODE = "min"  # "min" for loss, "max" for accuracy
+
     print(f"\n[CONFIG] Device: {DEVICE}")
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")
     print(f"[CONFIG] Learning rate: {LEARNING_RATE}")
-    print(f"[CONFIG] Num epochs: {NUM_EPOCHS}")
+    print(f"[CONFIG] Max epochs: {NUM_EPOCHS}")
     print(f"[CONFIG] Hidden size: {HIDDEN_SIZE}")
     print(f"[CONFIG] Num LSTM layers: {NUM_LAYERS}")
+    print(f"[CONFIG] Early Stopping Patience: {EARLY_STOPPING_PATIENCE} epochs")
+    print(f"[CONFIG] Early Stopping Metric: {EARLY_STOPPING_METRIC}")
 
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
@@ -426,6 +503,9 @@ def main():
             "optimizer": "Adam",
             "scheduler": "ReduceLROnPlateau",
             "loss_function": "CrossEntropyLoss",
+            "early_stopping_patience": EARLY_STOPPING_PATIENCE,
+            "early_stopping_metric": EARLY_STOPPING_METRIC,
+            "early_stopping_min_delta": EARLY_STOPPING_MIN_DELTA,
             "device": str(DEVICE),
         })
 
@@ -445,21 +525,19 @@ def main():
             word = dataset.idx_to_word[label.item()]
             word_counts[word] += 1
 
-        top_10_words = [word for word, _ in word_counts.most_common(10)]
-        print(f"  Top 10 words: {top_10_words}")
-        for word, count in word_counts.most_common(5):
-            print(f"    {word:20} : {count:4} samples")
+        top_n_words = [word for word, _ in word_counts.most_common(10)]
+        print(f"  Top 10 words: {top_n_words}")
+        for idx, (word, count) in enumerate(word_counts.most_common(10)):
+            print(f"    {idx+1:2}. {word:20} : {count:4} samples")
 
         # ========================================================================
-        # STEP 3: Filter to top 5 words
+        # STEP 3: Filter to top N words
         # ========================================================================
-        print(f"\n[STEP 3] Filtering to top 5 words...")
+        print(f"\n[STEP 3] Filtering to top {len(top_n_words)} words...")
         old_to_new_idx = {}
-        for new_idx, word in enumerate(top_10_words):
+        for new_idx, word in enumerate(top_n_words):
             old_idx = dataset.word_to_idx[word]
             old_to_new_idx[old_idx] = new_idx
-
-        print(f"  Label remapping: {old_to_new_idx}")
 
         filtered_indices = []
         for i in range(len(dataset)):
@@ -494,16 +572,17 @@ def main():
         val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
 
         # Check class distribution
-        train_label_counts = [0, 0, 0, 0, 0, 0,0,0,0,0]
+        num_classes = len(top_n_words)
+        train_label_counts = [0] * num_classes
         for idx in range(len(train_subset)):
             _, label = train_subset[idx]
             train_label_counts[label.item()] += 1
 
         print(f"\n  Training set distribution:")
-        for new_idx, word in enumerate(top_10_words):
+        for new_idx, word in enumerate(top_n_words):
             count = train_label_counts[new_idx]
             percentage = 100 * count / len(train_subset) if len(train_subset) > 0 else 0
-            print(f"    Label {new_idx}: {word:20} : {count:4} samples ({percentage:5.1f}%)")
+            print(f"    Label {new_idx:2}: {word:20} : {count:4} samples ({percentage:5.1f}%)")
             mlflow.log_param(f"train_class_{new_idx}_count", count)
 
         # ========================================================================
@@ -531,13 +610,13 @@ def main():
             "val_batches": len(val_loader),
             "total_train_samples": len(train_subset),
             "total_val_samples": len(val_subset),
+            "num_classes": num_classes,
         })
 
         # ========================================================================
         # STEP 6: Build model
         # ========================================================================
         print(f"\n[STEP 6] Building model...")
-        num_classes = len(top_10_words)
         model = LSTMSignClassifier(
             input_size=1659,
             hidden_size=HIDDEN_SIZE,
@@ -546,13 +625,11 @@ def main():
             debug=True
         ).to(DEVICE)
 
-        # Log model parameters
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
         mlflow.log_params({
             "total_parameters": total_params,
             "trainable_parameters": trainable_params,
-            "model_class": "LSTMSignClassifier",
         })
 
         # ========================================================================
@@ -565,10 +642,26 @@ def main():
             optimizer, mode='min', factor=0.5, patience=5
         )
 
+        # Initialize early stopping
+        if EARLY_STOPPING_METRIC == "loss":
+            early_stopping = EarlyStopping(
+                patience=EARLY_STOPPING_PATIENCE,
+                min_delta=EARLY_STOPPING_MIN_DELTA,
+                metric="validation loss",
+                mode="min"
+            )
+        else:
+            early_stopping = EarlyStopping(
+                patience=EARLY_STOPPING_PATIENCE,
+                min_delta=EARLY_STOPPING_MIN_DELTA,
+                metric="validation accuracy",
+                mode="max"
+            )
+
         # ========================================================================
         # STEP 8: Training loop
         # ========================================================================
-        print(f"\n[STEP 8] Starting training...")
+        print(f"\n[STEP 8] Starting training with early stopping...")
         print("=" * 80)
 
         best_val_acc = 0
@@ -591,8 +684,9 @@ def main():
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 best_epoch = epoch
-                best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_top5_best.pth")
+                best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best.pth")
                 torch.save(model.state_dict(), best_model_path)
+                print(f"  💾 Saved best model")
 
             train_losses.append(train_loss)
             val_losses.append(val_loss)
@@ -600,7 +694,7 @@ def main():
             val_accs.append(val_acc)
 
             lr = optimizer.param_groups[0]['lr']
-            print(f"Epoch {epoch+1:2}/{NUM_EPOCHS} │ "
+            print(f"Epoch {epoch+1:3}/{NUM_EPOCHS} │ "
                   f"Train Loss: {train_loss:.4f} │ Train Acc: {train_acc:.2%} │ "
                   f"Val Loss: {val_loss:.4f} │ Val Acc: {val_acc:.2%} │ "
                   f"LR: {lr:.2e}")
@@ -614,8 +708,14 @@ def main():
                 "learning_rate": lr,
             }, step=epoch)
 
-            if train_loss < 0.01 and train_acc > 0.95:
-                print(f"\n[EARLY STOP] Model converged at epoch {epoch+1}!")
+            # Check early stopping
+            if EARLY_STOPPING_METRIC == "loss":
+                should_stop = early_stopping(val_loss, epoch)
+            else:
+                should_stop = early_stopping(val_acc, epoch)
+
+            if should_stop:
+                print(f"\n[STOPPED] Training stopped at epoch {epoch+1}")
                 break
 
         # ========================================================================
@@ -623,22 +723,23 @@ def main():
         # ========================================================================
         print("\n" + "=" * 80)
         print(f"[TRAINING COMPLETE]")
+        print(f"  Total epochs trained: {len(train_losses)}")
         print(f"  Best Val Accuracy: {best_val_acc:.2%} at epoch {best_epoch+1}")
         print(f"  Final Train Loss: {train_losses[-1]:.4f}")
         print(f"  Final Val Loss: {val_losses[-1]:.4f}")
         print(f"  Final Train Acc: {train_accs[-1]:.2%}")
         print(f"  Final Val Acc: {val_accs[-1]:.2%}")
-        print(f"\n  Classes ({num_classes}): {top_10_words}")
+        print(f"\n  Classes ({num_classes}): {top_n_words}")
 
         # Generate and save plots
         print(f"\n[PLOTTING] Generating training curves...")
         plot_path = plot_training_curves(train_losses, val_losses, train_accs, val_accs, PLOTS_DIR)
 
         # Log summary metrics
-        log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_10_words, best_epoch, best_val_acc)
+        log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_n_words, best_epoch, best_val_acc)
 
         # Save models and metrics
-        final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_top5_final.pth")
+        final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final.pth")
         torch.save(model.state_dict(), final_model_path)
 
         metrics_path = os.path.join(MODEL_SAVE_DIR, "training_metrics.npz")
@@ -651,10 +752,11 @@ def main():
         )
 
         class_info = {
-            "classes": top_10_words,
+            "classes": top_n_words,
             "num_classes": num_classes,
             "best_val_acc": float(best_val_acc),
             "best_epoch": int(best_epoch),
+            "total_epochs_trained": len(train_losses),
             "label_remapping": {str(k): v for k, v in old_to_new_idx.items()}
         }
 
@@ -682,9 +784,13 @@ def main():
             "num_classes": num_classes,
             "dataset_type": "MediaPipe_Landmarks",
             "split_strategy": "Stratified",
+            "early_stopping": "enabled",
             "status": "completed",
-            "classes": ",".join(top_10_words),
+            "classes": ",".join(top_n_words),
         })
+
+        mlflow.log_metric("epochs_trained", len(train_losses))
+        mlflow.log_metric("early_stopping_patience_used", early_stopping.counter)
 
         print(f"\n  Best model: {best_model_path}")
         print(f"  Final model: {final_model_path}")

@@ -192,10 +192,16 @@ class LSTMSignClassifier(nn.Module):
         lstm_output_size = hidden_size * 2
 
         self.classifier = nn.Sequential(
-            nn.Linear(lstm_output_size, 128),
+            nn.Linear(lstm_output_size, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(0.2),  # Reduced
+
+            nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Dropout(0.5),
+            nn.Dropout(0.2),  # Reduced
+
             nn.Linear(128, num_classes)
         )
 
@@ -449,7 +455,7 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 64
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 2e-3
     NUM_EPOCHS = 150
     HIDDEN_SIZE = 256
     NUM_LAYERS = 2
@@ -458,7 +464,7 @@ def main():
     PLOTS_DIR = "./plots"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 15  # Stop if no improvement for 15 epochs
+    EARLY_STOPPING_PATIENCE = 20
     EARLY_STOPPING_MIN_DELTA = 0.001  # Minimum improvement threshold
     EARLY_STOPPING_METRIC = "loss"  # Monitor "loss" or "accuracy"
     EARLY_STOPPING_MODE = "min"  # "min" for loss, "max" for accuracy
@@ -500,7 +506,7 @@ def main():
             "hidden_size": HIDDEN_SIZE,
             "num_layers": NUM_LAYERS,
             "input_dim": 1659,
-            "optimizer": "Adam",
+            "optimizer": "AdamW",
             "scheduler": "ReduceLROnPlateau",
             "loss_function": "CrossEntropyLoss",
             "early_stopping_patience": EARLY_STOPPING_PATIENCE,
@@ -637,9 +643,16 @@ def main():
         # ========================================================================
         print(f"\n[STEP 7] Setting up training...")
         criterion = nn.CrossEntropyLoss()
-        optimizer = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
-        scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-            optimizer, mode='min', factor=0.5, patience=5
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=LEARNING_RATE,
+            weight_decay=1e-4,
+            betas=(0.9, 0.999)
+        )
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimizer,
+            T_max=200,
+            eta_min=1e-6
         )
 
         # Initialize early stopping

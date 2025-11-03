@@ -206,7 +206,7 @@ class SignLanguageTranslator(nn.Module):
 
         # Input projection
         self.input_proj = nn.Sequential(
-            nn.Linear(input_dim, d_model),
+            nn.Linear(input_dim + 6, d_model),  # input_dim=1659, +6 for handedness one-hot
             nn.LayerNorm(d_model),
             nn.Dropout(dropout)
         )
@@ -244,18 +244,12 @@ class SignLanguageTranslator(nn.Module):
         self.d_model = d_model
 
     def forward(self, src, handedness, src_lengths):
-        """
-        src: [B, T, feature_dim] landmarks
-        handedness: [B, T, 2] handedness encoded as integers or one-hot
-        """
-
-        # One-hot encode handedness if integer
+        # One-hot encode handedness
         handedness_onehot = torch.nn.functional.one_hot(handedness, num_classes=3).float()
         handedness_onehot = handedness_onehot.view(handedness.shape[0], handedness.shape[1], -1)
 
-        x = torch.cat([src, handedness_onehot], dim=2)  # concat features
-
-        x = self.input_proj(x)
+        x = torch.cat([src, handedness_onehot], dim=2)  # 1659 + 6 = 1665
+        x = self.input_proj(x)  # Projects from 1665 to d_model
 
         # Temporal convolution
         x_conv = self.temporal_conv(x.transpose(1, 2)).transpose(1, 2)
@@ -491,16 +485,18 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     num_batches = 0
 
     pbar = tqdm(train_loader, desc="Training")
-    for batch_idx, (landmarks, landmark_lengths, glosses, gloss_lengths) in enumerate(pbar):
+    # FIX: Add handedness to unpacking
+    for batch_idx, (landmarks, landmark_lengths, handedness, glosses, gloss_lengths) in enumerate(pbar):
         landmarks = landmarks.to(device)
+        handedness = handedness.to(device)  # Add this line
         glosses = glosses.to(device)
         landmark_lengths = landmark_lengths.to(device)
         gloss_lengths = gloss_lengths.to(device)
 
         optimizer.zero_grad()
 
-        # Forward pass
-        ctc_logits = model(landmarks, landmark_lengths)
+        # Forward pass - FIX: Pass handedness
+        ctc_logits = model(landmarks, handedness, landmark_lengths)
 
         # CTC loss expects [T, B, C] format and log probabilities
         ctc_logits = ctc_logits.transpose(0, 1)
@@ -528,6 +524,7 @@ def train_epoch(model, train_loader, optimizer, criterion, device, vocab, epoch,
     return total_loss / num_batches
 
 
+
 def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam_search=False):
     """
     Validate the model.
@@ -542,14 +539,16 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="Validation")
-        for landmarks, landmark_lengths, glosses, gloss_lengths in pbar:
+        # FIX: Add handedness to unpacking
+        for landmarks, landmark_lengths, handedness, glosses, gloss_lengths in pbar:
             landmarks = landmarks.to(device)
+            handedness = handedness.to(device)  # Add this line
             glosses = glosses.to(device)
             landmark_lengths = landmark_lengths.to(device)
             gloss_lengths = gloss_lengths.to(device)
 
-            # Forward pass
-            ctc_logits = model(landmarks, landmark_lengths)
+            # Forward pass - FIX: Pass handedness
+            ctc_logits = model(landmarks, handedness, landmark_lengths)
 
             # Calculate loss
             ctc_logits_t = ctc_logits.transpose(0, 1)
@@ -593,6 +592,7 @@ def validate(model, val_loader, criterion, device, vocab, idx_to_gloss, use_beam
     wer = compute_wer(all_predictions, all_targets)
 
     return avg_loss, wer
+
 
 
 def train_model(model, train_loader, val_loader, num_epochs, device, vocab, idx_to_gloss, save_dir='checkpoints'):
@@ -691,7 +691,7 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     print("MODEL SUMMARY")
     print("=" * 70)
 
-    # Create dummy input
+    # Create dummy input - landmarks only (handedness added in model)
     dummy_input = torch.randn(batch_size, seq_length, input_dim).to(device)
     dummy_lengths = torch.tensor([seq_length] * batch_size).to(device)
     dummy_handedness = torch.randint(0, 3, (batch_size, seq_length, 2)).to(device)
@@ -718,6 +718,10 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     buffer_size = sum(b.numel() * b.element_size() for b in model.buffers())
     size_mb = (param_size + buffer_size) / 1024 ** 2
 
+    # FIX: Pass all 3 required arguments to model
+    with torch.no_grad():
+        output = model(dummy_input, dummy_handedness, dummy_lengths)
+
     print("\n" + "=" * 70)
     print("DETAILED STATISTICS")
     print("=" * 70)
@@ -725,8 +729,9 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
     print(f"Trainable Parameters:       {trainable_params:>15,}")
     print(f"Non-trainable Parameters:   {non_trainable_params:>15,}")
     print(f"Model Size:                 {size_mb:>15.2f} MB")
-    print(f"Input Shape:                {tuple(dummy_input.shape)}")
-    print(f"Output Shape:               {model(dummy_input, dummy_lengths).shape}")
+    print(f"Input Shape (landmarks):    {tuple(dummy_input.shape)}")
+    print(f"Input Shape (handedness):   {tuple(dummy_handedness.shape)}")
+    print(f"Output Shape:               {tuple(output.shape)}")
     print("=" * 70 + "\n")
 
     summary_str = str(model_stats)
@@ -736,11 +741,13 @@ def generate_model_summary(model, input_dim, device, batch_size=8, seq_length=10
         "trainable_params": trainable_params,
         "non_trainable_params": non_trainable_params,
         "model_size_mb": size_mb,
-        "input_shape": list(dummy_input.shape),
-        "output_shape": list(model(dummy_input, dummy_lengths).shape)
+        "input_shape_landmarks": list(dummy_input.shape),
+        "input_shape_handedness": list(dummy_handedness.shape),
+        "output_shape": list(output.shape)
     }
 
     return summary_str, summary_dict
+
 
 
 # ==================== MAIN ====================
@@ -752,7 +759,8 @@ def main():
     VOCAB_FILE = "vocab.json"
     BATCH_SIZE = 16
     NUM_EPOCHS = 150
-    INPUT_DIM = 1659 + 3 * 2  # Landmark features + one-hot handedness
+    # Handedness one-hot: 2 hands × 3 classes = 6 features per frame
+    INPUT_DIM = 1659  # 126 hand + 1434 face + 99 pose (handedness is separate)
 
     # Smaller model with aggressive regularization
     D_MODEL = 384

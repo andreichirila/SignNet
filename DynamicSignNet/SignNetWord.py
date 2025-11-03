@@ -113,20 +113,20 @@ class LandmarkDataset(Dataset):
         landmarks = data['landmarks']
         handedness = data.get('handedness', None)
 
-        # Apply augmentation during training
-        if self.augment:
-            landmarks = self.temporal_aug(landmarks)
-
-        landmarks = torch.FloatTensor(landmarks)
-
-        # Convert handedness strings to numeric encoding
-        # e.g., LEFT=0, RIGHT=1, NONE=2
+        # Convert handedness strings to numeric encoding BEFORE augmentation
         if handedness is not None:
             mapping = {'LEFT': 0, 'RIGHT': 1, 'NONE': 2}
-            hand_enc = np.vectorize(lambda x: mapping.get(x, 2))(handedness)
-            handedness = torch.LongTensor(hand_enc)
+            handedness = np.vectorize(lambda x: mapping.get(x, 2))(handedness)
         else:
-            handedness = torch.LongTensor(np.zeros((landmarks.shape[0], 2)))  # default NONE
+            handedness = np.zeros((landmarks.shape[0], 2), dtype=np.int64)  # default NONE
+
+        # Apply augmentation to BOTH landmarks and handedness
+        if self.augment:
+            landmarks, handedness = self.temporal_aug(landmarks, handedness)
+
+        # Convert to tensors AFTER augmentation
+        landmarks = torch.FloatTensor(landmarks)
+        handedness = torch.LongTensor(handedness)
 
         glosses = []
         for g in data['glosses']:
@@ -329,18 +329,37 @@ class AdvancedTemporalAugmentation:
     def __init__(self, prob=0.8):
         self.prob = prob
 
-    def __call__(self, landmarks):
+    def __call__(self, landmarks, handedness=None):
+        """
+        Apply temporal augmentation to landmarks and optionally handedness.
+
+        Args:
+            landmarks: [T, F] numpy array
+            handedness: [T, 2] numpy array (optional)
+
+        Returns:
+            landmarks: augmented landmarks
+            handedness: augmented handedness (if provided)
+        """
         if np.random.random() > self.prob:
+            if handedness is not None:
+                return landmarks, handedness
             return landmarks
+
+        num_frames = landmarks.shape[0]
 
         # Speed variation (aggressive)
         speed = np.random.uniform(0.65, 1.35)
-        num_frames = landmarks.shape[0]
         new_num_frames = max(1, int(num_frames / speed))
         indices = np.linspace(0, num_frames - 1, new_num_frames)
-        landmarks = np.array([landmarks[min(int(i), num_frames - 1)] for i in indices])
+        indices = np.array([min(int(i), num_frames - 1) for i in indices])
 
-        # Stronger spatial noise
+        # Apply same indices to landmarks and handedness
+        landmarks = landmarks[indices]
+        if handedness is not None:
+            handedness = handedness[indices]
+
+        # Stronger spatial noise (only to landmarks, not handedness)
         noise = np.random.normal(0, 0.015, landmarks.shape)
         landmarks = landmarks + noise
 
@@ -350,7 +369,11 @@ class AdvancedTemporalAugmentation:
             mask = np.random.rand(landmarks.shape[0]) < keep_ratio
             if mask.sum() > 0:
                 landmarks = landmarks[mask]
+                if handedness is not None:
+                    handedness = handedness[mask]
 
+        if handedness is not None:
+            return landmarks, handedness
         return landmarks
 
 

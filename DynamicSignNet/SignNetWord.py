@@ -397,7 +397,7 @@ def main():
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
-    EXPERIMENT_NAME = "SignNetWord_Optimized"
+    EXPERIMENT_NAME = "SignNetWord"
     RUN_NAME = f"optimized_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     mlflow.set_experiment(EXPERIMENT_NAME)
 

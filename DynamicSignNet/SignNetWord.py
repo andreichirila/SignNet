@@ -184,39 +184,48 @@ class TemporalConvolutionBlock(nn.Module):
     """
     Temporal convolution block for extracting local features from landmark sequences.
     Applies multiple 1D convolutions with different kernel sizes for multi-scale feature extraction.
+    Uses same-padding to preserve sequence length.
     """
     def __init__(self, input_size=1659, output_size=512, num_layers=2, dropout_rate=0.1):
         super().__init__()
         self.input_size = input_size
         self.output_size = output_size
         
-        # First, project landmarks from input_size to output_size
-        self.input_projection = nn.Linear(input_size, output_size)
-        
         # Multi-scale temporal convolutions
         kernel_sizes = [3, 5, 7]
-        self.conv_layers = nn.ModuleList()
+        num_kernels = len(kernel_sizes)
         
+        # First layer: reduce from input_size to output_size
+        self.initial_projection = nn.Linear(input_size, output_size)
+        
+        # Temporal convolutions on the reduced features
+        # Use depthwise convolution to avoid sequence length reduction
+        conv_layers = []
         for i in range(num_layers):
-            layer = nn.ModuleList()
+            layer_convs = nn.ModuleList()
             for kernel_size in kernel_sizes:
                 padding = (kernel_size - 1) // 2
-                # Conv1d expects (batch, channels, seq_len)
-                # We have output_size channels now (after projection)
-                conv = nn.Sequential(
-                    nn.Conv1d(
-                        in_channels=output_size,
-                        out_channels=output_size // len(kernel_sizes),
-                        kernel_size=kernel_size,
-                        padding=padding,
-                        bias=False
-                    ),
-                    nn.BatchNorm1d(output_size // len(kernel_sizes)),
-                    nn.ReLU(inplace=True),
-                    nn.Dropout(dropout_rate)
+                # Use groups=output_size for depthwise convolution
+                # This applies each filter to one channel independently
+                layer_convs.append(
+                    nn.Sequential(
+                        nn.Conv1d(
+                            in_channels=output_size,
+                            out_channels=output_size,
+                            kernel_size=kernel_size,
+                            padding=padding,
+                            groups=1,  # Standard convolution
+                            bias=False
+                        ),
+                        nn.BatchNorm1d(output_size),
+                        nn.ReLU(inplace=True),
+                        nn.Dropout(dropout_rate)
+                    )
                 )
-            layer.append(conv)
-            self.conv_layers.append(layer)
+            conv_layers.append(layer_convs)
+        
+        self.conv_layers = nn.ModuleList(conv_layers)
+        self.dropout = nn.Dropout(dropout_rate)
         
     def forward(self, x):
         """
@@ -225,32 +234,30 @@ class TemporalConvolutionBlock(nn.Module):
         Returns:
             out: (batch_size, seq_len, output_size)
         """
+        # x shape: (batch_size, seq_len, input_size)
         batch_size, seq_len, input_size = x.shape
         
-        # Project from input_size to output_size: (batch_size, seq_len, output_size)
-        x_proj = self.input_projection(x)
+        # Project from input_size to output_size
+        x_proj = self.initial_projection(x)  # (batch_size, seq_len, output_size)
         
         # Reshape for convolution: (batch_size, output_size, seq_len)
-        x_conv = x_proj.transpose(1, 2)
+        x_conv = x_proj.transpose(1, 2)  # (batch_size, output_size, seq_len)
         
-        # Apply convolutions in parallel and concatenate
-        conv_outputs = []
-        for layer_idx, layer in enumerate(self.conv_layers):
-            for conv in layer:
-                conv_out = conv(x_conv)  # (batch_size, output_size/3, seq_len)
+        # Apply convolutions layer by layer with residual connections
+        for layer_convs in self.conv_layers:
+            conv_outputs = []
+            for conv in layer_convs:
+                conv_out = conv(x_conv)  # (batch_size, output_size, seq_len)
                 conv_outputs.append(conv_out)
+            
+            # Average the multi-scale outputs instead of concatenating
+            x_conv = torch.stack(conv_outputs, dim=0).mean(dim=0)  # (batch_size, output_size, seq_len)
+            # Add residual connection
+            x_conv = x_conv + x_proj.transpose(1, 2)
         
-        # Concatenate all conv outputs: (batch_size, output_size, seq_len)
-        if conv_outputs:
-            conv_combined = torch.cat(conv_outputs, dim=1)
-        else:
-            conv_combined = x_conv
-        
-        # Reshape back: (batch_size, seq_len, output_size)
-        conv_combined = conv_combined.transpose(1, 2)
-        
-        # Residual connection
-        out = x_proj + conv_combined
+        # Transpose back to (batch_size, seq_len, output_size)
+        out = x_conv.transpose(1, 2)
+        out = self.dropout(out)
         
         return out
 

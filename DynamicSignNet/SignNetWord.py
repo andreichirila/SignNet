@@ -314,15 +314,17 @@ class CrossAttentionLayer(nn.Module):
 class ResidualLSTMBlock(nn.Module):
     """
     LSTM block with residual connection for improved gradient flow.
-    Allows stacking multiple LSTM layers with better training dynamics.
+    Handles both first layer (input_size=hidden_size) and subsequent layers (input_size=hidden_size*2).
     """
     def __init__(self, input_size, hidden_size, num_layers=1, dropout_rate=0.1):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
+        self.lstm_output_size = hidden_size * 2  # bidirectional
         
+        # LSTM takes input_size and outputs hidden_size*2 (bidirectional)
         self.lstm = nn.LSTM(
-            input_size=input_size,  # This should match the actual input dimensionality
+            input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
@@ -330,18 +332,14 @@ class ResidualLSTMBlock(nn.Module):
             dropout=dropout_rate if num_layers > 1 else 0.0
         )
         
-        # Projection to match dimensions for residual connection
-        # After LSTM: (batch_size, seq_len, hidden_size * 2)
-        # We need to project input to match this for residual
-        lstm_output_size = hidden_size * 2
-        
-        if input_size != lstm_output_size:
-            self.input_projection = nn.Linear(input_size, lstm_output_size)
+        # Projection to match LSTM output for residual connection
+        if input_size != self.lstm_output_size:
+            self.input_projection = nn.Linear(input_size, self.lstm_output_size)
         else:
             self.input_projection = None
         
         self.dropout = nn.Dropout(dropout_rate)
-        self.norm = nn.LayerNorm(lstm_output_size)
+        self.norm = nn.LayerNorm(self.lstm_output_size)
         
     def forward(self, x):
         """
@@ -352,17 +350,17 @@ class ResidualLSTMBlock(nn.Module):
         """
         lstm_out, (h_n, c_n) = self.lstm(x)  # (batch_size, seq_len, hidden_size*2)
         
-        # Project input for residual connection
+        # Project input for residual connection if dimensions don't match
         if self.input_projection is not None:
             x_proj = self.input_projection(x)  # (batch_size, seq_len, hidden_size*2)
         else:
             x_proj = x
         
-        # Residual connection
-        out = lstm_out + self.dropout(x_proj)
-        out = self.norm(out)
+        # Residual connection + normalization
+        out = self.norm(lstm_out + self.dropout(x_proj))
         
         return out, (h_n, c_n)
+
 
 
 
@@ -397,16 +395,20 @@ class LSTMSignClassifierEnhanced(nn.Module):
             dropout=lstm_dropout
         )
         
-        # STAGE 3: Residual LSTM blocks (stacked with residual connections)
-        self.lstm_blocks = nn.ModuleList([
-            ResidualLSTMBlock(
-                input_size=hidden_size if i > 0 else hidden_size,
-                hidden_size=hidden_size,
-                num_layers=1,
-                dropout_rate=lstm_dropout
+        # STAGE 3: Residual LSTM blocks
+        # First block: hidden_size input -> hidden_size*2 output
+        # Second block: hidden_size*2 input -> hidden_size*2 output
+        self.lstm_blocks = nn.ModuleList()
+        for i in range(num_lstm_layers):
+            lstm_input_size = hidden_size if i == 0 else hidden_size * 2
+            self.lstm_blocks.append(
+                ResidualLSTMBlock(
+                    input_size=lstm_input_size,
+                    hidden_size=hidden_size,
+                    num_layers=1,
+                    dropout_rate=lstm_dropout
+                )
             )
-            for i in range(num_lstm_layers)
-        ])
         
         lstm_output_size = hidden_size * 2
         
@@ -441,7 +443,10 @@ class LSTMSignClassifierEnhanced(nn.Module):
             print(f"\n[ENHANCED MODEL ARCHITECTURE]")
             print(f"  Stage 1: Temporal Convolution ({input_size} → {hidden_size})")
             print(f"  Stage 2: Cross-Attention Pre-LSTM ({num_attention_heads} heads)")
-            print(f"  Stage 3: Residual LSTM Blocks (×{num_lstm_layers}, {hidden_size} → {lstm_output_size})")
+            print(f"  Stage 3: Residual LSTM Blocks")
+            print(f"    Block 1: {hidden_size} → {hidden_size * 2}")
+            for i in range(1, num_lstm_layers):
+                print(f"    Block {i+1}: {hidden_size * 2} → {hidden_size * 2}")
             print(f"  Stage 4: Cross-Attention Post-LSTM ({num_attention_heads} heads)")
             print(f"  Stage 5: Classification Head ({lstm_output_size} → {num_classes})")
             print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
@@ -469,14 +474,14 @@ class LSTMSignClassifierEnhanced(nn.Module):
         # Stage 4: Post-LSTM cross-attention
         x = self.cross_attention_post(x)  # (batch_size, seq_len, hidden_size*2)
         
-        # Extract final hidden state (concatenate bidirectional)
-        # Since we use residual blocks, extract from the last LSTM output
+        # Extract final hidden state
         last_hidden = x[:, -1, :]  # (batch_size, hidden_size*2)
         
         # Stage 5: Classification
         logits = self.classifier(last_hidden)
         
         return logits
+
 
 
 class PadCollate:

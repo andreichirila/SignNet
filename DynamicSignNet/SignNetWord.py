@@ -415,7 +415,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"optimized_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    RUN_NAME = f"Reduced epoch to 150"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -424,7 +424,7 @@ def main():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
     LEARNING_RATE = 2e-3  # Increased from 1e-3
-    NUM_EPOCHS = 200
+    NUM_EPOCHS = 150
     HIDDEN_SIZE = 256  # Doubled from 128
     NUM_LAYERS = 2
     DROPOUT_RATE = 0.35  # Reduced from 0.5 (KEY OPTIMIZATION!)

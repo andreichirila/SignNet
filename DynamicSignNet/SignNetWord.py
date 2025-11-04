@@ -322,7 +322,7 @@ class ResidualLSTMBlock(nn.Module):
         self.hidden_size = hidden_size
         
         self.lstm = nn.LSTM(
-            input_size=input_size,
+            input_size=input_size,  # This should match the actual input dimensionality
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
@@ -331,11 +331,17 @@ class ResidualLSTMBlock(nn.Module):
         )
         
         # Projection to match dimensions for residual connection
-        self.input_projection = None
-        if input_size != hidden_size * 2:
-            self.input_projection = nn.Linear(input_size, hidden_size * 2)
+        # After LSTM: (batch_size, seq_len, hidden_size * 2)
+        # We need to project input to match this for residual
+        lstm_output_size = hidden_size * 2
+        
+        if input_size != lstm_output_size:
+            self.input_projection = nn.Linear(input_size, lstm_output_size)
+        else:
+            self.input_projection = None
         
         self.dropout = nn.Dropout(dropout_rate)
+        self.norm = nn.LayerNorm(lstm_output_size)
         
     def forward(self, x):
         """
@@ -344,18 +350,20 @@ class ResidualLSTMBlock(nn.Module):
         Returns:
             out: (batch_size, seq_len, hidden_size*2)
         """
-        lstm_out, (h_n, c_n) = self.lstm(x)
+        lstm_out, (h_n, c_n) = self.lstm(x)  # (batch_size, seq_len, hidden_size*2)
         
-        # Residual connection: project input if necessary and add
+        # Project input for residual connection
         if self.input_projection is not None:
-            x_proj = self.input_projection(x)
+            x_proj = self.input_projection(x)  # (batch_size, seq_len, hidden_size*2)
         else:
             x_proj = x
         
-        out = lstm_out + x_proj
-        out = self.dropout(out)
+        # Residual connection
+        out = lstm_out + self.dropout(x_proj)
+        out = self.norm(out)
         
         return out, (h_n, c_n)
+
 
 
 class LSTMSignClassifierEnhanced(nn.Module):

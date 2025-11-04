@@ -442,7 +442,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"larger model 512"
+    RUN_NAME = f"Top 50 Words"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -528,7 +528,7 @@ def main():
             word = dataset.idx_to_word[label.item()]
             word_counts[word] += 1
 
-        number_of_classes = 20
+        number_of_classes = 50
         top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
         print(f"  Top 10 words: {top_n_words}")
         for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):

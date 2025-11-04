@@ -190,33 +190,33 @@ class TemporalConvolutionBlock(nn.Module):
         self.input_size = input_size
         self.output_size = output_size
         
-        layers = []
-        in_channels = 1
+        # First, project landmarks from input_size to output_size
+        self.input_projection = nn.Linear(input_size, output_size)
         
         # Multi-scale temporal convolutions
         kernel_sizes = [3, 5, 7]
-        conv_layers = []
+        self.conv_layers = nn.ModuleList()
         
         for i in range(num_layers):
+            layer = nn.ModuleList()
             for kernel_size in kernel_sizes:
                 padding = (kernel_size - 1) // 2
-                conv_layers.append(
-                    nn.Sequential(
-                        nn.Conv1d(
-                            in_channels if i == 0 else output_size // len(kernel_sizes),
-                            output_size // len(kernel_sizes),
-                            kernel_size=kernel_size,
-                            padding=padding,
-                            bias=False
-                        ),
-                        nn.BatchNorm1d(output_size // len(kernel_sizes)),
-                        nn.ReLU(inplace=True),
-                        nn.Dropout(dropout_rate)
-                    )
+                # Conv1d expects (batch, channels, seq_len)
+                # We have output_size channels now (after projection)
+                conv = nn.Sequential(
+                    nn.Conv1d(
+                        in_channels=output_size,
+                        out_channels=output_size // len(kernel_sizes),
+                        kernel_size=kernel_size,
+                        padding=padding,
+                        bias=False
+                    ),
+                    nn.BatchNorm1d(output_size // len(kernel_sizes)),
+                    nn.ReLU(inplace=True),
+                    nn.Dropout(dropout_rate)
                 )
-        
-        self.conv_layers = nn.ModuleList(conv_layers)
-        self.projection = nn.Linear(input_size, output_size)
+            layer.append(conv)
+            self.conv_layers.append(layer)
         
     def forward(self, x):
         """
@@ -225,28 +225,35 @@ class TemporalConvolutionBlock(nn.Module):
         Returns:
             out: (batch_size, seq_len, output_size)
         """
-        # x shape: (batch_size, seq_len, input_size)
         batch_size, seq_len, input_size = x.shape
         
-        # Project to output size first
-        x_proj = self.projection(x)  # (batch_size, seq_len, output_size)
+        # Project from input_size to output_size: (batch_size, seq_len, output_size)
+        x_proj = self.input_projection(x)
         
-        # Reshape for convolution: (batch_size, input_size, seq_len)
-        x_conv = x.transpose(1, 2)  # (batch_size, input_size, seq_len)
+        # Reshape for convolution: (batch_size, output_size, seq_len)
+        x_conv = x_proj.transpose(1, 2)
         
         # Apply convolutions in parallel and concatenate
         conv_outputs = []
-        for conv_layer in self.conv_layers:
-            conv_out = conv_layer(x_conv)  # (batch_size, output_size/3, seq_len)
-            conv_outputs.append(conv_out)
+        for layer_idx, layer in enumerate(self.conv_layers):
+            for conv in layer:
+                conv_out = conv(x_conv)  # (batch_size, output_size/3, seq_len)
+                conv_outputs.append(conv_out)
         
-        conv_combined = torch.cat(conv_outputs, dim=1)  # (batch_size, output_size, seq_len)
-        conv_combined = conv_combined.transpose(1, 2)  # (batch_size, seq_len, output_size)
+        # Concatenate all conv outputs: (batch_size, output_size, seq_len)
+        if conv_outputs:
+            conv_combined = torch.cat(conv_outputs, dim=1)
+        else:
+            conv_combined = x_conv
+        
+        # Reshape back: (batch_size, seq_len, output_size)
+        conv_combined = conv_combined.transpose(1, 2)
         
         # Residual connection
         out = x_proj + conv_combined
         
         return out
+
 
 
 class CrossAttentionLayer(nn.Module):

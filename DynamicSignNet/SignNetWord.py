@@ -69,15 +69,53 @@ class EarlyStopping:
         return False
 
 
+class TemporalAugmentation:
+    """Augmentation for variable-length landmark sequences."""
+
+    def __init__(self, prob=0.7):
+        self.prob = prob
+
+    def __call__(self, landmarks):
+        if np.random.random() > self.prob:
+            return landmarks
+
+        augmented = landmarks.copy()
+
+        # Speed variation
+        if np.random.random() > 0.5:
+            speed = np.random.uniform(0.80, 1.20)
+            new_length = max(1, int(len(augmented) / speed))
+            indices = np.linspace(0, len(augmented) - 1, new_length)
+            augmented = augmented[indices.astype(int)]
+
+        # Noise
+        if np.random.random() > 0.5:
+            noise = np.random.normal(0, 0.008, augmented.shape)
+            augmented = augmented + noise
+
+        # Frame dropout
+        if np.random.random() > 0.6:
+            keep_prob = np.random.uniform(0.90, 0.95)
+            mask = np.random.rand(len(augmented)) < keep_prob
+            if mask.sum() > 1:
+                augmented = augmented[mask]
+
+        return augmented.astype(np.float32)
+
+
 class SignLanguageDataset(Dataset):
     """
     Load preprocessed landmarks from NPZ files.
     Handles variable-length sequences without padding.
     """
-    def __init__(self, npz_dir, word_to_idx=None, debug=True):
+    def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False):
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
+
+        self.augment = augment
+        if augment:
+            self.augmentation = TemporalAugmentation(prob=0.7)
 
         if debug:
             print(f"\n[DEBUG] SignLanguageDataset.__init__")
@@ -111,6 +149,9 @@ class SignLanguageDataset(Dataset):
         data = np.load(npz_file, allow_pickle=True)
 
         landmarks = data["landmarks"].astype(np.float32)
+        if self.augment:
+            landmarks = self.augmentation(landmarks)
+
         gloss = data["glosses"][0]
         label = self.word_to_idx[gloss]
 
@@ -415,7 +456,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Reduced epoch to 150"
+    RUN_NAME = f"Added temporal augmentation"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -488,7 +529,7 @@ def main():
         # STEP 1: Load dataset
         # ========================================================================
         print(f"\n[STEP 1] Loading dataset...")
-        dataset = SignLanguageDataset(NPZ_DIR, debug=True)
+        dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=True)
 
         # ========================================================================
         # STEP 2: Analyze word frequencies
@@ -557,6 +598,8 @@ def main():
             count = train_label_counts[new_idx]
             percentage = 100 * count / len(train_subset) if len(train_subset) > 0 else 0
             print(f"    Label {new_idx:2}: {word:20} : {count:4} samples ({percentage:5.1f}%)")
+
+
 
         # ========================================================================
         # STEP 5: Create data loaders

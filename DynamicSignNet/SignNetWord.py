@@ -442,7 +442,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"larger model 384"
+    RUN_NAME = f"larger model 512"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -450,11 +450,11 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
-    LEARNING_RATE = 2.2e-3
+    LEARNING_RATE = 1e-3
     NUM_EPOCHS = 200
-    HIDDEN_SIZE = 384
+    HIDDEN_SIZE = 512
     NUM_LAYERS = 2
-    DROPOUT_RATE = 0.28
+    DROPOUT_RATE = 0.22
     LSTM_DROPOUT = 0.1
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_optimized"
@@ -469,9 +469,9 @@ def main():
     print(f"\n[CONFIG] Device: {DEVICE}")
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")
     print(f"[CONFIG] Learning rate: {LEARNING_RATE} (AdamW)")
-    print(f"[CONFIG] Hidden size: {HIDDEN_SIZE} ✓ INCREASED")
+    print(f"[CONFIG] Hidden size: {HIDDEN_SIZE}")
     print(f"[CONFIG] Num LSTM layers: {NUM_LAYERS}")
-    print(f"[CONFIG] Dropout rate: {DROPOUT_RATE} ✓ REDUCED")
+    print(f"[CONFIG] Dropout rate: {DROPOUT_RATE}")
     print(f"[CONFIG] Max epochs: {NUM_EPOCHS}")
     print(f"[CONFIG] Early Stopping Patience: {EARLY_STOPPING_PATIENCE}")
 

@@ -442,7 +442,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"larger model 512with higher dropout"
+    RUN_NAME = f"larger model 512with higher dropout and label smoothing"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -450,18 +450,18 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
-    LEARNING_RATE = 1e-3
+    LEARNING_RATE = 1.5e-3
     NUM_EPOCHS = 200
     HIDDEN_SIZE = 512
     NUM_LAYERS = 2
-    DROPOUT_RATE = 0.35
-    LSTM_DROPOUT = 0.15
+    DROPOUT_RATE = 0.30
+    LSTM_DROPOUT = 0.12
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_optimized"
     PLOTS_DIR = "./plots_optimized"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 20  # Slightly longer for better convergence
+    EARLY_STOPPING_PATIENCE = 25  # Slightly longer for better convergence
     EARLY_STOPPING_MIN_DELTA = 0.001
     EARLY_STOPPING_METRIC = "loss"
     EARLY_STOPPING_MODE = "min"
@@ -630,13 +630,13 @@ def main():
         # STEP 7: Setup OPTIMIZED training
         # ========================================================================
         print(f"\n[STEP 7] Setting up optimized training...")
-        criterion = nn.CrossEntropyLoss()
+        criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
 
         # AdamW optimizer (better than Adam)
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=LEARNING_RATE,
-            weight_decay=5e-4,
+            weight_decay=2e-4,
             betas=(0.9, 0.999)
         )
 

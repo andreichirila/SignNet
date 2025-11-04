@@ -182,47 +182,33 @@ class RemappedDataset(torch.utils.data.Dataset):
 
 
 class LSTMSignClassifier(nn.Module):
-    """
-    Optimized LSTM-based sign language classifier with better regularization.
-    """
-    def __init__(self, input_size=1659, hidden_size=256, num_classes=10, num_layers=2, dropout_rate=0.2, debug=True):
+    def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
+                 num_layers=2, dropout_rate=0.30, lstm_dropout=0.1, debug=True):
         super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.num_classes = num_classes
-        self.num_layers = num_layers
-        self.debug = debug
+        # ... existing code ...
 
-        if debug:
-            print(f"\n[DEBUG] LSTMSignClassifier.__init__")
-            print(f"  Input size: {input_size}")
-            print(f"  Hidden size: {hidden_size}")
-            print(f"  Num layers: {num_layers}")
-            print(f"  Num classes: {num_classes}")
-            print(f"  Dropout rate: {dropout_rate}")
-
+        # LSTM with configurable dropout
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
             bidirectional=True,
-            dropout=0.3 if num_layers > 1 else 0.0
+            dropout=lstm_dropout if num_layers > 1 else 0.0  # Now configurable!
         )
 
+        # Classifier with configurable dropout
         lstm_output_size = hidden_size * 2
-
-        # Optimized classifier with better regularization
         self.classifier = nn.Sequential(
             nn.Linear(lstm_output_size, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),
+            nn.Dropout(dropout_rate),  # Uses parameter
 
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),
+            nn.Dropout(dropout_rate),  # Uses parameter
 
             nn.Linear(128, num_classes)
         )
@@ -464,18 +450,19 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
-    LEARNING_RATE = 3e-3
-    NUM_EPOCHS = 200
-    HIDDEN_SIZE = 512
+    LEARNING_RATE = 2e-3
+    NUM_EPOCHS = 150
+    HIDDEN_SIZE = 256
     NUM_LAYERS = 2
     DROPOUT_RATE = 0.25
+    LSTM_DROPOUT = 0.1
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_optimized"
     PLOTS_DIR = "./plots_optimized"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 20
-    EARLY_STOPPING_MIN_DELTA = 0.0005
+    EARLY_STOPPING_PATIENCE = 15  # Slightly longer for better convergence
+    EARLY_STOPPING_MIN_DELTA = 0.001
     EARLY_STOPPING_METRIC = "loss"
     EARLY_STOPPING_MODE = "min"
 
@@ -632,6 +619,7 @@ def main():
             num_classes=num_classes,
             num_layers=NUM_LAYERS,
             dropout_rate=DROPOUT_RATE,
+            lstm_dropout=LSTM_DROPOUT,
             debug=True
         ).to(DEVICE)
 

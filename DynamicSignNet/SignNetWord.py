@@ -18,7 +18,6 @@ from telegram import Bot
 import asyncio
 
 
-
 class EarlyStopping:
     """
     Early stopping to prevent overfitting.
@@ -180,92 +179,254 @@ class RemappedDataset(torch.utils.data.Dataset):
         new_label = torch.tensor(self.remapping[old_label_value], dtype=torch.long)
         return landmarks, new_label
 
-class AttentionLayer(nn.Module):
-    """Multi-head attention for selecting important frames."""
-    def __init__(self, hidden_size, num_heads=4):
+
+class TemporalConvolutionBlock(nn.Module):
+    """
+    Temporal convolution block for extracting local features from landmark sequences.
+    Applies multiple 1D convolutions with different kernel sizes for multi-scale feature extraction.
+    """
+    def __init__(self, input_size=1659, output_size=512, num_layers=2, dropout_rate=0.1):
         super().__init__()
-        self.attention = nn.MultiheadAttention(
-            embed_dim=hidden_size * 2,  # bidirectional
-            num_heads=num_heads,
-            batch_first=True,
-            dropout=0.1
-        )
-        self.norm = nn.LayerNorm(hidden_size * 2)
-    
-    def forward(self, lstm_out):
+        self.input_size = input_size
+        self.output_size = output_size
+        
+        layers = []
+        in_channels = 1
+        
+        # Multi-scale temporal convolutions
+        kernel_sizes = [3, 5, 7]
+        conv_layers = []
+        
+        for i in range(num_layers):
+            for kernel_size in kernel_sizes:
+                padding = (kernel_size - 1) // 2
+                conv_layers.append(
+                    nn.Sequential(
+                        nn.Conv1d(
+                            in_channels if i == 0 else output_size // len(kernel_sizes),
+                            output_size // len(kernel_sizes),
+                            kernel_size=kernel_size,
+                            padding=padding,
+                            bias=False
+                        ),
+                        nn.BatchNorm1d(output_size // len(kernel_sizes)),
+                        nn.ReLU(inplace=True),
+                        nn.Dropout(dropout_rate)
+                    )
+                )
+        
+        self.conv_layers = nn.ModuleList(conv_layers)
+        self.projection = nn.Linear(input_size, output_size)
+        
+    def forward(self, x):
         """
         Args:
-            lstm_out: (batch_size, seq_len, hidden_size*2)
+            x: (batch_size, seq_len, input_size)
         Returns:
-            out: (batch_size, seq_len, hidden_size*2) with attention applied
+            out: (batch_size, seq_len, output_size)
         """
-        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
+        # x shape: (batch_size, seq_len, input_size)
+        batch_size, seq_len, input_size = x.shape
+        
+        # Project to output size first
+        x_proj = self.projection(x)  # (batch_size, seq_len, output_size)
+        
+        # Reshape for convolution: (batch_size, input_size, seq_len)
+        x_conv = x.transpose(1, 2)  # (batch_size, input_size, seq_len)
+        
+        # Apply convolutions in parallel and concatenate
+        conv_outputs = []
+        for conv_layer in self.conv_layers:
+            conv_out = conv_layer(x_conv)  # (batch_size, output_size/3, seq_len)
+            conv_outputs.append(conv_out)
+        
+        conv_combined = torch.cat(conv_outputs, dim=1)  # (batch_size, output_size, seq_len)
+        conv_combined = conv_combined.transpose(1, 2)  # (batch_size, seq_len, output_size)
+        
         # Residual connection
-        out = self.norm(lstm_out + attn_out)
+        out = x_proj + conv_combined
+        
         return out
 
 
-class LSTMSignClassifierWithAttention(nn.Module):
+class CrossAttentionLayer(nn.Module):
     """
-    LSTM-based sign language classifier with multi-head attention.
-    
-    Improvements over basic LSTM:
-    - Attention mechanism helps focus on important frames
-    - Better for longer sequences and complex gestures
-    - Expected 3-5% accuracy improvement on 50+ classes
+    Cross-attention mechanism that allows frames to attend to each other
+    for capturing relationships between different body parts over time.
     """
-    def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
-                 num_layers=2, dropout_rate=0.30, lstm_dropout=0.1, 
-                 num_heads=4, debug=True):
+    def __init__(self, hidden_size, num_heads=8, dropout=0.1):
+        super().__init__()
+        self.hidden_size = hidden_size
+        self.num_heads = num_heads
+        
+        # Multi-head attention for cross-frame relationships
+        self.self_attention = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_heads,
+            batch_first=True,
+            dropout=dropout
+        )
+        
+        # Feed-forward network
+        self.ffn = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size * 4),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size * 4, hidden_size)
+        )
+        
+        self.norm1 = nn.LayerNorm(hidden_size)
+        self.norm2 = nn.LayerNorm(hidden_size)
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, x):
+        """
+        Args:
+            x: (batch_size, seq_len, hidden_size)
+        Returns:
+            out: (batch_size, seq_len, hidden_size)
+        """
+        # Self-attention with residual
+        attn_out, _ = self.self_attention(x, x, x)
+        x = self.norm1(x + self.dropout(attn_out))
+        
+        # Feed-forward with residual
+        ffn_out = self.ffn(x)
+        x = self.norm2(x + self.dropout(ffn_out))
+        
+        return x
+
+
+class ResidualLSTMBlock(nn.Module):
+    """
+    LSTM block with residual connection for improved gradient flow.
+    Allows stacking multiple LSTM layers with better training dynamics.
+    """
+    def __init__(self, input_size, hidden_size, num_layers=1, dropout_rate=0.1):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.num_classes = num_classes
-
-        # LSTM with configurable dropout
+        
         self.lstm = nn.LSTM(
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
             batch_first=True,
             bidirectional=True,
-            dropout=lstm_dropout if num_layers > 1 else 0.0
+            dropout=dropout_rate if num_layers > 1 else 0.0
         )
+        
+        # Projection to match dimensions for residual connection
+        self.input_projection = None
+        if input_size != hidden_size * 2:
+            self.input_projection = nn.Linear(input_size, hidden_size * 2)
+        
+        self.dropout = nn.Dropout(dropout_rate)
+        
+    def forward(self, x):
+        """
+        Args:
+            x: (batch_size, seq_len, input_size)
+        Returns:
+            out: (batch_size, seq_len, hidden_size*2)
+        """
+        lstm_out, (h_n, c_n) = self.lstm(x)
+        
+        # Residual connection: project input if necessary and add
+        if self.input_projection is not None:
+            x_proj = self.input_projection(x)
+        else:
+            x_proj = x
+        
+        out = lstm_out + x_proj
+        out = self.dropout(out)
+        
+        return out, (h_n, c_n)
 
-        # NEW: Multi-head attention layer
-        self.attention = AttentionLayer(hidden_size, num_heads=num_heads)
 
+class LSTMSignClassifierEnhanced(nn.Module):
+    """
+    Enhanced LSTM-based sign language classifier with:
+    - Temporal convolution preprocessing for local feature extraction
+    - Cross-attention between frames for temporal relationships
+    - Residual LSTM blocks for improved gradient flow
+    - Multi-head attention for importance weighting
+    """
+    def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
+                 num_lstm_layers=2, dropout_rate=0.25, lstm_dropout=0.1,
+                 num_attention_heads=8, temporal_conv_layers=2, debug=True):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_classes = num_classes
+        
+        # STAGE 1: Temporal convolution preprocessing
+        self.temporal_conv = TemporalConvolutionBlock(
+            input_size=input_size,
+            output_size=hidden_size,
+            num_layers=temporal_conv_layers,
+            dropout_rate=lstm_dropout
+        )
+        
+        # STAGE 2: Cross-attention layer (before LSTM)
+        self.cross_attention_pre = CrossAttentionLayer(
+            hidden_size=hidden_size,
+            num_heads=num_attention_heads,
+            dropout=lstm_dropout
+        )
+        
+        # STAGE 3: Residual LSTM blocks (stacked with residual connections)
+        self.lstm_blocks = nn.ModuleList([
+            ResidualLSTMBlock(
+                input_size=hidden_size if i > 0 else hidden_size,
+                hidden_size=hidden_size,
+                num_layers=1,
+                dropout_rate=lstm_dropout
+            )
+            for i in range(num_lstm_layers)
+        ])
+        
         lstm_output_size = hidden_size * 2
-
-        # Classifier with configurable dropout
+        
+        # STAGE 4: Cross-attention layer (after LSTM)
+        self.cross_attention_post = CrossAttentionLayer(
+            hidden_size=lstm_output_size,
+            num_heads=num_attention_heads,
+            dropout=lstm_dropout
+        )
+        
+        # STAGE 5: Classification head
         self.classifier = nn.Sequential(
             nn.Linear(lstm_output_size, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-
+            
             nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-
+            
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(dropout_rate * 0.7),
-
+            
             nn.Linear(128, num_classes)
         )
-
+        
         if debug:
-            print(f"  Model: LSTM + Multi-Head Attention")
-            print(f"  LSTM output size: {lstm_output_size}")
-            print(f"  Attention heads: {num_heads}")
+            print(f"\n[ENHANCED MODEL ARCHITECTURE]")
+            print(f"  Stage 1: Temporal Convolution ({input_size} → {hidden_size})")
+            print(f"  Stage 2: Cross-Attention Pre-LSTM ({num_attention_heads} heads)")
+            print(f"  Stage 3: Residual LSTM Blocks (×{num_lstm_layers}, {hidden_size} → {lstm_output_size})")
+            print(f"  Stage 4: Cross-Attention Post-LSTM ({num_attention_heads} heads)")
+            print(f"  Stage 5: Classification Head ({lstm_output_size} → {num_classes})")
             print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
-
+    
     def forward(self, x):
         """
-        Forward pass with attention.
+        Enhanced forward pass with temporal convolution, cross-attention, and residual connections.
         
         Args:
             x: (batch_size, seq_len, input_size)
@@ -273,64 +434,26 @@ class LSTMSignClassifierWithAttention(nn.Module):
         Returns:
             logits: (batch_size, num_classes)
         """
-        # LSTM forward pass
-        lstm_out, (h_n, c_n) = self.lstm(x)
+        # Stage 1: Temporal convolution preprocessing
+        x = self.temporal_conv(x)  # (batch_size, seq_len, hidden_size)
         
-        # Apply multi-head attention
-        attn_out = self.attention(lstm_out)
+        # Stage 2: Pre-LSTM cross-attention
+        x = self.cross_attention_pre(x)  # (batch_size, seq_len, hidden_size)
         
-        # Extract last hidden states (bidirectional)
-        forward_hidden = h_n[-2, :, :]
-        backward_hidden = h_n[-1, :, :]
-        last_hidden = torch.cat([forward_hidden, backward_hidden], dim=1)
+        # Stage 3: Residual LSTM blocks
+        for lstm_block in self.lstm_blocks:
+            x, (h_n, c_n) = lstm_block(x)  # (batch_size, seq_len, hidden_size*2)
         
-        # Classification
+        # Stage 4: Post-LSTM cross-attention
+        x = self.cross_attention_post(x)  # (batch_size, seq_len, hidden_size*2)
+        
+        # Extract final hidden state (concatenate bidirectional)
+        # Since we use residual blocks, extract from the last LSTM output
+        last_hidden = x[:, -1, :]  # (batch_size, hidden_size*2)
+        
+        # Stage 5: Classification
         logits = self.classifier(last_hidden)
-        return logits
-
-
-class LSTMSignClassifier(nn.Module):
-    def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
-                 num_layers=2, dropout_rate=0.30, lstm_dropout=0.1, debug=True):
-        super().__init__()
-        # ... existing code ...
-
-        # LSTM with configurable dropout
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=lstm_dropout if num_layers > 1 else 0.0  # Now configurable!
-        )
-
-        # Classifier with configurable dropout
-        lstm_output_size = hidden_size * 2
-        self.classifier = nn.Sequential(
-            nn.Linear(lstm_output_size, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),  # Uses parameter
-
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),  # Uses parameter
-
-            nn.Linear(128, num_classes)
-        )
-
-        if debug:
-            print(f"  LSTM output size: {lstm_output_size}")
-            print(f"  Total parameters: {sum(p.numel() for p in self.parameters())}")
-
-    def forward(self, x):
-        lstm_out, (h_n, c_n) = self.lstm(x)
-        forward_hidden = h_n[-2, :, :]
-        backward_hidden = h_n[-1, :, :]
-        last_hidden = torch.cat([forward_hidden, backward_hidden], dim=1)
-        logits = self.classifier(last_hidden)
+        
         return logits
 
 
@@ -521,6 +644,7 @@ def log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_n_wo
             print(f"  {key:30} : {value}")
     print("="*80)
 
+
 TELEGRAM_BOT_TOKEN = '8327173184:AAGLA5pcLiAz-vMSVBq4tVJCHo7TPH3Zu8g'
 CHAT_ID = '8541359800'
 
@@ -537,9 +661,9 @@ async def run_bot(messages, chat_id):
 
 
 def main():
-    """Main training pipeline with optimized hyperparameters."""
+    """Main training pipeline with enhanced architecture."""
     print("=" * 80)
-    print("SIGN LANGUAGE CLASSIFIER - OPTIMIZED VERSION")
+    print("SIGN LANGUAGE CLASSIFIER - ENHANCED ARCHITECTURE")
     print("=" * 80)
 
     # ============================================================================
@@ -550,26 +674,28 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 50 Words LSTM With attention"
+    RUN_NAME = f"Top 50 Words Enhanced LSTM (TemporalConv + CrossAttention + Residual)"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
-    # OPTIMIZED HYPERPARAMETERS
+    # HYPERPARAMETERS
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
     LEARNING_RATE = 1.5e-3
     NUM_EPOCHS = 200
-    HIDDEN_SIZE = 512
-    NUM_LAYERS = 2
+    HIDDEN_SIZE = 256
+    NUM_LSTM_LAYERS = 2
     DROPOUT_RATE = 0.25
     LSTM_DROPOUT = 0.1
+    NUM_ATTENTION_HEADS = 8
+    TEMPORAL_CONV_LAYERS = 2
     NPZ_DIR = "./word_landmarks_extracted"
-    MODEL_SAVE_DIR = "./models_optimized"
-    PLOTS_DIR = "./plots_optimized"
+    MODEL_SAVE_DIR = "./models_enhanced"
+    PLOTS_DIR = "./plots_enhanced"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 999  # Slightly longer for better convergence
+    EARLY_STOPPING_PATIENCE = 999
     EARLY_STOPPING_MIN_DELTA = 0.001
     EARLY_STOPPING_METRIC = "loss"
     EARLY_STOPPING_MODE = "min"
@@ -578,10 +704,11 @@ def main():
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")
     print(f"[CONFIG] Learning rate: {LEARNING_RATE} (AdamW)")
     print(f"[CONFIG] Hidden size: {HIDDEN_SIZE}")
-    print(f"[CONFIG] Num LSTM layers: {NUM_LAYERS}")
+    print(f"[CONFIG] Num LSTM layers: {NUM_LSTM_LAYERS}")
+    print(f"[CONFIG] Attention heads: {NUM_ATTENTION_HEADS}")
+    print(f"[CONFIG] Temporal conv layers: {TEMPORAL_CONV_LAYERS}")
     print(f"[CONFIG] Dropout rate: {DROPOUT_RATE}")
     print(f"[CONFIG] Max epochs: {NUM_EPOCHS}")
-    print(f"[CONFIG] Early Stopping Patience: {EARLY_STOPPING_PATIENCE}")
 
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
@@ -602,7 +729,7 @@ def main():
             mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2))
 
         # ========================================================================
-        # Log Optimized Hyperparameters
+        # Log Hyperparameters
         # ========================================================================
         mlflow.log_params({
             "batch_size": BATCH_SIZE,
@@ -610,14 +737,15 @@ def main():
             "optimizer": "AdamW",
             "num_epochs": NUM_EPOCHS,
             "hidden_size": HIDDEN_SIZE,
-            "num_layers": NUM_LAYERS,
+            "num_lstm_layers": NUM_LSTM_LAYERS,
             "dropout_rate": DROPOUT_RATE,
+            "num_attention_heads": NUM_ATTENTION_HEADS,
+            "temporal_conv_layers": TEMPORAL_CONV_LAYERS,
             "input_dim": 1659,
             "scheduler": "CosineAnnealingLR",
             "loss_function": "CrossEntropyLoss",
-            "early_stopping_patience": EARLY_STOPPING_PATIENCE,
+            "architecture": "Enhanced_LSTM_TemporalConv_CrossAttention_Residual",
             "device": str(DEVICE),
-            "optimization": "DROPOUT_REDUCED_ADAMW_COSINE",
         })
 
         # ========================================================================
@@ -695,8 +823,6 @@ def main():
             percentage = 100 * count / len(train_subset) if len(train_subset) > 0 else 0
             print(f"    Label {new_idx:2}: {word:20} : {count:4} samples ({percentage:5.1f}%)")
 
-
-
         # ========================================================================
         # STEP 5: Create data loaders
         # ========================================================================
@@ -718,17 +844,18 @@ def main():
         print(f"  Val batches: {len(val_loader)}")
 
         # ========================================================================
-        # STEP 6: Build OPTIMIZED model
+        # STEP 6: Build ENHANCED model
         # ========================================================================
-        print(f"\n[STEP 6] Building optimized model...")        
-        model = LSTMSignClassifierWithAttention(
+        print(f"\n[STEP 6] Building enhanced model...")        
+        model = LSTMSignClassifierEnhanced(
             input_size=1659,
             hidden_size=HIDDEN_SIZE,
             num_classes=num_classes,
-            num_layers=NUM_LAYERS,
+            num_lstm_layers=NUM_LSTM_LAYERS,
             dropout_rate=DROPOUT_RATE,
             lstm_dropout=LSTM_DROPOUT,
-            num_heads=4,  # Number of attention heads
+            num_attention_heads=NUM_ATTENTION_HEADS,
+            temporal_conv_layers=TEMPORAL_CONV_LAYERS,
             debug=True
         ).to(DEVICE)
 
@@ -736,12 +863,12 @@ def main():
         mlflow.log_param("total_parameters", total_params)
 
         # ========================================================================
-        # STEP 7: Setup OPTIMIZED training
+        # STEP 7: Setup training
         # ========================================================================
-        print(f"\n[STEP 7] Setting up optimized training...")
+        print(f"\n[STEP 7] Setting up training...")
         criterion = nn.CrossEntropyLoss()
 
-        # AdamW optimizer (better than Adam)
+        # AdamW optimizer
         optimizer = torch.optim.AdamW(
             model.parameters(),
             lr=LEARNING_RATE,
@@ -749,7 +876,7 @@ def main():
             betas=(0.9, 0.999)
         )
 
-        # Cosine annealing scheduler (better than ReduceLROnPlateau)
+        # Cosine annealing scheduler
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=NUM_EPOCHS,
@@ -765,12 +892,12 @@ def main():
 
         print(f"  ✓ Using AdamW optimizer (weight_decay=1e-4)")
         print(f"  ✓ Using CosineAnnealingLR scheduler")
-        print(f"  ✓ Using dropout_rate={DROPOUT_RATE}")
+        print(f"  ✓ Architecture: Temporal Conv + Cross-Attention + Residual LSTM")
 
         # ========================================================================
         # STEP 8: Training loop
         # ========================================================================
-        print(f"\n[STEP 8] Starting training with optimizations...")
+        print(f"\n[STEP 8] Starting training with enhanced architecture...")
         print("=" * 80)
 
         best_val_acc = 0
@@ -788,7 +915,6 @@ def main():
                 model, val_loader, criterion, DEVICE, epoch, debug=True
             )
 
-            # Step scheduler (per epoch for CosineAnnealingLR)
             scheduler.step()
 
             if val_acc > best_val_acc:
@@ -834,12 +960,11 @@ def main():
         print(f"  Final Val Acc: {val_accs[-1]:.2%}")
         print(f"\n  Classes ({num_classes}): {top_n_words}")
 
-        print(f"\n[OPTIMIZATION SUMMARY]")
-        print(f"  ✓ Dropout reduced: 0.5 → 0.2")
-        print(f"  ✓ Hidden size increased: 128 → 256")
-        print(f"  ✓ Learning rate increased: 1e-3 → 2e-3")
-        print(f"  ✓ Optimizer upgraded: Adam → AdamW")
-        print(f"  ✓ Scheduler upgraded: ReduceLROnPlateau → CosineAnnealingLR")
+        print(f"\n[ARCHITECTURE ENHANCEMENTS]")
+        print(f"  ✓ Temporal Convolution: Multi-scale feature extraction")
+        print(f"  ✓ Cross-Attention: Frame-to-frame relationships")
+        print(f"  ✓ Residual Connections: Improved gradient flow")
+        print(f"  ✓ Enhanced attention heads: {NUM_ATTENTION_HEADS}")
 
         # Generate plots
         print(f"\n[PLOTTING] Generating training curves...")
@@ -867,7 +992,8 @@ def main():
             "best_val_acc": float(best_val_acc),
             "best_epoch": int(best_epoch),
             "total_epochs_trained": len(train_losses),
-            "label_remapping": {str(k): v for k, v in old_to_new_idx.items()}
+            "label_remapping": {str(k): v for k, v in old_to_new_idx.items()},
+            "architecture": "Enhanced_LSTM_TemporalConv_CrossAttention_Residual"
         }
 
         class_info_path = os.path.join(MODEL_SAVE_DIR, "class_info.json")
@@ -886,11 +1012,10 @@ def main():
         mlflow.pytorch.log_model(model, "model")
 
         mlflow.set_tags({
-            "model_type": "LSTM",  # Change to:
-            "model_type": "LSTM_with_Attention",
+            "model_type": "LSTM_Enhanced",
             "task": "sign_language_word_classification",
             "num_classes": num_classes,
-            "optimization": "dropout_reduced_adamw_cosine_attention",
+            "enhancements": "temporal_conv_cross_attention_residual",
             "status": "completed",
         })
 
@@ -902,11 +1027,8 @@ def main():
 
         print("=" * 80)
 
-        # convert to formatted JSON string
         class_info_text = json.dumps(class_info, indent=2)
-
-        # send via your bot
-        asyncio.run(send_message(f"Training summary:\n\n{class_info_text}", CHAT_ID))
+        asyncio.run(send_message(f"Training summary (Enhanced):\n\n{class_info_text}", CHAT_ID))
 
 
 if __name__ == "__main__":

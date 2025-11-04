@@ -442,7 +442,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"disable early stopping"
+    RUN_NAME = f"larger model 384"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -450,11 +450,11 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
-    LEARNING_RATE = 2e-3
-    NUM_EPOCHS = 150
-    HIDDEN_SIZE = 256
+    LEARNING_RATE = 2.2e-3
+    NUM_EPOCHS = 200
+    HIDDEN_SIZE = 384
     NUM_LAYERS = 2
-    DROPOUT_RATE = 0.25
+    DROPOUT_RATE = 0.28
     LSTM_DROPOUT = 0.1
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_optimized"

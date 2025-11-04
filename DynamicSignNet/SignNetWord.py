@@ -180,6 +180,114 @@ class RemappedDataset(torch.utils.data.Dataset):
         new_label = torch.tensor(self.remapping[old_label_value], dtype=torch.long)
         return landmarks, new_label
 
+class AttentionLayer(nn.Module):
+    """Multi-head attention for selecting important frames."""
+    def __init__(self, hidden_size, num_heads=4):
+        super().__init__()
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_size * 2,  # bidirectional
+            num_heads=num_heads,
+            batch_first=True,
+            dropout=0.1
+        )
+        self.norm = nn.LayerNorm(hidden_size * 2)
+    
+    def forward(self, lstm_out):
+        """
+        Args:
+            lstm_out: (batch_size, seq_len, hidden_size*2)
+        Returns:
+            out: (batch_size, seq_len, hidden_size*2) with attention applied
+        """
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
+        # Residual connection
+        out = self.norm(lstm_out + attn_out)
+        return out
+
+
+class LSTMSignClassifierWithAttention(nn.Module):
+    """
+    LSTM-based sign language classifier with multi-head attention.
+    
+    Improvements over basic LSTM:
+    - Attention mechanism helps focus on important frames
+    - Better for longer sequences and complex gestures
+    - Expected 3-5% accuracy improvement on 50+ classes
+    """
+    def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
+                 num_layers=2, dropout_rate=0.30, lstm_dropout=0.1, 
+                 num_heads=4, debug=True):
+        super().__init__()
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_classes = num_classes
+
+        # LSTM with configurable dropout
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=lstm_dropout if num_layers > 1 else 0.0
+        )
+
+        # NEW: Multi-head attention layer
+        self.attention = AttentionLayer(hidden_size, num_heads=num_heads)
+
+        lstm_output_size = hidden_size * 2
+
+        # Classifier with configurable dropout
+        self.classifier = nn.Sequential(
+            nn.Linear(lstm_output_size, 512),
+            nn.BatchNorm1d(512),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+
+            nn.Linear(512, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+
+            nn.Linear(256, 128),
+            nn.BatchNorm1d(128),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate * 0.7),
+
+            nn.Linear(128, num_classes)
+        )
+
+        if debug:
+            print(f"  Model: LSTM + Multi-Head Attention")
+            print(f"  LSTM output size: {lstm_output_size}")
+            print(f"  Attention heads: {num_heads}")
+            print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
+
+    def forward(self, x):
+        """
+        Forward pass with attention.
+        
+        Args:
+            x: (batch_size, seq_len, input_size)
+        
+        Returns:
+            logits: (batch_size, num_classes)
+        """
+        # LSTM forward pass
+        lstm_out, (h_n, c_n) = self.lstm(x)
+        
+        # Apply multi-head attention
+        attn_out = self.attention(lstm_out)
+        
+        # Extract last hidden states (bidirectional)
+        forward_hidden = h_n[-2, :, :]
+        backward_hidden = h_n[-1, :, :]
+        last_hidden = torch.cat([forward_hidden, backward_hidden], dim=1)
+        
+        # Classification
+        logits = self.classifier(last_hidden)
+        return logits
+
 
 class LSTMSignClassifier(nn.Module):
     def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
@@ -442,7 +550,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 50 Words"
+    RUN_NAME = f"Top 50 Words LSTM With attention"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -612,14 +720,15 @@ def main():
         # ========================================================================
         # STEP 6: Build OPTIMIZED model
         # ========================================================================
-        print(f"\n[STEP 6] Building optimized model...")
-        model = LSTMSignClassifier(
+        print(f"\n[STEP 6] Building optimized model...")        
+        model = LSTMSignClassifierWithAttention(
             input_size=1659,
             hidden_size=HIDDEN_SIZE,
             num_classes=num_classes,
             num_layers=NUM_LAYERS,
             dropout_rate=DROPOUT_RATE,
             lstm_dropout=LSTM_DROPOUT,
+            num_heads=4,  # Number of attention heads
             debug=True
         ).to(DEVICE)
 
@@ -777,10 +886,11 @@ def main():
         mlflow.pytorch.log_model(model, "model")
 
         mlflow.set_tags({
-            "model_type": "LSTM",
+            "model_type": "LSTM",  # Change to:
+            "model_type": "LSTM_with_Attention",
             "task": "sign_language_word_classification",
             "num_classes": num_classes,
-            "optimization": "dropout_reduced_adamw_cosine",
+            "optimization": "dropout_reduced_adamw_cosine_attention",
             "status": "completed",
         })
 

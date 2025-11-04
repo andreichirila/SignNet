@@ -695,10 +695,11 @@ def main():
     PLOTS_DIR = "./plots_enhanced"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 999
-    EARLY_STOPPING_MIN_DELTA = 0.001
-    EARLY_STOPPING_METRIC = "loss"
-    EARLY_STOPPING_MODE = "min"
+    EARLY_STOPPING_PATIENCE = 20  # Start here for your model
+    EARLY_STOPPING_MIN_DELTA = 0.0005  # Minimum improvement threshold
+    EARLY_STOPPING_METRIC = "val_loss"  # Monitor this metric
+    EARLY_STOPPING_MODE = "min"  # Stop when val_loss stops improving
+
 
     print(f"\n[CONFIG] Device: {DEVICE}")
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")

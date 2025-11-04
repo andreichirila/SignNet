@@ -456,7 +456,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Added temporal augmentation"
+    RUN_NAME = f"Top 20 words"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -529,7 +529,7 @@ def main():
         # STEP 1: Load dataset
         # ========================================================================
         print(f"\n[STEP 1] Loading dataset...")
-        dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=True)
+        dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=False)
 
         # ========================================================================
         # STEP 2: Analyze word frequencies
@@ -541,9 +541,10 @@ def main():
             word = dataset.idx_to_word[label.item()]
             word_counts[word] += 1
 
-        top_n_words = [word for word, _ in word_counts.most_common(10)]
+        number_of_classes = 20
+        top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
         print(f"  Top 10 words: {top_n_words}")
-        for idx, (word, count) in enumerate(word_counts.most_common(10)):
+        for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
             print(f"    {idx+1:2}. {word:20} : {count:4} samples")
 
         # ========================================================================

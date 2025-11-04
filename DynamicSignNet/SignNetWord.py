@@ -464,18 +464,18 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
-    LEARNING_RATE = 2e-3  # Increased from 1e-3
-    NUM_EPOCHS = 150
-    HIDDEN_SIZE = 256  # Doubled from 128
+    LEARNING_RATE = 3e-3
+    NUM_EPOCHS = 200
+    HIDDEN_SIZE = 512
     NUM_LAYERS = 2
-    DROPOUT_RATE = 0.35  # Reduced from 0.5 (KEY OPTIMIZATION!)
+    DROPOUT_RATE = 0.25
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_optimized"
     PLOTS_DIR = "./plots_optimized"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 15  # Slightly longer for better convergence
-    EARLY_STOPPING_MIN_DELTA = 0.001
+    EARLY_STOPPING_PATIENCE = 20
+    EARLY_STOPPING_MIN_DELTA = 0.0005
     EARLY_STOPPING_METRIC = "loss"
     EARLY_STOPPING_MODE = "min"
 

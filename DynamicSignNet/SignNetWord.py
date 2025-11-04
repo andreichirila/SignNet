@@ -14,6 +14,9 @@ import platform
 import psutil
 import matplotlib.pyplot as plt
 from datetime import datetime
+from telegram import Bot
+import asyncio
+
 
 
 class EarlyStopping:
@@ -383,6 +386,20 @@ def log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_n_wo
             print(f"  {key:30} : {value}")
     print("="*80)
 
+TELEGRAM_BOT_TOKEN = '8327173184:AAGLA5pcLiAz-vMSVBq4tVJCHo7TPH3Zu8g'
+CHAT_ID = '8541359800'
+
+#Define bot
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+
+async def send_message(text, chat_id):
+    async with bot:
+        await bot.send_message(text=text, chat_id=chat_id)
+
+async def run_bot(messages, chat_id):
+    text = '\n'.join(messages)
+    await send_message(text, chat_id)
+
 
 def main():
     """Main training pipeline with optimized hyperparameters."""
@@ -407,7 +424,7 @@ def main():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
     LEARNING_RATE = 2e-3  # Increased from 1e-3
-    NUM_EPOCHS = 100
+    NUM_EPOCHS = 200
     HIDDEN_SIZE = 256  # Doubled from 128
     NUM_LAYERS = 2
     DROPOUT_RATE = 0.35  # Reduced from 0.5 (KEY OPTIMIZATION!)
@@ -416,7 +433,7 @@ def main():
     PLOTS_DIR = "./plots_optimized"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 10  # Slightly longer for better convergence
+    EARLY_STOPPING_PATIENCE = 15  # Slightly longer for better convergence
     EARLY_STOPPING_MIN_DELTA = 0.001
     EARLY_STOPPING_METRIC = "loss"
     EARLY_STOPPING_MODE = "min"
@@ -742,6 +759,12 @@ def main():
         print(f"  MLflow Run ID: {run.info.run_id}")
 
         print("=" * 80)
+
+        # convert to formatted JSON string
+        class_info_text = json.dumps(class_info, indent=2)
+
+        # send via your bot
+        asyncio.run(send_message(f"Training summary:\n\n{class_info_text}", CHAT_ID))
 
 
 if __name__ == "__main__":

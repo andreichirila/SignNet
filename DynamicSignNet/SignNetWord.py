@@ -442,7 +442,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 20 words"
+    RUN_NAME = f"disable early stopping"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -461,7 +461,7 @@ def main():
     PLOTS_DIR = "./plots_optimized"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 15  # Slightly longer for better convergence
+    EARLY_STOPPING_PATIENCE = 999  # Slightly longer for better convergence
     EARLY_STOPPING_MIN_DELTA = 0.001
     EARLY_STOPPING_METRIC = "loss"
     EARLY_STOPPING_MODE = "min"

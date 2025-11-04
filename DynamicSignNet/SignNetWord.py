@@ -171,18 +171,11 @@ class LSTMSignClassifier(nn.Module):
 
         lstm_output_size = hidden_size * 2
 
-        # Optimized classifier with better regularization
         self.classifier = nn.Sequential(
-            nn.Linear(lstm_output_size, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-
-            nn.Linear(256, 128),
+            nn.Linear(lstm_output_size, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
-            nn.Dropout(dropout_rate),
-
+            nn.Dropout(dropout_rate),  # Reduced
             nn.Linear(128, num_classes)
         )
 
@@ -415,7 +408,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Reduced epoch to 150"
+    RUN_NAME = f"Smaller model"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================

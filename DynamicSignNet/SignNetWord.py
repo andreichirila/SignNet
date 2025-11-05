@@ -821,8 +821,8 @@ def main():
     # HYPERPARAMETERS
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    BATCH_SIZE = 32
-    LEARNING_RATE = 3e-4
+    BATCH_SIZE = 128
+    LEARNING_RATE = 5e-4
     NUM_EPOCHS = 1000
     HIDDEN_SIZE = 256
     NUM_LSTM_LAYERS = 2
@@ -833,10 +833,15 @@ def main():
     MODEL_SAVE_DIR = "./models_enhanced"
     PLOTS_DIR = "./plots_enhanced"
 
-    EARLY_STOPPING_PATIENCE = 15
-    EARLY_STOPPING_MIN_DELTA = 0.0005
+    EARLY_STOPPING_PATIENCE = 20   # ↑ Increase from 15 (allow more exploration)
+    EARLY_STOPPING_MIN_DELTA = 0.0005  # ✓ Good
     EARLY_STOPPING_METRIC = "val_loss"
     EARLY_STOPPING_MODE = "min"
+
+    # ← NEW: DataLoader optimization
+    NUM_WORKERS = 8
+    PIN_MEMORY = True
+    PREFETCH_FACTOR = 2
 
     print(f"\n[CONFIG] Device: {DEVICE}")
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")
@@ -938,20 +943,21 @@ def main():
                 batch_size=BATCH_SIZE,
                 shuffle=True,
                 collate_fn=PadCollate(debug=False),
-                num_workers=8,
-                pin_memory=True,
-                prefetch_factor=2,
-                persistent_workers=True
+                num_workers=NUM_WORKERS,      # ← ADD
+                pin_memory=PIN_MEMORY,         # ← ADD
+                prefetch_factor=PREFETCH_FACTOR,  # ← ADD
+                persistent_workers=True        # ← ADD
             )
+
             val_loader = DataLoader(
                 val_subset,
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 collate_fn=PadCollate(debug=False),
-                num_workers=4,
-                pin_memory=True,
-                prefetch_factor=2,
-                persistent_workers=True
+                num_workers=NUM_WORKERS,       # ← ADD
+                pin_memory=PIN_MEMORY,         # ← ADD
+                prefetch_factor=PREFETCH_FACTOR,  # ← ADD
+                persistent_workers=True        # ← ADD
             )
 
             print(f"  Train samples: {len(train_indices)}")

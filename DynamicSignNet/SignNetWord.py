@@ -836,12 +836,12 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     NUM_EPOCHS = 1000
-    BATCH_SIZE = 32
-    LEARNING_RATE = 3e-4
-    HIDDEN_SIZE = 128
-    NUM_LSTM_LAYERS = 1
-    DROPOUT_RATE = 0.35
-    LSTM_DROPOUT = 0.25
+    BATCH_SIZE = 32              # Keep same
+    LEARNING_RATE = 4e-4         # ↑ Slightly higher
+    HIDDEN_SIZE = 192            # ↑ Increase model capacity
+    NUM_LSTM_LAYERS = 2          # ↑ Add more layers
+    DROPOUT_RATE = 0.30          # ↓ Slightly lower (model is stronger)
+    LSTM_DROPOUT = 0.20          # ↓ Slightly lower
     NUM_WORKERS = 8
     PIN_MEMORY = True
     PREFETCH_FACTOR = 2

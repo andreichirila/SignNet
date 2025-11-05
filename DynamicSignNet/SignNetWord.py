@@ -118,7 +118,7 @@ class TemporalAugmentation:
 
 
 class SignLanguageDataset(torch.utils.data.Dataset):
-    """Sign language dataset with advanced augmentation for landmark sequences."""
+    """Sign language dataset with safe augmentation."""
 
     def __init__(self, npz_dir, debug=False, augment=False, augment_prob=0.5):
         self.npz_dir = npz_dir
@@ -139,16 +139,14 @@ class SignLanguageDataset(torch.utils.data.Dataset):
 
             npz_path = os.path.join(npz_dir, npz_file)
             npz_data = np.load(npz_path)
-
-            # Load landmarks from the NPZ file
-            self.data[idx] = npz_data['landmarks']  # Shape: (num_samples, seq_len, 1659)
+            self.data[idx] = npz_data['landmarks']
 
             if debug and idx < 3:
                 print(f"  {word}: {self.data[idx].shape}")
 
         self.num_classes = len(self.word_to_idx)
         if debug:
-            print(f"✓ Loaded {self.num_classes} classes from {npz_dir}")
+            print(f"✓ Loaded {self.num_classes} classes")
 
     def __len__(self):
         total = 0
@@ -157,7 +155,6 @@ class SignLanguageDataset(torch.utils.data.Dataset):
         return total
 
     def __getitem__(self, idx):
-        # Find which class and sample within class
         current_idx = 0
         for class_idx in sorted(self.data.keys()):
             class_data = self.data[class_idx]
@@ -165,7 +162,6 @@ class SignLanguageDataset(torch.utils.data.Dataset):
                 sample_idx = idx - current_idx
                 landmarks = class_data[sample_idx].astype(np.float32)
 
-                # Apply augmentation
                 if self.augment and np.random.rand() < self.augment_prob:
                     landmarks = self._augment(landmarks)
 
@@ -177,152 +173,17 @@ class SignLanguageDataset(torch.utils.data.Dataset):
             current_idx += len(class_data)
 
     def _augment(self, landmarks):
-        """Apply random augmentations to landmark sequence."""
-
-        # 1. Temporal Jitter
-        if np.random.rand() < 0.4:
-            landmarks = self._temporal_jitter(landmarks)
-
-        # 2. Gaussian Noise
-        if np.random.rand() < 0.4:
-            landmarks = self._gaussian_noise(landmarks)
-
-        # 3. Random Scaling
-        if np.random.rand() < 0.3:
-            landmarks = self._random_scaling(landmarks)
-
-        # 4. Temporal Dropout
-        if np.random.rand() < 0.3:
-            landmarks = self._temporal_dropout(landmarks)
-
-        # 5. Smooth Noise
-        if np.random.rand() < 0.3:
-            landmarks = self._smooth_noise(landmarks)
-
-        # 6. Speed Variation
-        if np.random.rand() < 0.2:
-            landmarks = self._speed_variation(landmarks)
-
-        return landmarks
-
-    def _temporal_jitter(self, landmarks):
-        """Randomly shift landmark frames in time while preserving shape."""
-        seq_len = landmarks.shape[0]
-        max_shift = min(3, seq_len // 10)
-
-        if max_shift > 0:
-            shift = np.random.randint(-max_shift, max_shift + 1)
-
-            if shift > 0:
-                # Shift forward: remove frames from start, repeat last frame
-                landmarks = np.vstack([
-                    landmarks[shift:],
-                    np.tile(landmarks[-1:], (shift, 1))  # ← Use tile instead of repeat
-                ])
-            elif shift < 0:
-                # Shift backward: repeat first frame, remove frames from end
-                landmarks = np.vstack([
-                    np.tile(landmarks[0:1], (-shift, 1)),  # ← Use tile instead of repeat
-                    landmarks[:shift]
-                ])
-
-        return landmarks
-
-    def _gaussian_noise(self, landmarks, noise_scale=0.02):
-        """Add Gaussian noise to landmark coordinates."""
-        noise = np.random.normal(0, noise_scale, landmarks.shape)
-        return landmarks + noise
-
-    def _random_scaling(self, landmarks, scale_range=(0.92, 1.08)):
-        """Randomly scale all coordinates uniformly."""
-        scale = np.random.uniform(scale_range[0], scale_range[1])
-        return landmarks * scale
-
-    def _temporal_dropout(self, landmarks, drop_prob=0.1):
-        """Randomly drop some frames from the sequence."""
-        seq_len = landmarks.shape[0]
-        min_keep = max(3, int(seq_len * 0.7))
-
-        keep_mask = np.random.rand(seq_len) > drop_prob
-
-        if keep_mask.sum() < min_keep:
-            keep_indices = np.random.choice(seq_len, min_keep, replace=False)
-            keep_mask[:] = False
-            keep_mask[keep_indices] = True
-
-        kept_landmarks = landmarks[keep_mask]
-
-        # Interpolate back to original sequence length
-        if len(kept_landmarks) < seq_len:
-            old_indices = np.arange(len(kept_landmarks))
-            new_indices = np.linspace(0, len(kept_landmarks) - 1, seq_len)
-
-            landmarks_new = np.zeros_like(landmarks)
-            for feat_idx in range(landmarks.shape[1]):
-                landmarks_new[:, feat_idx] = np.interp(
-                    new_indices,
-                    old_indices,
-                    kept_landmarks[:, feat_idx]
-                )
-            landmarks = landmarks_new
-        else:
-            landmarks = kept_landmarks[:seq_len]
-
-        return landmarks
-
-    def _smooth_noise(self, landmarks, noise_scale=0.02):
-        """Add smooth (correlated) noise over time."""
-        seq_len, num_features = landmarks.shape
-        num_keypoints = max(2, seq_len // 5)
-        keypoint_indices = np.linspace(0, seq_len - 1, num_keypoints)
-
-        smooth_noise = np.random.normal(0, noise_scale, (num_keypoints, num_features))
-
-        time_axis = np.arange(seq_len)
-        noise = np.zeros_like(landmarks)
-
-        for feature_idx in range(num_features):
-            noise[:, feature_idx] = np.interp(
-                time_axis,
-                keypoint_indices,
-                smooth_noise[:, feature_idx]
-            )
-
-        return landmarks + noise
-
-    def _speed_variation(self, landmarks):
-        """Stretch or compress the sequence in time."""
-        seq_len, num_features = landmarks.shape
-        speed_factor = np.random.uniform(0.85, 1.15)
-
-        new_len = int(seq_len * speed_factor)
-        new_len = max(10, new_len)
-
-        if new_len == seq_len:
+        """Apply minimal safe augmentation."""
+        # Ensure 2D shape
+        if landmarks.ndim != 2:
             return landmarks
 
-        # Interpolate to new sequence length
-        old_indices = np.arange(seq_len)
-        new_indices = np.linspace(0, seq_len - 1, new_len)
-
-        new_landmarks = np.zeros((new_len, num_features))
-        for feat_idx in range(num_features):
-            new_landmarks[:, feat_idx] = np.interp(
-                new_indices,
-                old_indices,
-                landmarks[:, feat_idx]
-            )
-
-        # Pad or crop back to original length
-        if new_len < seq_len:
-            padding = np.tile(new_landmarks[-1:], (seq_len - new_len, 1))
-            landmarks = np.vstack([new_landmarks, padding])
-        else:
-            landmarks = new_landmarks[:seq_len]
+        # Only apply Gaussian noise (safest)
+        if np.random.rand() < 0.5:
+            noise = np.random.normal(0, 0.01, landmarks.shape)
+            landmarks = landmarks + noise
 
         return landmarks
-
-
 
 
 class RemappedDataset(torch.utils.data.Dataset):

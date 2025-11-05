@@ -277,7 +277,31 @@ class SignLanguageDataset(torch.utils.data.Dataset):
         return landmarks + noise
 
     def _speed_variation(self, landmarks):
-        """Stretch
+        """Stretch or compress the sequence in time."""
+        seq_len = landmarks.shape[0]
+        speed_factor = np.random.uniform(0.85, 1.15)
+
+        new_len = int(seq_len * speed_factor)
+        new_len = max(10, new_len)
+
+        indices = np.linspace(0, seq_len - 1, new_len)
+        old_indices = np.arange(seq_len)
+
+        new_landmarks = np.zeros((new_len, landmarks.shape[1]))
+        for feat_idx in range(landmarks.shape[1]):
+            new_landmarks[:, feat_idx] = np.interp(
+                indices,
+                old_indices,
+                landmarks[:, feat_idx]
+            )
+
+        if new_len < seq_len:
+            padding = np.repeat(new_landmarks[-1:], seq_len - new_len, axis=0)
+            new_landmarks = np.vstack([new_landmarks, padding])
+        elif new_len > seq_len:
+            new_landmarks = new_landmarks[:seq_len]
+
+        return new_landmarks
 
 
 

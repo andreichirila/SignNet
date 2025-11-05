@@ -768,59 +768,6 @@ def evaluate_interruptible(model, val_loader, criterion, device, epoch,
     avg_loss = total_loss / len(val_loader)
     return avg_loss, accuracy, False
 
-def log_model_summary_torchsummary(model, input_size=1659, seq_len=50, device="cuda",
-                                    model_save_dir="./models_enhanced"):
-    """
-    Use PyTorch's built-in summary function and save to MLflow.
-    """
-    # ========================================================================
-    # 1. Generate summary with torchsummary
-    # ========================================================================
-    summary_path = os.path.join(model_save_dir, "model_summary.txt")
-
-    # Capture summary output
-    import io
-    from contextlib import redirect_stdout
-
-    with open(summary_path, 'w') as f:
-        f.write("="*80 + "\n")
-        f.write("MODEL ARCHITECTURE SUMMARY (torch.summary)\n")
-        f.write("="*80 + "\n\n")
-
-        # Redirect summary output to file
-        with redirect_stdout(f):
-            summary(
-                model,
-                input_size=(seq_len, input_size),  # (seq_len, input_size)
-                batch_size=32,
-                device=device)
-
-    print(f"✓ Model summary saved: {summary_path}")
-
-    # ========================================================================
-    # 2. Log to MLflow
-    # ========================================================================
-    mlflow.log_artifact(summary_path)
-
-    # Log model statistics as params
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-
-    mlflow.log_params({
-        "model_total_parameters": total_params,
-        "model_trainable_parameters": trainable_params,
-        "model_architecture": model.__class__.__name__,
-    })
-
-    mlflow.log_metrics({
-        "model/total_parameters": total_params,
-        "model/trainable_parameters": trainable_params,
-        "model/non_trainable_parameters": total_params - trainable_params,
-    })
-
-    print(f"✓ Model summary logged to MLflow")
-
-    return summary_path
 
 def main():
     """Main training pipeline with graceful interrupt handling."""
@@ -1015,15 +962,6 @@ def main():
 
             total_params = sum(p.numel() for p in model.parameters())
             mlflow.log_param("total_parameters", total_params)
-
-            print(f"\n[STEP 6.5] Logging model summary to MLflow...")
-            log_model_summary_torchsummary(
-                model,
-                input_size=1659,
-                seq_len=50,  # Average sequence length
-                device=str(DEVICE),
-                model_save_dir=MODEL_SAVE_DIR
-            )
 
             # ========================================================================
             # STEP 7: Setup training

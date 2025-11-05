@@ -987,12 +987,7 @@ def main():
                 word_counts[word] += 1
 
             number_of_classes = 300
-
             top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
-            print(f"Bottom {number_of_classes} classes (least frequent):")
-            for idx, (word, count) in enumerate(least_common_words):
-                print(f"    {idx+1:2}. {word:20} : {count:4} samples")
-
             print(f"  Top n words: {top_n_words}")
             for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
                 print(f"    {idx+1:2}. {word:20} : {count:4} samples")
@@ -1002,7 +997,6 @@ def main():
             for new_idx, word in enumerate(top_n_words):
                 old_idx = dataset.word_to_idx[word]
                 old_to_new_idx[old_idx] = new_idx
-
 
             filtered_indices = []
             for i in range(len(dataset)):

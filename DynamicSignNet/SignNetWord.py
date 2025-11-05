@@ -793,9 +793,7 @@ def log_model_summary_torchsummary(model, input_size=1659, seq_len=50, device="c
                 model,
                 input_size=(seq_len, input_size),  # (seq_len, input_size)
                 batch_size=32,
-                device=device,
-                verbose=2
-            )
+                device=device)
 
     print(f"✓ Model summary saved: {summary_path}")
 

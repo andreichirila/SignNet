@@ -206,7 +206,7 @@ class SignLanguageDataset(torch.utils.data.Dataset):
         return landmarks
 
     def _temporal_jitter(self, landmarks):
-        """Randomly shift landmark frames in time."""
+        """Randomly shift landmark frames in time while preserving shape."""
         seq_len = landmarks.shape[0]
         max_shift = min(3, seq_len // 10)
 
@@ -214,13 +214,15 @@ class SignLanguageDataset(torch.utils.data.Dataset):
             shift = np.random.randint(-max_shift, max_shift + 1)
 
             if shift > 0:
+                # Shift forward: remove frames from start, repeat last frame
                 landmarks = np.vstack([
                     landmarks[shift:],
-                    np.repeat(landmarks[-1:], shift, axis=0)
+                    np.tile(landmarks[-1:], (shift, 1))  # ← Use tile instead of repeat
                 ])
             elif shift < 0:
+                # Shift backward: repeat first frame, remove frames from end
                 landmarks = np.vstack([
-                    np.repeat(landmarks[0:1], -shift, axis=0),
+                    np.tile(landmarks[0:1], (-shift, 1)),  # ← Use tile instead of repeat
                     landmarks[:shift]
                 ])
 
@@ -248,11 +250,23 @@ class SignLanguageDataset(torch.utils.data.Dataset):
             keep_mask[:] = False
             keep_mask[keep_indices] = True
 
-        landmarks = landmarks[keep_mask]
+        kept_landmarks = landmarks[keep_mask]
 
-        if len(landmarks) < seq_len:
-            indices = np.linspace(0, len(landmarks) - 1, seq_len)
-            landmarks = np.interp(indices, np.arange(len(landmarks)), landmarks.T).T
+        # Interpolate back to original sequence length
+        if len(kept_landmarks) < seq_len:
+            old_indices = np.arange(len(kept_landmarks))
+            new_indices = np.linspace(0, len(kept_landmarks) - 1, seq_len)
+
+            landmarks_new = np.zeros_like(landmarks)
+            for feat_idx in range(landmarks.shape[1]):
+                landmarks_new[:, feat_idx] = np.interp(
+                    new_indices,
+                    old_indices,
+                    kept_landmarks[:, feat_idx]
+                )
+            landmarks = landmarks_new
+        else:
+            landmarks = kept_landmarks[:seq_len]
 
         return landmarks
 
@@ -278,30 +292,35 @@ class SignLanguageDataset(torch.utils.data.Dataset):
 
     def _speed_variation(self, landmarks):
         """Stretch or compress the sequence in time."""
-        seq_len = landmarks.shape[0]
+        seq_len, num_features = landmarks.shape
         speed_factor = np.random.uniform(0.85, 1.15)
 
         new_len = int(seq_len * speed_factor)
         new_len = max(10, new_len)
 
-        indices = np.linspace(0, seq_len - 1, new_len)
-        old_indices = np.arange(seq_len)
+        if new_len == seq_len:
+            return landmarks
 
-        new_landmarks = np.zeros((new_len, landmarks.shape[1]))
-        for feat_idx in range(landmarks.shape[1]):
+        # Interpolate to new sequence length
+        old_indices = np.arange(seq_len)
+        new_indices = np.linspace(0, seq_len - 1, new_len)
+
+        new_landmarks = np.zeros((new_len, num_features))
+        for feat_idx in range(num_features):
             new_landmarks[:, feat_idx] = np.interp(
-                indices,
+                new_indices,
                 old_indices,
                 landmarks[:, feat_idx]
             )
 
+        # Pad or crop back to original length
         if new_len < seq_len:
-            padding = np.repeat(new_landmarks[-1:], seq_len - new_len, axis=0)
-            new_landmarks = np.vstack([new_landmarks, padding])
-        elif new_len > seq_len:
-            new_landmarks = new_landmarks[:seq_len]
+            padding = np.tile(new_landmarks[-1:], (seq_len - new_len, 1))
+            landmarks = np.vstack([new_landmarks, padding])
+        else:
+            landmarks = new_landmarks[:seq_len]
 
-        return new_landmarks
+        return landmarks
 
 
 

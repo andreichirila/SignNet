@@ -814,7 +814,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 50 Words Long Training (1000 epochs, interruptible)"
+    RUN_NAME = f"Top 50 Words better regularization"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -822,18 +822,18 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
-    LEARNING_RATE = 8e-4
+    LEARNING_RATE = 3e-4
     NUM_EPOCHS = 1000
     HIDDEN_SIZE = 256
     NUM_LSTM_LAYERS = 2
-    DROPOUT_RATE = 0.20
-    LSTM_DROPOUT = 0.1
+    DROPOUT_RATE = 0.35
+    LSTM_DROPOUT = 0.25
     NUM_ATTENTION_HEADS = 4
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_enhanced"
     PLOTS_DIR = "./plots_enhanced"
 
-    EARLY_STOPPING_PATIENCE = 1000
+    EARLY_STOPPING_PATIENCE = 15
     EARLY_STOPPING_MIN_DELTA = 0.0005
     EARLY_STOPPING_METRIC = "val_loss"
     EARLY_STOPPING_MODE = "min"
@@ -981,7 +981,7 @@ def main():
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=LEARNING_RATE,
-                weight_decay=1e-4,
+                weight_decay=5e-4,
                 betas=(0.9, 0.999)
             )
 
@@ -1074,6 +1074,18 @@ def main():
             print(f"[TRAINING COMPLETE / INTERRUPTED]")
             print(f"  Total epochs trained: {epochs_trained}")
             print(f"  Best Val Accuracy: {best_val_acc:.2%} at epoch {best_epoch+1}")
+
+            if len(train_losses) > 0:
+                print(f"  Final Train Loss: {train_losses[-1]:.4f}")
+                print(f"  Final Val Loss: {val_losses[-1]:.4f}")
+                print(f"  Final Train Acc: {train_accs[-1]:.2%}")
+                print(f"  Final Val Acc: {val_accs[-1]:.2%}")
+
+            # Generate plots
+            if len(train_losses) > 0:
+                print(f"\n[PLOTTING] Generating training curves...")
+                plot_path = plot_training_curves(train_losses, val_losses, train_accs, val_accs, PLOTS_DIR)
+                mlflow.log_artifact(plot_path)
 
             final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final.pth")
             torch.save(model.state_dict(), final_model_path)

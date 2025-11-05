@@ -967,10 +967,10 @@ def main():
         print(f"  Train samples: {len(train_indices)}")
         print(f"  Val samples: {len(val_indices)}")
 
-            train_subset = RemappedDataset(dataset, train_indices, old_to_new_idx)
-            val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
+        train_subset = RemappedDataset(dataset, train_indices, old_to_new_idx)
+        val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
 
-            num_classes = len(top_n_words)
+        num_classes = len(top_n_words)
         train_label_counts = [0] * num_classes
         for idx in range(len(train_subset)):
             _, label = train_subset[idx]

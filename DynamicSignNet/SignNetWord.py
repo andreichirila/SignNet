@@ -124,9 +124,8 @@ class SignLanguageDataset(torch.utils.data.Dataset):
         self.npz_dir = npz_dir
         self.debug = debug
         self.augment = augment
-        self.augment_prob = augment_prob  # Probability of applying augmentation
+        self.augment_prob = augment_prob
 
-        # Load data
         self.data = {}
         self.word_to_idx = {}
         self.idx_to_word = {}
@@ -140,11 +139,16 @@ class SignLanguageDataset(torch.utils.data.Dataset):
 
             npz_path = os.path.join(npz_dir, npz_file)
             npz_data = np.load(npz_path)
-            self.data[idx] = npz_data['data']  # Shape: (num_samples, seq_len, 1659)
+
+            # Load landmarks from the NPZ file
+            self.data[idx] = npz_data['landmarks']  # Shape: (num_samples, seq_len, 1659)
+
+            if debug and idx < 3:
+                print(f"  {word}: {self.data[idx].shape}")
 
         self.num_classes = len(self.word_to_idx)
-        if self.debug:
-            print(f"Loaded {self.num_classes} classes from {npz_dir}")
+        if debug:
+            print(f"✓ Loaded {self.num_classes} classes from {npz_dir}")
 
     def __len__(self):
         total = 0
@@ -173,92 +177,72 @@ class SignLanguageDataset(torch.utils.data.Dataset):
             current_idx += len(class_data)
 
     def _augment(self, landmarks):
-        """
-        Apply random augmentations to landmark sequence.
-        landmarks: (seq_len, 1659) array
-        """
-        seq_len = landmarks.shape[0]
+        """Apply random augmentations to landmark sequence."""
 
-        # 1. Temporal Jitter - Shift frames slightly in time
+        # 1. Temporal Jitter
         if np.random.rand() < 0.4:
             landmarks = self._temporal_jitter(landmarks)
 
-        # 2. Gaussian Noise - Add small random noise to coordinates
+        # 2. Gaussian Noise
         if np.random.rand() < 0.4:
             landmarks = self._gaussian_noise(landmarks)
 
-        # 3. Scaling - Scale all coordinates uniformly
+        # 3. Random Scaling
         if np.random.rand() < 0.3:
             landmarks = self._random_scaling(landmarks)
 
-        # 4. Temporal Dropout - Drop some frames randomly
+        # 4. Temporal Dropout
         if np.random.rand() < 0.3:
             landmarks = self._temporal_dropout(landmarks)
 
-        # 5. Smooth Noise - More gradual noise changes over time
+        # 5. Smooth Noise
         if np.random.rand() < 0.3:
             landmarks = self._smooth_noise(landmarks)
 
-        # 6. Speed Variation - Stretch or compress sequence
+        # 6. Speed Variation
         if np.random.rand() < 0.2:
             landmarks = self._speed_variation(landmarks)
 
         return landmarks
 
     def _temporal_jitter(self, landmarks):
-        """
-        Randomly shift landmark frames in time.
-        Simulates timing variations in signing.
-        """
+        """Randomly shift landmark frames in time."""
         seq_len = landmarks.shape[0]
-        max_shift = min(3, seq_len // 10)  # Shift by 1-3 frames max
+        max_shift = min(3, seq_len // 10)
 
         if max_shift > 0:
-            # Create a jittered time axis
             shift = np.random.randint(-max_shift, max_shift + 1)
 
             if shift > 0:
                 landmarks = np.vstack([
                     landmarks[shift:],
-                    np.repeat(landmarks[-1:], shift, axis=0)  # Pad with last frame
+                    np.repeat(landmarks[-1:], shift, axis=0)
                 ])
             elif shift < 0:
                 landmarks = np.vstack([
-                    np.repeat(landmarks[0:1], -shift, axis=0),  # Pad with first frame
+                    np.repeat(landmarks[0:1], -shift, axis=0),
                     landmarks[:shift]
                 ])
 
         return landmarks
 
     def _gaussian_noise(self, landmarks, noise_scale=0.02):
-        """
-        Add Gaussian noise to landmark coordinates.
-        noise_scale: standard deviation relative to coordinate values
-        """
+        """Add Gaussian noise to landmark coordinates."""
         noise = np.random.normal(0, noise_scale, landmarks.shape)
         return landmarks + noise
 
     def _random_scaling(self, landmarks, scale_range=(0.92, 1.08)):
-        """
-        Randomly scale all coordinates uniformly.
-        Simulates different distances from camera.
-        """
+        """Randomly scale all coordinates uniformly."""
         scale = np.random.uniform(scale_range[0], scale_range[1])
         return landmarks * scale
 
     def _temporal_dropout(self, landmarks, drop_prob=0.1):
-        """
-        Randomly drop some frames from the sequence.
-        drop_prob: probability of dropping each frame
-        """
+        """Randomly drop some frames from the sequence."""
         seq_len = landmarks.shape[0]
-
-        # Keep at least 70% of frames
         min_keep = max(3, int(seq_len * 0.7))
 
         keep_mask = np.random.rand(seq_len) > drop_prob
 
-        # Ensure minimum frames
         if keep_mask.sum() < min_keep:
             keep_indices = np.random.choice(seq_len, min_keep, replace=False)
             keep_mask[:] = False
@@ -266,8 +250,6 @@ class SignLanguageDataset(torch.utils.data.Dataset):
 
         landmarks = landmarks[keep_mask]
 
-        # Linear interpolate to restore sequence length (optional, remove for variable length)
-        # This keeps the sequence length constant
         if len(landmarks) < seq_len:
             indices = np.linspace(0, len(landmarks) - 1, seq_len)
             landmarks = np.interp(indices, np.arange(len(landmarks)), landmarks.T).T
@@ -275,19 +257,13 @@ class SignLanguageDataset(torch.utils.data.Dataset):
         return landmarks
 
     def _smooth_noise(self, landmarks, noise_scale=0.02):
-        """
-        Add smooth (correlated) noise that changes gradually over time.
-        More realistic than pure Gaussian noise.
-        """
+        """Add smooth (correlated) noise over time."""
         seq_len, num_features = landmarks.shape
-
-        # Generate smooth noise using interpolation
         num_keypoints = max(2, seq_len // 5)
         keypoint_indices = np.linspace(0, seq_len - 1, num_keypoints)
 
         smooth_noise = np.random.normal(0, noise_scale, (num_keypoints, num_features))
 
-        # Interpolate to sequence length
         time_axis = np.arange(seq_len)
         noise = np.zeros_like(landmarks)
 
@@ -301,36 +277,8 @@ class SignLanguageDataset(torch.utils.data.Dataset):
         return landmarks + noise
 
     def _speed_variation(self, landmarks):
-        """
-        Stretch or compress the sequence in time.
-        Simulates different signing speeds.
-        """
-        seq_len = landmarks.shape[0]
-        speed_factor = np.random.uniform(0.85, 1.15)
+        """Stretch
 
-        new_len = int(seq_len * speed_factor)
-        new_len = max(10, new_len)  # Keep minimum length
-
-        # Interpolate to new sequence length
-        indices = np.linspace(0, seq_len - 1, new_len)
-        old_indices = np.arange(seq_len)
-
-        new_landmarks = np.zeros((new_len, landmarks.shape[1]))
-        for feat_idx in range(landmarks.shape[1]):
-            new_landmarks[:, feat_idx] = np.interp(
-                indices,
-                old_indices,
-                landmarks[:, feat_idx]
-            )
-
-        # Pad or crop back to original length if needed
-        if new_len < seq_len:
-            padding = np.repeat(new_landmarks[-1:], seq_len - new_len, axis=0)
-            new_landmarks = np.vstack([new_landmarks, padding])
-        elif new_len > seq_len:
-            new_landmarks = new_landmarks[:seq_len]
-
-        return new_landmarks
 
 
 

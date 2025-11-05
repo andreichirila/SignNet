@@ -24,49 +24,63 @@ class EarlyStopping:
     Early stopping to prevent overfitting.
     Monitors validation loss/accuracy and stops training if no improvement.
     """
-    def __init__(self, patience=10, min_delta=0.001, metric="loss", mode="min"):
+    def __init__(self, patience=10, min_delta=0.001, metric="val_loss", mode="min"):
         self.patience = patience
         self.min_delta = min_delta
-        self.metric = metric
-        self.mode = mode
+        self.metric = metric  # e.g., "val_loss" or "val_accuracy"
+        self.mode = mode      # "min" for loss, "max" for accuracy
         self.counter = 0
         self.best_score = None
         self.best_epoch = 0
         self.early_stop = False
 
+        # Initialize best score
         if mode == "min":
             self.best_score = float('inf')
         else:
             self.best_score = -float('inf')
 
     def __call__(self, current_score, epoch):
+        """
+        Check if training should stop.
+        Args:
+            current_score: Current validation metric value
+            epoch: Current epoch number
+        Returns:
+            True if early stopping triggered, False otherwise
+        """
         improved = False
 
+        # Check if score improved
         if self.mode == "min":
             if current_score < (self.best_score - self.min_delta):
                 improved = True
                 self.best_score = current_score
                 self.best_epoch = epoch
                 self.counter = 0
-        else:
+        else:  # mode == "max"
             if current_score > (self.best_score + self.min_delta):
                 improved = True
                 self.best_score = current_score
                 self.best_epoch = epoch
                 self.counter = 0
 
-        if not improved:
+        # Print improvement message
+        if improved:
+            print(f"  ✓ {self.metric}: {self.best_score:.4f} (epoch {self.best_epoch + 1})")
+        else:
             self.counter += 1
+            print(f"  ℹ No improvement for {self.counter}/{self.patience} epochs")
+
+            # Check if patience exceeded
             if self.counter >= self.patience:
                 self.early_stop = True
                 print(f"\n[EARLY STOPPING] No improvement for {self.patience} epochs")
-                print(f"  Best {self.metric}: {self.best_score:.4f} at epoch {self.best_epoch + 1}")
+                print(f"  Best {self.metric}: {self.best_score:.4f} (epoch {self.best_epoch + 1})")
                 return True
-        else:
-            if improved:
-                print(f"  ✓ Best {self.metric} improved to {self.best_score:.4f}")
 
         return False
+
 
 
 class TemporalAugmentation:
@@ -821,21 +835,21 @@ def main():
     # HYPERPARAMETERS
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    BATCH_SIZE = 64              # ← Sweet spot
-    LEARNING_RATE = 5e-4         # Keep same
     NUM_EPOCHS = 1000
-    HIDDEN_SIZE = 256            # Keep same
-    NUM_LSTM_LAYERS = 2          # Keep same
-    DROPOUT_RATE = 0.30          # Slightly relax
-    LSTM_DROPOUT = 0.20          # Slightly relax
-    NUM_ATTENTION_HEADS = 4
+    BATCH_SIZE = 32
+    LEARNING_RATE = 3e-4
+    HIDDEN_SIZE = 128
+    NUM_LSTM_LAYERS = 1
+    DROPOUT_RATE = 0.35
+    LSTM_DROPOUT = 0.25
     NUM_WORKERS = 8
     PIN_MEMORY = True
     PREFETCH_FACTOR = 2
+    NUM_ATTENTION_HEADS = 4
 
     EARLY_STOPPING_PATIENCE = 25
-    EARLY_STOPPING_MIN_DELTA = 0.001
-    EARLY_STOPPING_METRIC = "val_accuracy"  # ← Switch to accuracy
+    EARLY_STOPPING_MIN_DELTA = 0.01
+    EARLY_STOPPING_METRIC = "val_acc"  # ← Switch to accuracy
     EARLY_STOPPING_MODE = "max"
 
     NPZ_DIR = "./word_landmarks_extracted"
@@ -1067,7 +1081,7 @@ def main():
                     "learning_rate": lr,
                 }, step=epoch)
 
-                if early_stopping(val_loss, epoch):
+                if early_stopping(val_acc, epoch):
                     print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
                     break
 

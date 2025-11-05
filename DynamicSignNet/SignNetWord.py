@@ -569,6 +569,17 @@ class PadCollate:
         return landmarks_tensor, labels_tensor, seq_lengths_tensor
 
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=1, gamma=2):
+        super().__init__()
+        self.alpha = alpha
+        self.gamma = gamma
+
+    def forward(self, inputs, targets):
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        pt = torch.exp(-ce_loss)
+        focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
+        return focal_loss.mean()
 
 
 
@@ -874,7 +885,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 70 Words with augment"
+    RUN_NAME = f"Top 70 Words focal loss added"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -1056,7 +1067,8 @@ def main():
             # STEP 7: Setup training
             # ================================================================
             print(f"\n[STEP 7] Setting up training...")
-            criterion = nn.CrossEntropyLoss()
+            # criterion = nn.CrossEntropyLoss()
+            criterion = FocalLoss(alpha=1, gamma=2)
 
             optimizer = torch.optim.AdamW(
                 model.parameters(),

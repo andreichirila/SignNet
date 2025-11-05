@@ -886,12 +886,13 @@ def main():
     LEARNING_RATE = 3e-4
     HIDDEN_SIZE = 128
     NUM_LSTM_LAYERS = 1
-    DROPOUT_RATE = 0.35
-    LSTM_DROPOUT = 0.25
+    DROPOUT_RATE = 0.45
+    LSTM_DROPOUT = 0.35
     NUM_WORKERS = 8
     PIN_MEMORY = True
     PREFETCH_FACTOR = 2
     NUM_ATTENTION_HEADS = 4
+    WEIGHT_DECAY = 8e-4
 
     AUGMENT = False
     AUGMENT_PROBABILITY = 0.6
@@ -1059,7 +1060,7 @@ def main():
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=LEARNING_RATE,
-                weight_decay=8e-4,
+                weight_decay=WEIGHT_DECAY,
                 betas=(0.9, 0.999)
             )
 

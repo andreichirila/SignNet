@@ -886,16 +886,17 @@ def main():
     LEARNING_RATE = 3e-4
     HIDDEN_SIZE = 128
     NUM_LSTM_LAYERS = 1
-    DROPOUT_RATE = 0.45
-    LSTM_DROPOUT = 0.35
+    DROPOUT_RATE = 0.35          # ← Changed from 0.45
+    LSTM_DROPOUT = 0.25          # ← Changed from 0.35
     NUM_WORKERS = 8
     PIN_MEMORY = True
     PREFETCH_FACTOR = 2
     NUM_ATTENTION_HEADS = 4
-    WEIGHT_DECAY = 8e-4
+    WEIGHT_DECAY = 5e-4          # ← Changed from 8e-4
 
-    AUGMENT = False
-    AUGMENT_PROBABILITY = 0.6
+    AUGMENT = True               # ← Changed from False (CRITICAL!)
+    AUGMENT_PROBABILITY = 0.7    # ← Changed from 0.6
+
 
     EARLY_STOPPING_PATIENCE = 25
     EARLY_STOPPING_MIN_DELTA = 0.0005
@@ -1182,7 +1183,7 @@ def main():
             print("="*80)
 
             # Send notification
-            asyncio.run(send_message(f"Training summary: Best val acc \n\n{best_val_acc:.2%}", CHAT_ID))
+            asyncio.run(send_message(f"Training summary: Best val acc \n\n{best_val_acc:.2%}\n Best train acc {best_val_acc:.2%}", CHAT_ID))
 
         finally:
             # ====================================================================

@@ -1096,6 +1096,9 @@ def main():
 
             print("="*80)
 
+            # Send notification
+            asyncio.run(send_message(f"Training summary: Best val acc \n\n{best_val_acc:.2%}", CHAT_ID))
+
         finally:
             # ====================================================================
             # END MLFLOW RUN (explicit)

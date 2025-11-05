@@ -886,7 +886,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 70 Words label smoothing"
+    RUN_NAME = f"Last 100 classes"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -986,17 +986,25 @@ def main():
                 word = dataset.idx_to_word[label.item()]
                 word_counts[word] += 1
 
-            number_of_classes = 70
-            top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
-            print(f"  Top n words: {top_n_words}")
-            for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
+            number_of_classes = 100
+            # top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
+
+            least_common_words = sorted(word_counts.items(), key=lambda x: x[1])[-number_of_classes:]
+            top_n_words = least_common_words
+            print(f"Bottom {number_of_classes} classes (least frequent):")
+            for idx, (word, count) in enumerate(least_common_words):
                 print(f"    {idx+1:2}. {word:20} : {count:4} samples")
+
+            #print(f"  Top n words: {top_n_words}")
+            #for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
+            #    print(f"    {idx+1:2}. {word:20} : {count:4} samples")
 
             print(f"\n[STEP 3] Filtering to top {len(top_n_words)} words...")
             old_to_new_idx = {}
             for new_idx, word in enumerate(top_n_words):
                 old_idx = dataset.word_to_idx[word]
                 old_to_new_idx[old_idx] = new_idx
+
 
             filtered_indices = []
             for i in range(len(dataset)):
@@ -1068,8 +1076,8 @@ def main():
             # STEP 7: Setup training
             # ================================================================
             print(f"\n[STEP 7] Setting up training...")
-            # criterion = nn.CrossEntropyLoss()
-            criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+            criterion = nn.CrossEntropyLoss()
+            #criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
             #criterion = FocalLoss(alpha=1, gamma=2)
 
             optimizer = torch.optim.AdamW(

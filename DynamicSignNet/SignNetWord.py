@@ -16,7 +16,6 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from telegram import Bot
 import asyncio
-from torchsummary import summary
 import signal
 
 
@@ -667,20 +666,26 @@ async def run_bot(messages, chat_id):
     await send_message(text, chat_id)
 
 
-class GracefulInterruptHandler:
+class GracefulShutdown:
     """
-    Handles graceful shutdown on Ctrl+C.
-    Allows training to finish current epoch and save state.
+    Handles graceful shutdown on keyboard interrupt (Ctrl+C).
+    Saves model, metrics, and completes MLflow logging before exiting.
     """
     def __init__(self):
         self.interrupted = False
-        signal.signal(signal.SIGINT, self.handler)
+        signal.signal(signal.SIGINT, self._handle_signal)
+        signal.signal(signal.SIGTERM, self._handle_signal)
 
-    def handler(self, signum, frame):
+    def _handle_signal(self, sig, frame):
+        print("\n" + "="*80)
+        print("[GRACEFUL SHUTDOWN] Keyboard interrupt detected (Ctrl+C)")
+        print("="*80)
         self.interrupted = True
-        print("\n" + "=" * 80)
-        print("[INTERRUPT] Ctrl+C detected. Finishing current epoch and saving...")
-        print("=" * 80)
+
+    def is_interrupted(self):
+        """Check if shutdown has been requested."""
+        return self.interrupted
+
 
 
 def train_epoch_interruptible(model, train_loader, criterion, optimizer, device, epoch,
@@ -770,15 +775,14 @@ def evaluate_interruptible(model, val_loader, criterion, device, epoch,
 
 
 def main():
-    """Main training pipeline with graceful interrupt handling."""
+    """Main training pipeline with graceful shutdown support."""
     print("=" * 80)
-    print("SIGN LANGUAGE CLASSIFIER - LONG TRAINING RUN (1000 EPOCHS)")
+    print("SIGN LANGUAGE CLASSIFIER - ENHANCED WITH GRACEFUL SHUTDOWN")
     print("=" * 80)
-    print("\n[INFO] Press Ctrl+C to gracefully stop training")
-    print("[INFO] Current best model will be saved automatically\n")
 
-    # Initialize interrupt handler
-    interrupt_handler = GracefulInterruptHandler()
+    # Initialize graceful shutdown handler
+    shutdown_handler = GracefulShutdown()
+    print("\n[INFO] Press Ctrl+C at any time to gracefully shut down training")
 
     # ============================================================================
     # MLFLOW SETUP
@@ -797,36 +801,40 @@ def main():
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
     LEARNING_RATE = 8e-4
-    NUM_EPOCHS = 1000  # Much longer training
+    NUM_EPOCHS = 1000
     HIDDEN_SIZE = 256
     NUM_LSTM_LAYERS = 2
     DROPOUT_RATE = 0.20
     LSTM_DROPOUT = 0.1
     NUM_ATTENTION_HEADS = 4
     NPZ_DIR = "./word_landmarks_extracted"
-    MODEL_SAVE_DIR = "./models_long_training"
-    PLOTS_DIR = "./plots_long_training"
+    MODEL_SAVE_DIR = "./models_enhanced"
+    PLOTS_DIR = "./plots_enhanced"
 
-    # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 999
+    EARLY_STOPPING_PATIENCE = 1000
     EARLY_STOPPING_MIN_DELTA = 0.0005
-    EARLY_STOPPING_METRIC = "loss"
+    EARLY_STOPPING_METRIC = "val_loss"
     EARLY_STOPPING_MODE = "min"
 
     print(f"\n[CONFIG] Device: {DEVICE}")
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")
     print(f"[CONFIG] Learning rate: {LEARNING_RATE}")
     print(f"[CONFIG] Max epochs: {NUM_EPOCHS}")
-    print(f"[CONFIG] Early Stopping Patience: {EARLY_STOPPING_PATIENCE}")
 
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
     try:
-        with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME) as run:
-            # ========================================================================
+        # ====================================================================
+        # START MLFLOW RUN (explicit, not context manager)
+        # ====================================================================
+        run = mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME)
+        print(f"\n✓ MLflow run started: {run.info.run_id}")
+
+        try:
+            # ================================================================
             # Log System Information
-            # ========================================================================
+            # ================================================================
             mlflow.log_param("python_version", platform.python_version())
             mlflow.log_param("pytorch_version", torch.__version__)
             mlflow.log_param("os", platform.system())
@@ -838,9 +846,6 @@ def main():
                 mlflow.log_param("cuda_version", torch.version.cuda)
                 mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2))
 
-            # ========================================================================
-            # Log Hyperparameters
-            # ========================================================================
             mlflow.log_params({
                 "batch_size": BATCH_SIZE,
                 "learning_rate": LEARNING_RATE,
@@ -852,19 +857,18 @@ def main():
                 "num_attention_heads": NUM_ATTENTION_HEADS,
                 "input_dim": 1659,
                 "scheduler": "CosineAnnealingLR",
-                "early_stopping_patience": EARLY_STOPPING_PATIENCE,
-                "interruptible": True,
+                "loss_function": "CrossEntropyLoss",
+                "architecture": "Simplified_LSTM_Attention",
+                "device": str(DEVICE),
+                "graceful_shutdown": "enabled",
             })
 
-            # ========================================================================
-            # STEP 1: Load dataset
-            # ========================================================================
+            # ================================================================
+            # STEP 1-5: Load and prepare data
+            # ================================================================
             print(f"\n[STEP 1] Loading dataset...")
             dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=False)
 
-            # ========================================================================
-            # STEP 2: Analyze word frequencies
-            # ========================================================================
             print(f"\n[STEP 2] Analyzing word frequencies...")
             word_counts = Counter()
             for i in range(len(dataset)):
@@ -875,9 +879,6 @@ def main():
             number_of_classes = 50
             top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
 
-            # ========================================================================
-            # STEP 3: Filter to top N words
-            # ========================================================================
             print(f"\n[STEP 3] Filtering to top {len(top_n_words)} words...")
             old_to_new_idx = {}
             for new_idx, word in enumerate(top_n_words):
@@ -891,11 +892,6 @@ def main():
                 if old_label in old_to_new_idx:
                     filtered_indices.append(i)
 
-            print(f"  Filtered dataset size: {len(filtered_indices)} samples")
-
-            # ========================================================================
-            # STEP 4: Stratified split
-            # ========================================================================
             print(f"\n[STEP 4] Splitting with stratified random split...")
             filtered_labels = []
             for idx in filtered_indices:
@@ -910,27 +906,10 @@ def main():
                 stratify=filtered_labels
             )
 
-        print(f"  Train samples: {len(train_indices)}")
-        print(f"  Val samples: {len(val_indices)}")
+            train_subset = RemappedDataset(dataset, train_indices, old_to_new_idx)
+            val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
+            num_classes = len(top_n_words)
 
-        train_subset = RemappedDataset(dataset, train_indices, old_to_new_idx)
-        val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
-
-        num_classes = len(top_n_words)
-        train_label_counts = [0] * num_classes
-        for idx in range(len(train_subset)):
-            _, label = train_subset[idx]
-            train_label_counts[label.item()] += 1
-
-        print(f"\n  Training set distribution:")
-        for new_idx, word in enumerate(top_n_words):
-            count = train_label_counts[new_idx]
-            percentage = 100 * count / len(train_subset) if len(train_subset) > 0 else 0
-            print(f"    Label {new_idx:2}: {word:20} : {count:4} samples ({percentage:5.1f}%)")
-
-            # ========================================================================
-            # STEP 5: Create data loaders
-            # ========================================================================
             print(f"\n[STEP 5] Creating data loaders...")
             train_loader = DataLoader(
                 train_subset,
@@ -945,9 +924,12 @@ def main():
                 collate_fn=PadCollate(debug=False)
             )
 
-            # ========================================================================
+            print(f"  Train samples: {len(train_indices)}")
+            print(f"  Val samples: {len(val_indices)}")
+
+            # ================================================================
             # STEP 6: Build model
-            # ========================================================================
+            # ================================================================
             print(f"\n[STEP 6] Building model...")
             model = LSTMSignClassifierSimplified(
                 input_size=1659,
@@ -960,14 +942,12 @@ def main():
                 debug=True
             ).to(DEVICE)
 
-            total_params = sum(p.numel() for p in model.parameters())
-            mlflow.log_param("total_parameters", total_params)
-
-            # ========================================================================
+            # ================================================================
             # STEP 7: Setup training
-            # ========================================================================
+            # ================================================================
             print(f"\n[STEP 7] Setting up training...")
             criterion = nn.CrossEntropyLoss()
+
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=LEARNING_RATE,
@@ -988,11 +968,11 @@ def main():
                 mode=EARLY_STOPPING_MODE
             )
 
-            # ========================================================================
-            # STEP 8: Training loop (with interrupt handling)
-            # ========================================================================
-            print(f"\n[STEP 8] Starting long training (press Ctrl+C to stop gracefully)...")
-            print("=" * 80)
+            # ================================================================
+            # STEP 8: Training loop
+            # ================================================================
+            print(f"\n[STEP 8] Starting training...")
+            print("="*80)
 
             best_val_acc = 0
             best_epoch = 0
@@ -1000,41 +980,39 @@ def main():
             val_losses = []
             train_accs = []
             val_accs = []
-            interrupted_early = False
+            epochs_trained = 0
 
             for epoch in range(NUM_EPOCHS):
-                # Check for interrupt before epoch
-                if interrupt_handler.interrupted:
-                    print(f"\n[INTERRUPT] Stopping at epoch {epoch}")
-                    interrupted_early = True
+                if shutdown_handler.is_interrupted():
+                    print(f"\n[INTERRUPTED] Stopping at epoch {epoch+1}")
                     break
 
-                train_loss, train_acc, train_interrupted = train_epoch_interruptible(
+                train_loss, train_acc, interrupted = train_epoch_interruptible(
                     model, train_loader, criterion, optimizer, DEVICE, epoch,
-                    interrupt_handler, debug=True
+                    shutdown_handler, debug=True
                 )
 
-                if train_interrupted:
-                    interrupted_early = True
+                if interrupted:
+                    print(f"[INTERRUPTED] Training stopped during epoch {epoch+1}")
                     break
 
-                val_loss, val_acc, val_interrupted = evaluate_interruptible(
+                val_loss, val_acc, interrupted = evaluate_interruptible(
                     model, val_loader, criterion, DEVICE, epoch,
-                    interrupt_handler, debug=True
+                    shutdown_handler, debug=True
                 )
 
-                if val_interrupted:
-                    interrupted_early = True
+                if interrupted:
+                    print(f"[INTERRUPTED] Validation stopped during epoch {epoch+1}")
                     break
 
                 scheduler.step()
+                epochs_trained += 1
 
                 if val_acc > best_val_acc:
                     best_val_acc = val_acc
                     best_epoch = epoch
                     best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best.pth")
                     torch.save(model.state_dict(), best_model_path)
-                    print(f"  💾 Saved best model (val_acc: {val_acc:.2%})")
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
@@ -1059,101 +1037,43 @@ def main():
                     print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
                     break
 
-            # ========================================================================
+            # ================================================================
             # STEP 9: Save results
-            # ========================================================================
-            print("\n" + "=" * 80)
-            print(f"[TRAINING COMPLETE]")
-            if interrupted_early:
-                print(f"[STATUS] Training interrupted by user")
-            else:
-                print(f"[STATUS] Training completed normally")
-
-            print(f"  Total epochs trained: {len(train_losses)}")
+            # ================================================================
+            print("\n" + "="*80)
+            print(f"[TRAINING COMPLETE / INTERRUPTED]")
+            print(f"  Total epochs trained: {epochs_trained}")
             print(f"  Best Val Accuracy: {best_val_acc:.2%} at epoch {best_epoch+1}")
-            if len(train_losses) > 0:
-                print(f"  Final Train Loss: {train_losses[-1]:.4f}")
-                print(f"  Final Val Loss: {val_losses[-1]:.4f}")
-                print(f"  Final Train Acc: {train_accs[-1]:.2%}")
-                print(f"  Final Val Acc: {val_accs[-1]:.2%}")
 
-            # Generate plots
-            if len(train_losses) > 0:
-                print(f"\n[PLOTTING] Generating training curves...")
-                plot_path = plot_training_curves(train_losses, val_losses, train_accs, val_accs, PLOTS_DIR)
-                mlflow.log_artifact(plot_path)
-
-            # Save models and metrics
             final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final.pth")
             torch.save(model.state_dict(), final_model_path)
+            print(f"  ✓ Final model saved: {final_model_path}")
 
-            if len(train_losses) > 0:
-                metrics_path = os.path.join(MODEL_SAVE_DIR, "training_metrics.npz")
-                np.savez(
-                    metrics_path,
-                    train_losses=np.array(train_losses),
-                    val_losses=np.array(val_losses),
-                    train_accs=np.array(train_accs),
-                    val_accs=np.array(val_accs)
-                )
-                mlflow.log_artifact(metrics_path)
-
-            class_info = {
-                "classes": top_n_words,
-                "num_classes": num_classes,
-                "best_val_acc": float(best_val_acc),
-                "best_epoch": int(best_epoch),
-                "total_epochs_trained": len(train_losses),
-                "interrupted": interrupted_early,
-                "label_remapping": {str(k): v for k, v in old_to_new_idx.items()}
-            }
-
-            class_info_path = os.path.join(MODEL_SAVE_DIR, "class_info.json")
-            with open(class_info_path, 'w') as f:
-                json.dump(class_info, f, indent=2)
-
-            # ========================================================================
-            # Log artifacts to MLflow
-            # ========================================================================
-            print(f"\n[MLFLOW] Logging artifacts...")
-            mlflow.log_artifact(best_model_path)
             mlflow.log_artifact(final_model_path)
-            mlflow.log_artifact(class_info_path)
             mlflow.pytorch.log_model(model, "model")
 
             mlflow.set_tags({
                 "model_type": "LSTM_Simplified",
                 "task": "sign_language_word_classification",
-                "num_classes": num_classes,
-                "status": "interrupted" if interrupted_early else "completed",
-                "long_training": True,
+                "status": "completed" if not shutdown_handler.is_interrupted() else "interrupted",
             })
 
-            mlflow.log_metric("epochs_trained", len(train_losses))
+            print("="*80)
 
-            print(f"\n  Best model: {best_model_path}")
-            print(f"  Final model: {final_model_path}")
-            print(f"  MLflow Run ID: {run.info.run_id}")
-            print("=" * 80)
-
-            # Send notification
-            class_info_text = json.dumps(class_info, indent=2)
-            asyncio.run(send_message(f"Training summary (Long run):\n\n{class_info_text}", CHAT_ID))
-
-    except KeyboardInterrupt:
-        print("\n" + "=" * 80)
-        print("[ERROR] Unexpected keyboard interrupt!")
-        print("=" * 80)
-        mlflow.end_run()
-        sys.exit(1)
+        finally:
+            # ====================================================================
+            # END MLFLOW RUN (explicit)
+            # ====================================================================
+            mlflow.end_run()
+            print(f"\n✓ MLflow run ended")
 
     except Exception as e:
-        print("\n" + "=" * 80)
-        print(f"[ERROR] Unexpected error: {e}")
-        print("=" * 80)
+        print(f"\n[ERROR] {e}")
+        import traceback
+        traceback.print_exc()
         mlflow.end_run()
-        raise
 
 
 if __name__ == "__main__":
     main()
+

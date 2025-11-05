@@ -163,22 +163,34 @@ class SignLanguageDataset(Dataset):
 
 class RemappedDataset(torch.utils.data.Dataset):
     """
-    Wraps a dataset and remaps labels from original indices to new indices.
+    Remaps labels from original dataset to new indices for top N words.
+    Returns (landmarks, new_label, seq_length) tuples.
     """
-    def __init__(self, dataset, indices, remapping):
-        self.dataset = dataset
+    def __init__(self, original_dataset, indices, old_to_new_idx):
+        self.original_dataset = original_dataset
         self.indices = indices
-        self.remapping = remapping
+        self.old_to_new_idx = old_to_new_idx
 
     def __len__(self):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        actual_dataset_idx = self.indices[idx]
-        landmarks, old_label = self.dataset[actual_dataset_idx]
-        old_label_value = old_label.item()
-        new_label = torch.tensor(self.remapping[old_label_value], dtype=torch.long)
-        return landmarks, new_label
+        # Get original index
+        original_idx = self.indices[idx]
+
+        # Get data from original dataset
+        landmarks, old_label = self.original_dataset[original_idx]
+
+        # Remap label
+        old_label_item = old_label.item() if hasattr(old_label, 'item') else old_label
+        new_label = self.old_to_new_idx[old_label_item]
+
+        # Compute sequence length (number of frames)
+        seq_length = landmarks.shape[0]
+
+        # Return as tuple: (landmarks, label, seq_length)
+        return landmarks, torch.tensor(new_label, dtype=torch.long), seq_length
+
 
 
 class TemporalConvolutionBlock(nn.Module):
@@ -461,8 +473,6 @@ class LSTMSignClassifierSimplified(nn.Module):
         return logits
 
 
-
-
 class PadCollate:
     """Optimized padding collate function."""
     def __init__(self, debug=False):
@@ -482,26 +492,29 @@ class PadCollate:
             labels_list.append(label)
             seq_lengths_list.append(seq_length)
 
-        # Stack and pad efficiently using torch operations (on CPU, but faster)
+        # Find max sequence length
         seq_lengths_tensor = torch.tensor(seq_lengths_list, dtype=torch.long)
         max_len = seq_lengths_tensor.max().item()
 
         # Pad all to max length
         padded_landmarks = []
         for landmarks in landmarks_list:
-            if landmarks.shape[0] < max_len:
-                padding = torch.zeros(max_len - landmarks.shape[0], landmarks.shape[1])
+            current_len = landmarks.shape[0]
+            if current_len < max_len:
+                # Create padding
+                padding = torch.zeros(max_len - current_len, landmarks.shape[1], dtype=landmarks.dtype)
                 landmarks = torch.cat([landmarks, padding], dim=0)
             padded_landmarks.append(landmarks)
 
         # Stack into tensors
-        landmarks_tensor = torch.stack(padded_landmarks)  # (batch_size, seq_len, features)
-        labels_tensor = torch.stack(labels_list)           # (batch_size,)
+        landmarks_tensor = torch.stack(padded_landmarks)      # (batch_size, max_seq_len, features)
+        labels_tensor = torch.stack(labels_list)              # (batch_size,)
 
         if self.debug:
-            print(f"Batch shapes: landmarks={landmarks_tensor.shape}, labels={labels_tensor.shape}")
+            print(f"Batch shapes: landmarks={landmarks_tensor.shape}, labels={labels_tensor.shape}, seq_lens={seq_lengths_tensor.shape}")
 
         return landmarks_tensor, labels_tensor, seq_lengths_tensor
+
 
 
 

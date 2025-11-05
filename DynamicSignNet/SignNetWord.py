@@ -85,9 +85,49 @@ class EarlyStopping:
 
 class TemporalAugmentation:
     """Augmentation for variable-length landmark sequences."""
-
     def __init__(self, prob=0.7):
         self.prob = prob
+
+    def time_warp(self, seq, warp_factor_min=0.8, warp_factor_max=1.25):
+        """Randomly speed up or slow down by resampling frames (time warp)."""
+        if len(seq) <= 2:
+            return seq
+        factor = np.random.uniform(warp_factor_min, warp_factor_max)
+        new_length = max(1, int(len(seq) / factor))
+        indices = np.linspace(0, len(seq) - 1, new_length)
+        return seq[indices.astype(int)]
+
+    def temporal_dropout(self, seq, keep_prob_min=0.85, keep_prob_max=0.98):
+        """Drop some frames while keeping sequence meaningful."""
+        keep_prob = np.random.uniform(keep_prob_min, keep_prob_max)
+        mask = np.random.rand(len(seq)) < keep_prob
+        if mask.sum() <= 1:
+            return seq
+        return seq[mask]
+
+    def add_noise(self, seq, sigma=0.008):
+        noise = np.random.normal(0, sigma, seq.shape)
+        return seq + noise
+
+    def scaling(self, seq, scale_min=0.9, scale_max=1.1):
+        """Small global scale changes per coordinate."""
+        scale = np.random.uniform(scale_min, scale_max)
+        return seq * scale
+
+    def channel_dropout(self, seq, drop_prob=0.02):
+        """Randomly zero-out a few coordinates to simulate missing joints."""
+        seq = seq.copy()
+        if np.random.rand() < 0.5:
+            n_coords = seq.shape[1]
+            mask = np.random.rand(n_coords) < drop_prob
+            if mask.any():
+                seq[:, mask] = 0.0
+        return seq
+
+    def maybe_reverse(self, seq, p=0.05):
+        if np.random.rand() < p and len(seq) > 1:
+            return seq[::-1]
+        return seq
 
     def __call__(self, landmarks):
         if np.random.random() > self.prob:
@@ -95,95 +135,90 @@ class TemporalAugmentation:
 
         augmented = landmarks.copy()
 
-        # Speed variation
-        if np.random.random() > 0.5:
-            speed = np.random.uniform(0.80, 1.20)
-            new_length = max(1, int(len(augmented) / speed))
-            indices = np.linspace(0, len(augmented) - 1, new_length)
-            augmented = augmented[indices.astype(int)]
+        # 1) Time warp / speed variation
+        if np.random.random() > 0.4:
+            augmented = self.time_warp(augmented, warp_factor_min=0.80, warp_factor_max=1.20)
 
-        # Noise
-        if np.random.random() > 0.5:
-            noise = np.random.normal(0, 0.008, augmented.shape)
-            augmented = augmented + noise
-
-        # Frame dropout
+        # 2) Small scaling
         if np.random.random() > 0.6:
-            keep_prob = np.random.uniform(0.90, 0.95)
-            mask = np.random.rand(len(augmented)) < keep_prob
-            if mask.sum() > 1:
-                augmented = augmented[mask]
+            augmented = self.scaling(augmented, scale_min=0.92, scale_max=1.08)
+
+        # 3) Noise
+        if np.random.random() > 0.4:
+            augmented = self.add_noise(augmented, sigma=0.008)
+
+        # 4) Temporal dropout (frame removal)
+        if np.random.random() > 0.65:
+            augmented = self.temporal_dropout(augmented, keep_prob_min=0.90, keep_prob_max=0.97)
+
+        # 5) Channel dropout (simulate missing coords)
+        if np.random.random() > 0.75:
+            augmented = self.channel_dropout(augmented, drop_prob=0.02)
+
+        # 6) Occasional reversal (rare)
+        augmented = self.maybe_reverse(augmented, p=0.03)
 
         return augmented.astype(np.float32)
 
 
-class SignLanguageDataset(torch.utils.data.Dataset):
-    """Sign language dataset with safe augmentation."""
 
-    def __init__(self, npz_dir, debug=False, augment=False, augment_prob=0.5):
-        self.npz_dir = npz_dir
+class SignLanguageDataset(Dataset):
+    """
+    Load preprocessed landmarks from NPZ files.
+    Handles variable-length sequences without padding.
+    """
+    def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7):
+        self.npz_dir = Path(npz_dir)
+        self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
+
         self.augment = augment
-        self.augment_prob = augment_prob
+        if augment:
+            # pass probability into augmentation instance
+            self.augmentation = TemporalAugmentation(prob=augment_prob)
 
-        self.data = {}
-        self.word_to_idx = {}
-        self.idx_to_word = {}
-
-        npz_files = sorted([f for f in os.listdir(npz_dir) if f.endswith('.npz')])
-
-        for idx, npz_file in enumerate(npz_files):
-            word = npz_file.replace('.npz', '')
-            self.word_to_idx[word] = idx
-            self.idx_to_word[idx] = word
-
-            npz_path = os.path.join(npz_dir, npz_file)
-            npz_data = np.load(npz_path)
-            self.data[idx] = npz_data['landmarks']
-
-            if debug and idx < 3:
-                print(f"  {word}: {self.data[idx].shape}")
-
-        self.num_classes = len(self.word_to_idx)
         if debug:
-            print(f"✓ Loaded {self.num_classes} classes")
+            print(f"\n[DEBUG] SignLanguageDataset.__init__")
+            print(f"  NPZ directory: {self.npz_dir}")
+            print(f"  Total NPZ files found: {len(self.npz_files)}")
+
+        if word_to_idx is None:
+            self.word_to_idx = {}
+            for npz_file in self.npz_files:
+                try:
+                    data = np.load(npz_file, allow_pickle=True)
+                    gloss = data["glosses"][0]
+                    if gloss not in self.word_to_idx:
+                        self.word_to_idx[gloss] = len(self.word_to_idx)
+                except Exception as e:
+                    print(f"  [WARNING] Error loading {npz_file}: {e}")
+        else:
+            self.word_to_idx = word_to_idx
+
+        self.idx_to_word = {v: k for k, v in self.word_to_idx.items()}
+
+        if debug:
+            print(f"  Total unique words: {len(self.word_to_idx)}")
+            print(f"  Word vocabulary: {list(self.word_to_idx.keys())[:10]}...")
 
     def __len__(self):
-        total = 0
-        for word_data in self.data.values():
-            total += len(word_data)
-        return total
+        return len(self.npz_files)
 
     def __getitem__(self, idx):
-        current_idx = 0
-        for class_idx in sorted(self.data.keys()):
-            class_data = self.data[class_idx]
-            if current_idx + len(class_data) > idx:
-                sample_idx = idx - current_idx
-                landmarks = class_data[sample_idx].astype(np.float32)
+        npz_file = self.npz_files[idx]
+        data = np.load(npz_file, allow_pickle=True)
 
-                if self.augment and np.random.rand() < self.augment_prob:
-                    landmarks = self._augment(landmarks)
+        landmarks = data["landmarks"].astype(np.float32)
+        if self.augment:
+            landmarks = self.augmentation(landmarks)
 
-                landmarks_tensor = torch.from_numpy(landmarks)
-                label = torch.tensor(class_idx, dtype=torch.long)
+        gloss = data["glosses"][0]
+        label = self.word_to_idx[gloss]
 
-                return landmarks_tensor, label
+        landmarks_tensor = torch.from_numpy(landmarks)
+        label_tensor = torch.tensor(label, dtype=torch.long)
 
-            current_idx += len(class_data)
-
-    def _augment(self, landmarks):
-        """Apply minimal safe augmentation."""
-        # Ensure 2D shape
-        if landmarks.ndim != 2:
-            return landmarks
-
-        # Only apply Gaussian noise (safest)
-        if np.random.rand() < 0.5:
-            noise = np.random.normal(0, 0.01, landmarks.shape)
-            landmarks = landmarks + noise
-
-        return landmarks
+        return landmarks_tensor, label_tensor
 
 
 class RemappedDataset(torch.utils.data.Dataset):
@@ -858,7 +893,7 @@ def main():
     PREFETCH_FACTOR = 2
     NUM_ATTENTION_HEADS = 4
 
-    AUGMENT = True
+    AUGMENT = False
     AUGMENT_PROBABILITY = 0.6
 
     EARLY_STOPPING_PATIENCE = 25
@@ -920,7 +955,15 @@ def main():
             # STEP 1-5: Load and prepare data
             # ================================================================
             print(f"\n[STEP 1] Loading dataset...")
-            dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=AUGMENT, augment_prob=AUGMENT_PROBABILITY)
+            # base (no augmentation) - used for vocabulary / counting
+            base_dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=False)
+
+            # create a training dataset with augmentation enabled and validation dataset without augmentation
+            dataset_train = SignLanguageDataset(NPZ_DIR, word_to_idx=base_dataset.word_to_idx, debug=False, augment=AUGMENT, augment_prob=AUGMENT_PROBABILITY)
+            dataset_val = SignLanguageDataset(NPZ_DIR, word_to_idx=base_dataset.word_to_idx, debug=False, augment=False)
+
+            # Use base_dataset for counting frequencies (clean, deterministic)
+            dataset = base_dataset
 
             print(f"\n[STEP 2] Analyzing word frequencies...")
             word_counts = Counter()
@@ -962,8 +1005,8 @@ def main():
                 stratify=filtered_labels
             )
 
-            train_subset = RemappedDataset(dataset, train_indices, old_to_new_idx)
-            val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
+            train_subset = RemappedDataset(dataset_train, train_indices, old_to_new_idx)
+            val_subset   = RemappedDataset(dataset_val, val_indices, old_to_new_idx)
             num_classes = len(top_n_words)
 
             print(f"\n[STEP 5] Creating data loaders...")

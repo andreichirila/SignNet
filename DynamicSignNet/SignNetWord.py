@@ -886,7 +886,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Last 100 classes"
+    RUN_NAME = f"Top 300 classes"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -986,18 +986,16 @@ def main():
                 word = dataset.idx_to_word[label.item()]
                 word_counts[word] += 1
 
-            number_of_classes = 100
-            # top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
+            number_of_classes = 300
 
-            least_common_words = sorted(word_counts.items(), key=lambda x: x[1])[-number_of_classes:]
-            top_n_words = least_common_words
+            top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
             print(f"Bottom {number_of_classes} classes (least frequent):")
             for idx, (word, count) in enumerate(least_common_words):
                 print(f"    {idx+1:2}. {word:20} : {count:4} samples")
 
-            #print(f"  Top n words: {top_n_words}")
-            #for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
-            #    print(f"    {idx+1:2}. {word:20} : {count:4} samples")
+            print(f"  Top n words: {top_n_words}")
+            for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
+                print(f"    {idx+1:2}. {word:20} : {count:4} samples")
 
             print(f"\n[STEP 3] Filtering to top {len(top_n_words)} words...")
             old_to_new_idx = {}

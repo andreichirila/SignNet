@@ -886,7 +886,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 70 Words focal loss added"
+    RUN_NAME = f"Top 70 Words label smoothing"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -1069,7 +1069,8 @@ def main():
             # ================================================================
             print(f"\n[STEP 7] Setting up training...")
             # criterion = nn.CrossEntropyLoss()
-            criterion = FocalLoss(alpha=1, gamma=2)
+            criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
+            #criterion = FocalLoss(alpha=1, gamma=2)
 
             optimizer = torch.optim.AdamW(
                 model.parameters(),

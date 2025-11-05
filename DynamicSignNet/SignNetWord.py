@@ -17,6 +17,7 @@ from datetime import datetime
 from telegram import Bot
 import asyncio
 from torchsummary import summary
+import signal
 
 
 class EarlyStopping:

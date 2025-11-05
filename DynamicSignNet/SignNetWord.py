@@ -838,10 +838,10 @@ def main():
     NUM_EPOCHS = 1000
     BATCH_SIZE = 32              # Keep same
     LEARNING_RATE = 4e-4         # ↑ Slightly higher
-    HIDDEN_SIZE = 192            # ↑ Increase model capacity
-    NUM_LSTM_LAYERS = 2          # ↑ Add more layers
-    DROPOUT_RATE = 0.30          # ↓ Slightly lower (model is stronger)
-    LSTM_DROPOUT = 0.20          # ↓ Slightly lower
+    HIDDEN_SIZE = 128
+    NUM_LSTM_LAYERS = 1
+    DROPOUT_RATE = 0.40
+    LSTM_DROPOUT = 0.30
     NUM_WORKERS = 8
     PIN_MEMORY = True
     PREFETCH_FACTOR = 2
@@ -917,6 +917,9 @@ def main():
 
             number_of_classes = 50
             top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
+            print(f"  Top n words: {top_n_words}")
+            for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
+                print(f"    {idx+1:2}. {word:20} : {count:4} samples")
 
             print(f"\n[STEP 3] Filtering to top {len(top_n_words)} words...")
             old_to_new_idx = {}
@@ -999,7 +1002,7 @@ def main():
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=LEARNING_RATE,
-                weight_decay=5e-4,
+                weight_decay=8e-4,
                 betas=(0.9, 0.999)
             )
 

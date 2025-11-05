@@ -16,6 +16,7 @@ import matplotlib.pyplot as plt
 from datetime import datetime
 from telegram import Bot
 import asyncio
+from torchsummary import summary
 
 
 class EarlyStopping:
@@ -364,123 +365,101 @@ class ResidualLSTMBlock(nn.Module):
 
 
 
-class LSTMSignClassifierEnhanced(nn.Module):
+class LSTMSignClassifierSimplified(nn.Module):
     """
-    Enhanced LSTM-based sign language classifier with:
-    - Temporal convolution preprocessing for local feature extraction
-    - Cross-attention between frames for temporal relationships
-    - Residual LSTM blocks for improved gradient flow
-    - Multi-head attention for importance weighting
+    Simplified enhanced model: LSTM + Attention (no temporal conv, no residual complexity)
+    This is more stable while still improving on the baseline.
     """
     def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
                  num_lstm_layers=2, dropout_rate=0.25, lstm_dropout=0.1,
-                 num_attention_heads=8, temporal_conv_layers=2, debug=True):
+                 num_attention_heads=8, debug=True):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_classes = num_classes
-        
-        # STAGE 1: Temporal convolution preprocessing
-        self.temporal_conv = TemporalConvolutionBlock(
-            input_size=input_size,
-            output_size=hidden_size,
-            num_layers=temporal_conv_layers,
-            dropout_rate=lstm_dropout
+
+        # Simple input projection (instead of temporal conv)
+        self.input_projection = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.ReLU(),
+            nn.Dropout(lstm_dropout)
         )
-        
-        # STAGE 2: Cross-attention layer (before LSTM)
-        self.cross_attention_pre = CrossAttentionLayer(
+
+        # Standard LSTM (no residual complexity)
+        self.lstm = nn.LSTM(
+            input_size=hidden_size,
             hidden_size=hidden_size,
-            num_heads=num_attention_heads,
-            dropout=lstm_dropout
+            num_layers=num_lstm_layers,
+            batch_first=True,
+            bidirectional=True,
+            dropout=lstm_dropout if num_lstm_layers > 1 else 0.0
         )
-        
-        # STAGE 3: Residual LSTM blocks
-        # First block: hidden_size input -> hidden_size*2 output
-        # Second block: hidden_size*2 input -> hidden_size*2 output
-        self.lstm_blocks = nn.ModuleList()
-        for i in range(num_lstm_layers):
-            lstm_input_size = hidden_size if i == 0 else hidden_size * 2
-            self.lstm_blocks.append(
-                ResidualLSTMBlock(
-                    input_size=lstm_input_size,
-                    hidden_size=hidden_size,
-                    num_layers=1,
-                    dropout_rate=lstm_dropout
-                )
-            )
-        
+
         lstm_output_size = hidden_size * 2
-        
-        # STAGE 4: Cross-attention layer (after LSTM)
-        self.cross_attention_post = CrossAttentionLayer(
-            hidden_size=lstm_output_size,
+
+        # Single attention layer (post-LSTM)
+        self.attention = nn.MultiheadAttention(
+            embed_dim=lstm_output_size,
             num_heads=num_attention_heads,
+            batch_first=True,
             dropout=lstm_dropout
         )
-        
-        # STAGE 5: Classification head
+        self.attention_norm = nn.LayerNorm(lstm_output_size)
+
+        # Classification head
         self.classifier = nn.Sequential(
             nn.Linear(lstm_output_size, 512),
             nn.BatchNorm1d(512),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            
+
             nn.Linear(512, 256),
             nn.BatchNorm1d(256),
             nn.ReLU(),
             nn.Dropout(dropout_rate),
-            
+
             nn.Linear(256, 128),
             nn.BatchNorm1d(128),
             nn.ReLU(),
             nn.Dropout(dropout_rate * 0.7),
-            
+
             nn.Linear(128, num_classes)
         )
-        
+
         if debug:
-            print(f"\n[ENHANCED MODEL ARCHITECTURE]")
-            print(f"  Stage 1: Temporal Convolution ({input_size} → {hidden_size})")
-            print(f"  Stage 2: Cross-Attention Pre-LSTM ({num_attention_heads} heads)")
-            print(f"  Stage 3: Residual LSTM Blocks")
-            print(f"    Block 1: {hidden_size} → {hidden_size * 2}")
-            for i in range(1, num_lstm_layers):
-                print(f"    Block {i+1}: {hidden_size * 2} → {hidden_size * 2}")
-            print(f"  Stage 4: Cross-Attention Post-LSTM ({num_attention_heads} heads)")
-            print(f"  Stage 5: Classification Head ({lstm_output_size} → {num_classes})")
+            print(f"\n[SIMPLIFIED ENHANCED MODEL]")
+            print(f"  Input projection: {input_size} → {hidden_size}")
+            print(f"  LSTM: {hidden_size} → {lstm_output_size} (bidirectional)")
+            print(f"  Attention: {num_attention_heads} heads")
+            print(f"  Classifier: {lstm_output_size} → {num_classes}")
             print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
-    
+
     def forward(self, x):
         """
-        Enhanced forward pass with temporal convolution, cross-attention, and residual connections.
-        
         Args:
             x: (batch_size, seq_len, input_size)
-        
         Returns:
             logits: (batch_size, num_classes)
         """
-        # Stage 1: Temporal convolution preprocessing
-        x = self.temporal_conv(x)  # (batch_size, seq_len, hidden_size)
-        
-        # Stage 2: Pre-LSTM cross-attention
-        x = self.cross_attention_pre(x)  # (batch_size, seq_len, hidden_size)
-        
-        # Stage 3: Residual LSTM blocks
-        for lstm_block in self.lstm_blocks:
-            x, (h_n, c_n) = lstm_block(x)  # (batch_size, seq_len, hidden_size*2)
-        
-        # Stage 4: Post-LSTM cross-attention
-        x = self.cross_attention_post(x)  # (batch_size, seq_len, hidden_size*2)
-        
-        # Extract final hidden state
-        last_hidden = x[:, -1, :]  # (batch_size, hidden_size*2)
-        
-        # Stage 5: Classification
+        # Input projection
+        x = self.input_projection(x)  # (batch_size, seq_len, hidden_size)
+
+        # LSTM
+        lstm_out, (h_n, c_n) = self.lstm(x)  # (batch_size, seq_len, hidden_size*2)
+
+        # Attention with residual
+        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
+        lstm_out = self.attention_norm(lstm_out + attn_out)
+
+        # Extract last hidden state
+        last_hidden = lstm_out[:, -1, :]  # (batch_size, hidden_size*2)
+
+        # Classification
         logits = self.classifier(last_hidden)
-        
+
         return logits
+
 
 
 
@@ -687,11 +666,173 @@ async def run_bot(messages, chat_id):
     await send_message(text, chat_id)
 
 
+class GracefulInterruptHandler:
+    """
+    Handles graceful shutdown on Ctrl+C.
+    Allows training to finish current epoch and save state.
+    """
+    def __init__(self):
+        self.interrupted = False
+        signal.signal(signal.SIGINT, self.handler)
+
+    def handler(self, signum, frame):
+        self.interrupted = True
+        print("\n" + "=" * 80)
+        print("[INTERRUPT] Ctrl+C detected. Finishing current epoch and saving...")
+        print("=" * 80)
+
+
+def train_epoch_interruptible(model, train_loader, criterion, optimizer, device, epoch,
+                               interrupt_handler, debug=True):
+    """Train for one epoch with interrupt handling."""
+    model.train()
+    total_loss = 0
+    correct = 0
+    total = 0
+
+    pbar = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]")
+
+    for batch_idx, (landmarks, labels, seq_lengths) in enumerate(pbar):
+        # Check for interrupt signal
+        if interrupt_handler.interrupted:
+            print(f"\n[INTERRUPT] Stopping training at batch {batch_idx}/{len(train_loader)}")
+            return total_loss / (batch_idx + 1) if batch_idx > 0 else 0, correct / total if total > 0 else 0, True
+
+        landmarks = landmarks.to(device)
+        labels = labels.to(device)
+
+        logits = model(landmarks)
+        loss = criterion(logits, labels)
+
+        optimizer.zero_grad()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
+        total_loss += loss.item()
+        _, predicted = torch.max(logits, 1)
+        correct += (predicted == labels).sum().item()
+        total += labels.size(0)
+
+        if debug and batch_idx % 5 == 0:
+            batch_acc = (predicted == labels).sum().item() / labels.size(0)
+            pbar.set_postfix({
+                "loss": f"{loss.item():.4f}",
+                "batch_acc": f"{batch_acc:.2%}",
+                "avg_loss": f"{total_loss/(batch_idx+1):.4f}"
+            })
+
+    accuracy = correct / total
+    avg_loss = total_loss / len(train_loader)
+    return avg_loss, accuracy, False
+
+
+def evaluate_interruptible(model, val_loader, criterion, device, epoch,
+                            interrupt_handler, debug=True):
+    """Evaluate on validation set with interrupt handling."""
+    model.eval()
+    total_loss = 0
+    correct = 0
+    total = 0
+
+    pbar = tqdm(val_loader, desc=f"Epoch {epoch+1} [Val]  ")
+
+    with torch.no_grad():
+        for batch_idx, (landmarks, labels, seq_lengths) in enumerate(pbar):
+            # Check for interrupt signal
+            if interrupt_handler.interrupted:
+                print(f"\n[INTERRUPT] Stopping validation at batch {batch_idx}/{len(val_loader)}")
+                return total_loss / (batch_idx + 1) if batch_idx > 0 else 0, correct / total if total > 0 else 0, True
+
+            landmarks = landmarks.to(device)
+            labels = labels.to(device)
+
+            logits = model(landmarks)
+            loss = criterion(logits, labels)
+
+            total_loss += loss.item()
+            _, predicted = torch.max(logits, 1)
+            correct += (predicted == labels).sum().item()
+            total += labels.size(0)
+
+            if debug and batch_idx % 5 == 0:
+                batch_acc = (predicted == labels).sum().item() / labels.size(0)
+                pbar.set_postfix({
+                    "loss": f"{loss.item():.4f}",
+                    "batch_acc": f"{batch_acc:.2%}",
+                    "avg_loss": f"{total_loss/(batch_idx+1):.4f}"
+                })
+
+    accuracy = correct / total
+    avg_loss = total_loss / len(val_loader)
+    return avg_loss, accuracy, False
+
+def log_model_summary_torchsummary(model, input_size=1659, seq_len=50, device="cuda",
+                                    model_save_dir="./models_enhanced"):
+    """
+    Use PyTorch's built-in summary function and save to MLflow.
+    """
+    # ========================================================================
+    # 1. Generate summary with torchsummary
+    # ========================================================================
+    summary_path = os.path.join(model_save_dir, "model_summary.txt")
+
+    # Capture summary output
+    import io
+    from contextlib import redirect_stdout
+
+    with open(summary_path, 'w') as f:
+        f.write("="*80 + "\n")
+        f.write("MODEL ARCHITECTURE SUMMARY (torch.summary)\n")
+        f.write("="*80 + "\n\n")
+
+        # Redirect summary output to file
+        with redirect_stdout(f):
+            summary(
+                model,
+                input_size=(seq_len, input_size),  # (seq_len, input_size)
+                batch_size=32,
+                device=device,
+                verbose=2
+            )
+
+    print(f"✓ Model summary saved: {summary_path}")
+
+    # ========================================================================
+    # 2. Log to MLflow
+    # ========================================================================
+    mlflow.log_artifact(summary_path)
+
+    # Log model statistics as params
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    mlflow.log_params({
+        "model_total_parameters": total_params,
+        "model_trainable_parameters": trainable_params,
+        "model_architecture": model.__class__.__name__,
+    })
+
+    mlflow.log_metrics({
+        "model/total_parameters": total_params,
+        "model/trainable_parameters": trainable_params,
+        "model/non_trainable_parameters": total_params - trainable_params,
+    })
+
+    print(f"✓ Model summary logged to MLflow")
+
+    return summary_path
+
 def main():
-    """Main training pipeline with enhanced architecture."""
+    """Main training pipeline with graceful interrupt handling."""
     print("=" * 80)
-    print("SIGN LANGUAGE CLASSIFIER - ENHANCED ARCHITECTURE")
+    print("SIGN LANGUAGE CLASSIFIER - LONG TRAINING RUN (1000 EPOCHS)")
     print("=" * 80)
+    print("\n[INFO] Press Ctrl+C to gracefully stop training")
+    print("[INFO] Current best model will be saved automatically\n")
+
+    # Initialize interrupt handler
+    interrupt_handler = GracefulInterruptHandler()
 
     # ============================================================================
     # MLFLOW SETUP
@@ -701,7 +842,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 50 Words Enhanced LSTM (TemporalConv + CrossAttention + Residual)"
+    RUN_NAME = f"Top 50 Words Long Training (1000 epochs, interruptible)"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -709,137 +850,127 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     BATCH_SIZE = 32
-    LEARNING_RATE = 1.5e-3
-    NUM_EPOCHS = 200
+    LEARNING_RATE = 8e-4
+    NUM_EPOCHS = 1000  # Much longer training
     HIDDEN_SIZE = 256
     NUM_LSTM_LAYERS = 2
-    DROPOUT_RATE = 0.25
+    DROPOUT_RATE = 0.20
     LSTM_DROPOUT = 0.1
-    NUM_ATTENTION_HEADS = 8
-    TEMPORAL_CONV_LAYERS = 2
+    NUM_ATTENTION_HEADS = 4
     NPZ_DIR = "./word_landmarks_extracted"
-    MODEL_SAVE_DIR = "./models_enhanced"
-    PLOTS_DIR = "./plots_enhanced"
+    MODEL_SAVE_DIR = "./models_long_training"
+    PLOTS_DIR = "./plots_long_training"
 
     # Early stopping configuration
-    EARLY_STOPPING_PATIENCE = 20  # Start here for your model
-    EARLY_STOPPING_MIN_DELTA = 0.0005  # Minimum improvement threshold
-    EARLY_STOPPING_METRIC = "val_loss"  # Monitor this metric
-    EARLY_STOPPING_MODE = "min"  # Stop when val_loss stops improving
-
+    EARLY_STOPPING_PATIENCE = 999
+    EARLY_STOPPING_MIN_DELTA = 0.0005
+    EARLY_STOPPING_METRIC = "loss"
+    EARLY_STOPPING_MODE = "min"
 
     print(f"\n[CONFIG] Device: {DEVICE}")
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")
-    print(f"[CONFIG] Learning rate: {LEARNING_RATE} (AdamW)")
-    print(f"[CONFIG] Hidden size: {HIDDEN_SIZE}")
-    print(f"[CONFIG] Num LSTM layers: {NUM_LSTM_LAYERS}")
-    print(f"[CONFIG] Attention heads: {NUM_ATTENTION_HEADS}")
-    print(f"[CONFIG] Temporal conv layers: {TEMPORAL_CONV_LAYERS}")
-    print(f"[CONFIG] Dropout rate: {DROPOUT_RATE}")
+    print(f"[CONFIG] Learning rate: {LEARNING_RATE}")
     print(f"[CONFIG] Max epochs: {NUM_EPOCHS}")
+    print(f"[CONFIG] Early Stopping Patience: {EARLY_STOPPING_PATIENCE}")
 
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
-    with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME) as run:
-        # ========================================================================
-        # Log System Information
-        # ========================================================================
-        mlflow.log_param("python_version", platform.python_version())
-        mlflow.log_param("pytorch_version", torch.__version__)
-        mlflow.log_param("os", platform.system())
-        mlflow.log_param("cpu_count", os.cpu_count())
-        mlflow.log_param("total_ram_gb", round(psutil.virtual_memory().total / (1024**3), 2))
+    try:
+        with mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME) as run:
+            # ========================================================================
+            # Log System Information
+            # ========================================================================
+            mlflow.log_param("python_version", platform.python_version())
+            mlflow.log_param("pytorch_version", torch.__version__)
+            mlflow.log_param("os", platform.system())
+            mlflow.log_param("cpu_count", os.cpu_count())
+            mlflow.log_param("total_ram_gb", round(psutil.virtual_memory().total / (1024**3), 2))
 
-        if torch.cuda.is_available():
-            mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
-            mlflow.log_param("cuda_version", torch.version.cuda)
-            mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2))
+            if torch.cuda.is_available():
+                mlflow.log_param("gpu_name", torch.cuda.get_device_name(0))
+                mlflow.log_param("cuda_version", torch.version.cuda)
+                mlflow.log_param("gpu_memory_gb", round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2))
 
-        # ========================================================================
-        # Log Hyperparameters
-        # ========================================================================
-        mlflow.log_params({
-            "batch_size": BATCH_SIZE,
-            "learning_rate": LEARNING_RATE,
-            "optimizer": "AdamW",
-            "num_epochs": NUM_EPOCHS,
-            "hidden_size": HIDDEN_SIZE,
-            "num_lstm_layers": NUM_LSTM_LAYERS,
-            "dropout_rate": DROPOUT_RATE,
-            "num_attention_heads": NUM_ATTENTION_HEADS,
-            "temporal_conv_layers": TEMPORAL_CONV_LAYERS,
-            "input_dim": 1659,
-            "scheduler": "CosineAnnealingLR",
-            "loss_function": "CrossEntropyLoss",
-            "architecture": "Enhanced_LSTM_TemporalConv_CrossAttention_Residual",
-            "device": str(DEVICE),
-        })
+            # ========================================================================
+            # Log Hyperparameters
+            # ========================================================================
+            mlflow.log_params({
+                "batch_size": BATCH_SIZE,
+                "learning_rate": LEARNING_RATE,
+                "optimizer": "AdamW",
+                "num_epochs": NUM_EPOCHS,
+                "hidden_size": HIDDEN_SIZE,
+                "num_lstm_layers": NUM_LSTM_LAYERS,
+                "dropout_rate": DROPOUT_RATE,
+                "num_attention_heads": NUM_ATTENTION_HEADS,
+                "input_dim": 1659,
+                "scheduler": "CosineAnnealingLR",
+                "early_stopping_patience": EARLY_STOPPING_PATIENCE,
+                "interruptible": True,
+            })
 
-        # ========================================================================
-        # STEP 1: Load dataset
-        # ========================================================================
-        print(f"\n[STEP 1] Loading dataset...")
-        dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=False)
+            # ========================================================================
+            # STEP 1: Load dataset
+            # ========================================================================
+            print(f"\n[STEP 1] Loading dataset...")
+            dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=False)
 
-        # ========================================================================
-        # STEP 2: Analyze word frequencies
-        # ========================================================================
-        print(f"\n[STEP 2] Analyzing word frequencies...")
-        word_counts = Counter()
-        for i in range(len(dataset)):
-            _, label = dataset[i]
-            word = dataset.idx_to_word[label.item()]
-            word_counts[word] += 1
+            # ========================================================================
+            # STEP 2: Analyze word frequencies
+            # ========================================================================
+            print(f"\n[STEP 2] Analyzing word frequencies...")
+            word_counts = Counter()
+            for i in range(len(dataset)):
+                _, label = dataset[i]
+                word = dataset.idx_to_word[label.item()]
+                word_counts[word] += 1
 
-        number_of_classes = 50
-        top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
-        print(f"  Top 10 words: {top_n_words}")
-        for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
-            print(f"    {idx+1:2}. {word:20} : {count:4} samples")
+            number_of_classes = 50
+            top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
 
-        # ========================================================================
-        # STEP 3: Filter to top N words
-        # ========================================================================
-        print(f"\n[STEP 3] Filtering to top {len(top_n_words)} words...")
-        old_to_new_idx = {}
-        for new_idx, word in enumerate(top_n_words):
-            old_idx = dataset.word_to_idx[word]
-            old_to_new_idx[old_idx] = new_idx
+            # ========================================================================
+            # STEP 3: Filter to top N words
+            # ========================================================================
+            print(f"\n[STEP 3] Filtering to top {len(top_n_words)} words...")
+            old_to_new_idx = {}
+            for new_idx, word in enumerate(top_n_words):
+                old_idx = dataset.word_to_idx[word]
+                old_to_new_idx[old_idx] = new_idx
 
-        filtered_indices = []
-        for i in range(len(dataset)):
-            _, label = dataset[i]
-            old_label = label.item()
-            if old_label in old_to_new_idx:
-                filtered_indices.append(i)
+            filtered_indices = []
+            for i in range(len(dataset)):
+                _, label = dataset[i]
+                old_label = label.item()
+                if old_label in old_to_new_idx:
+                    filtered_indices.append(i)
 
-        print(f"  Filtered dataset size: {len(filtered_indices)} samples")
+            print(f"  Filtered dataset size: {len(filtered_indices)} samples")
 
-        # ========================================================================
-        # STEP 4: Stratified split
-        # ========================================================================
-        print(f"\n[STEP 4] Splitting with stratified random split...")
-        filtered_labels = []
-        for idx in filtered_indices:
-            _, label = dataset[idx]
-            word = dataset.idx_to_word[label.item()]
-            filtered_labels.append(word)
+            # ========================================================================
+            # STEP 4: Stratified split
+            # ========================================================================
+            print(f"\n[STEP 4] Splitting with stratified random split...")
+            filtered_labels = []
+            for idx in filtered_indices:
+                _, label = dataset[idx]
+                word = dataset.idx_to_word[label.item()]
+                filtered_labels.append(word)
 
-        train_indices, val_indices = train_test_split(
-            filtered_indices,
-            test_size=0.2,
-            random_state=42,
-            stratify=filtered_labels
-        )
+            train_indices, val_indices = train_test_split(
+                filtered_indices,
+                test_size=0.2,
+                random_state=42,
+                stratify=filtered_labels
+            )
 
         print(f"  Train samples: {len(train_indices)}")
         print(f"  Val samples: {len(val_indices)}")
 
-        train_subset = RemappedDataset(dataset, train_indices, old_to_new_idx)
-        val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
+            train_subset = RemappedDataset(dataset, train_indices, old_to_new_idx)
+            val_subset = RemappedDataset(dataset, val_indices, old_to_new_idx)
 
-        num_classes = len(top_n_words)
+            num_classes = len(top_n_words)
         train_label_counts = [0] * num_classes
         for idx in range(len(train_subset)):
             _, label = train_subset[idx]
@@ -851,212 +982,240 @@ def main():
             percentage = 100 * count / len(train_subset) if len(train_subset) > 0 else 0
             print(f"    Label {new_idx:2}: {word:20} : {count:4} samples ({percentage:5.1f}%)")
 
-        # ========================================================================
-        # STEP 5: Create data loaders
-        # ========================================================================
-        print(f"\n[STEP 5] Creating data loaders...")
-        train_loader = DataLoader(
-            train_subset,
-            batch_size=BATCH_SIZE,
-            shuffle=True,
-            collate_fn=PadCollate(debug=True)
-        )
-        val_loader = DataLoader(
-            val_subset,
-            batch_size=BATCH_SIZE,
-            shuffle=False,
-            collate_fn=PadCollate(debug=False)
-        )
-
-        print(f"  Train batches: {len(train_loader)}")
-        print(f"  Val batches: {len(val_loader)}")
-
-        # ========================================================================
-        # STEP 6: Build ENHANCED model
-        # ========================================================================
-        print(f"\n[STEP 6] Building enhanced model...")        
-        model = LSTMSignClassifierEnhanced(
-            input_size=1659,
-            hidden_size=HIDDEN_SIZE,
-            num_classes=num_classes,
-            num_lstm_layers=NUM_LSTM_LAYERS,
-            dropout_rate=DROPOUT_RATE,
-            lstm_dropout=LSTM_DROPOUT,
-            num_attention_heads=NUM_ATTENTION_HEADS,
-            temporal_conv_layers=TEMPORAL_CONV_LAYERS,
-            debug=True
-        ).to(DEVICE)
-
-        total_params = sum(p.numel() for p in model.parameters())
-        mlflow.log_param("total_parameters", total_params)
-
-        # ========================================================================
-        # STEP 7: Setup training
-        # ========================================================================
-        print(f"\n[STEP 7] Setting up training...")
-        criterion = nn.CrossEntropyLoss()
-
-        # AdamW optimizer
-        optimizer = torch.optim.AdamW(
-            model.parameters(),
-            lr=LEARNING_RATE,
-            weight_decay=1e-4,
-            betas=(0.9, 0.999)
-        )
-
-        # Cosine annealing scheduler
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer,
-            T_max=NUM_EPOCHS,
-            eta_min=5e-5
-        )
-
-        early_stopping = EarlyStopping(
-            patience=EARLY_STOPPING_PATIENCE,
-            min_delta=EARLY_STOPPING_MIN_DELTA,
-            metric=EARLY_STOPPING_METRIC,
-            mode=EARLY_STOPPING_MODE
-        )
-
-        print(f"  ✓ Using AdamW optimizer (weight_decay=1e-4)")
-        print(f"  ✓ Using CosineAnnealingLR scheduler")
-        print(f"  ✓ Architecture: Temporal Conv + Cross-Attention + Residual LSTM")
-
-        # ========================================================================
-        # STEP 8: Training loop
-        # ========================================================================
-        print(f"\n[STEP 8] Starting training with enhanced architecture...")
-        print("=" * 80)
-
-        best_val_acc = 0
-        best_epoch = 0
-        train_losses = []
-        val_losses = []
-        train_accs = []
-        val_accs = []
-
-        for epoch in range(NUM_EPOCHS):
-            train_loss, train_acc = train_epoch(
-                model, train_loader, criterion, optimizer, DEVICE, epoch, debug=True
+            # ========================================================================
+            # STEP 5: Create data loaders
+            # ========================================================================
+            print(f"\n[STEP 5] Creating data loaders...")
+            train_loader = DataLoader(
+                train_subset,
+                batch_size=BATCH_SIZE,
+                shuffle=True,
+                collate_fn=PadCollate(debug=True)
             )
-            val_loss, val_acc = evaluate(
-                model, val_loader, criterion, DEVICE, epoch, debug=True
+            val_loader = DataLoader(
+                val_subset,
+                batch_size=BATCH_SIZE,
+                shuffle=False,
+                collate_fn=PadCollate(debug=False)
             )
 
-            scheduler.step()
+            # ========================================================================
+            # STEP 6: Build model
+            # ========================================================================
+            print(f"\n[STEP 6] Building model...")
+            model = LSTMSignClassifierSimplified(
+                input_size=1659,
+                hidden_size=HIDDEN_SIZE,
+                num_classes=num_classes,
+                num_lstm_layers=NUM_LSTM_LAYERS,
+                dropout_rate=DROPOUT_RATE,
+                lstm_dropout=LSTM_DROPOUT,
+                num_attention_heads=NUM_ATTENTION_HEADS,
+                debug=True
+            ).to(DEVICE)
 
-            if val_acc > best_val_acc:
-                best_val_acc = val_acc
-                best_epoch = epoch
-                best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best.pth")
-                torch.save(model.state_dict(), best_model_path)
-                print(f"  💾 Saved best model")
+            total_params = sum(p.numel() for p in model.parameters())
+            mlflow.log_param("total_parameters", total_params)
 
-            train_losses.append(train_loss)
-            val_losses.append(val_loss)
-            train_accs.append(train_acc)
-            val_accs.append(val_acc)
+            print(f"\n[STEP 6.5] Logging model summary to MLflow...")
+            log_model_summary_torchsummary(
+                model,
+                input_size=1659,
+                seq_len=50,  # Average sequence length
+                device=str(DEVICE),
+                model_save_dir=MODEL_SAVE_DIR
+            )
 
-            lr = optimizer.param_groups[0]['lr']
-            print(f"Epoch {epoch+1:3}/{NUM_EPOCHS} │ "
-                  f"Train Loss: {train_loss:.4f} │ Train Acc: {train_acc:.2%} │ "
-                  f"Val Loss: {val_loss:.4f} │ Val Acc: {val_acc:.2%} │ "
-                  f"LR: {lr:.2e}")
+            # ========================================================================
+            # STEP 7: Setup training
+            # ========================================================================
+            print(f"\n[STEP 7] Setting up training...")
+            criterion = nn.CrossEntropyLoss()
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=LEARNING_RATE,
+                weight_decay=1e-4,
+                betas=(0.9, 0.999)
+            )
 
-            mlflow.log_metrics({
-                "train_loss": train_loss,
-                "val_loss": val_loss,
-                "train_accuracy": train_acc,
-                "val_accuracy": val_acc,
-                "learning_rate": lr,
-            }, step=epoch)
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer,
+                T_max=NUM_EPOCHS,
+                eta_min=5e-5
+            )
 
-            if early_stopping(val_loss, epoch):
-                print(f"\n[STOPPED] Training stopped at epoch {epoch+1}")
-                break
+            early_stopping = EarlyStopping(
+                patience=EARLY_STOPPING_PATIENCE,
+                min_delta=EARLY_STOPPING_MIN_DELTA,
+                metric=EARLY_STOPPING_METRIC,
+                mode=EARLY_STOPPING_MODE
+            )
 
-        # ========================================================================
-        # STEP 9: Save results
-        # ========================================================================
+            # ========================================================================
+            # STEP 8: Training loop (with interrupt handling)
+            # ========================================================================
+            print(f"\n[STEP 8] Starting long training (press Ctrl+C to stop gracefully)...")
+            print("=" * 80)
+
+            best_val_acc = 0
+            best_epoch = 0
+            train_losses = []
+            val_losses = []
+            train_accs = []
+            val_accs = []
+            interrupted_early = False
+
+            for epoch in range(NUM_EPOCHS):
+                # Check for interrupt before epoch
+                if interrupt_handler.interrupted:
+                    print(f"\n[INTERRUPT] Stopping at epoch {epoch}")
+                    interrupted_early = True
+                    break
+
+                train_loss, train_acc, train_interrupted = train_epoch_interruptible(
+                    model, train_loader, criterion, optimizer, DEVICE, epoch,
+                    interrupt_handler, debug=True
+                )
+
+                if train_interrupted:
+                    interrupted_early = True
+                    break
+
+                val_loss, val_acc, val_interrupted = evaluate_interruptible(
+                    model, val_loader, criterion, DEVICE, epoch,
+                    interrupt_handler, debug=True
+                )
+
+                if val_interrupted:
+                    interrupted_early = True
+                    break
+
+                scheduler.step()
+
+                if val_acc > best_val_acc:
+                    best_val_acc = val_acc
+                    best_epoch = epoch
+                    best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best.pth")
+                    torch.save(model.state_dict(), best_model_path)
+                    print(f"  💾 Saved best model (val_acc: {val_acc:.2%})")
+
+                train_losses.append(train_loss)
+                val_losses.append(val_loss)
+                train_accs.append(train_acc)
+                val_accs.append(val_acc)
+
+                lr = optimizer.param_groups[0]['lr']
+                print(f"Epoch {epoch+1:4}/{NUM_EPOCHS} │ "
+                      f"Train Loss: {train_loss:.4f} │ Train Acc: {train_acc:.2%} │ "
+                      f"Val Loss: {val_loss:.4f} │ Val Acc: {val_acc:.2%} │ "
+                      f"LR: {lr:.2e}")
+
+                mlflow.log_metrics({
+                    "train_loss": train_loss,
+                    "val_loss": val_loss,
+                    "train_accuracy": train_acc,
+                    "val_accuracy": val_acc,
+                    "learning_rate": lr,
+                }, step=epoch)
+
+                if early_stopping(val_loss, epoch):
+                    print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
+                    break
+
+            # ========================================================================
+            # STEP 9: Save results
+            # ========================================================================
+            print("\n" + "=" * 80)
+            print(f"[TRAINING COMPLETE]")
+            if interrupted_early:
+                print(f"[STATUS] Training interrupted by user")
+            else:
+                print(f"[STATUS] Training completed normally")
+
+            print(f"  Total epochs trained: {len(train_losses)}")
+            print(f"  Best Val Accuracy: {best_val_acc:.2%} at epoch {best_epoch+1}")
+            if len(train_losses) > 0:
+                print(f"  Final Train Loss: {train_losses[-1]:.4f}")
+                print(f"  Final Val Loss: {val_losses[-1]:.4f}")
+                print(f"  Final Train Acc: {train_accs[-1]:.2%}")
+                print(f"  Final Val Acc: {val_accs[-1]:.2%}")
+
+            # Generate plots
+            if len(train_losses) > 0:
+                print(f"\n[PLOTTING] Generating training curves...")
+                plot_path = plot_training_curves(train_losses, val_losses, train_accs, val_accs, PLOTS_DIR)
+                mlflow.log_artifact(plot_path)
+
+            # Save models and metrics
+            final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final.pth")
+            torch.save(model.state_dict(), final_model_path)
+
+            if len(train_losses) > 0:
+                metrics_path = os.path.join(MODEL_SAVE_DIR, "training_metrics.npz")
+                np.savez(
+                    metrics_path,
+                    train_losses=np.array(train_losses),
+                    val_losses=np.array(val_losses),
+                    train_accs=np.array(train_accs),
+                    val_accs=np.array(val_accs)
+                )
+                mlflow.log_artifact(metrics_path)
+
+            class_info = {
+                "classes": top_n_words,
+                "num_classes": num_classes,
+                "best_val_acc": float(best_val_acc),
+                "best_epoch": int(best_epoch),
+                "total_epochs_trained": len(train_losses),
+                "interrupted": interrupted_early,
+                "label_remapping": {str(k): v for k, v in old_to_new_idx.items()}
+            }
+
+            class_info_path = os.path.join(MODEL_SAVE_DIR, "class_info.json")
+            with open(class_info_path, 'w') as f:
+                json.dump(class_info, f, indent=2)
+
+            # ========================================================================
+            # Log artifacts to MLflow
+            # ========================================================================
+            print(f"\n[MLFLOW] Logging artifacts...")
+            mlflow.log_artifact(best_model_path)
+            mlflow.log_artifact(final_model_path)
+            mlflow.log_artifact(class_info_path)
+            mlflow.pytorch.log_model(model, "model")
+
+            mlflow.set_tags({
+                "model_type": "LSTM_Simplified",
+                "task": "sign_language_word_classification",
+                "num_classes": num_classes,
+                "status": "interrupted" if interrupted_early else "completed",
+                "long_training": True,
+            })
+
+            mlflow.log_metric("epochs_trained", len(train_losses))
+
+            print(f"\n  Best model: {best_model_path}")
+            print(f"  Final model: {final_model_path}")
+            print(f"  MLflow Run ID: {run.info.run_id}")
+            print("=" * 80)
+
+            # Send notification
+            class_info_text = json.dumps(class_info, indent=2)
+            asyncio.run(send_message(f"Training summary (Long run):\n\n{class_info_text}", CHAT_ID))
+
+    except KeyboardInterrupt:
         print("\n" + "=" * 80)
-        print(f"[TRAINING COMPLETE]")
-        print(f"  Total epochs trained: {len(train_losses)}")
-        print(f"  Best Val Accuracy: {best_val_acc:.2%} at epoch {best_epoch+1}")
-        print(f"  Final Train Loss: {train_losses[-1]:.4f}")
-        print(f"  Final Val Loss: {val_losses[-1]:.4f}")
-        print(f"  Final Train Acc: {train_accs[-1]:.2%}")
-        print(f"  Final Val Acc: {val_accs[-1]:.2%}")
-        print(f"\n  Classes ({num_classes}): {top_n_words}")
-
-        print(f"\n[ARCHITECTURE ENHANCEMENTS]")
-        print(f"  ✓ Temporal Convolution: Multi-scale feature extraction")
-        print(f"  ✓ Cross-Attention: Frame-to-frame relationships")
-        print(f"  ✓ Residual Connections: Improved gradient flow")
-        print(f"  ✓ Enhanced attention heads: {NUM_ATTENTION_HEADS}")
-
-        # Generate plots
-        print(f"\n[PLOTTING] Generating training curves...")
-        plot_path = plot_training_curves(train_losses, val_losses, train_accs, val_accs, PLOTS_DIR)
-
-        # Log summary metrics
-        log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_n_words, best_epoch, best_val_acc)
-
-        # Save models
-        final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final.pth")
-        torch.save(model.state_dict(), final_model_path)
-
-        metrics_path = os.path.join(MODEL_SAVE_DIR, "training_metrics.npz")
-        np.savez(
-            metrics_path,
-            train_losses=np.array(train_losses),
-            val_losses=np.array(val_losses),
-            train_accs=np.array(train_accs),
-            val_accs=np.array(val_accs)
-        )
-
-        class_info = {
-            "classes": top_n_words,
-            "num_classes": num_classes,
-            "best_val_acc": float(best_val_acc),
-            "best_epoch": int(best_epoch),
-            "total_epochs_trained": len(train_losses),
-            "label_remapping": {str(k): v for k, v in old_to_new_idx.items()},
-            "architecture": "Enhanced_LSTM_TemporalConv_CrossAttention_Residual"
-        }
-
-        class_info_path = os.path.join(MODEL_SAVE_DIR, "class_info.json")
-        with open(class_info_path, 'w') as f:
-            json.dump(class_info, f, indent=2)
-
-        # ========================================================================
-        # Log artifacts to MLflow
-        # ========================================================================
-        print(f"\n[MLFLOW] Logging artifacts...")
-        mlflow.log_artifact(best_model_path)
-        mlflow.log_artifact(final_model_path)
-        mlflow.log_artifact(metrics_path)
-        mlflow.log_artifact(class_info_path)
-        mlflow.log_artifact(plot_path)
-        mlflow.pytorch.log_model(model, "model")
-
-        mlflow.set_tags({
-            "model_type": "LSTM_Enhanced",
-            "task": "sign_language_word_classification",
-            "num_classes": num_classes,
-            "enhancements": "temporal_conv_cross_attention_residual",
-            "status": "completed",
-        })
-
-        mlflow.log_metric("epochs_trained", len(train_losses))
-
-        print(f"\n  Best model: {best_model_path}")
-        print(f"  Final model: {final_model_path}")
-        print(f"  MLflow Run ID: {run.info.run_id}")
-
+        print("[ERROR] Unexpected keyboard interrupt!")
         print("=" * 80)
+        mlflow.end_run()
+        sys.exit(1)
 
-        class_info_text = json.dumps(class_info, indent=2)
-        asyncio.run(send_message(f"Training summary (Enhanced):\n\n{class_info_text}", CHAT_ID))
+    except Exception as e:
+        print("\n" + "=" * 80)
+        print(f"[ERROR] Unexpected error: {e}")
+        print("=" * 80)
+        mlflow.end_run()
+        raise
 
 
 if __name__ == "__main__":

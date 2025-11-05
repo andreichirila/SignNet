@@ -8,3 +8,4 @@ psutil
 pynvml
 nltk
 python-telegram-bot
+torchsummary

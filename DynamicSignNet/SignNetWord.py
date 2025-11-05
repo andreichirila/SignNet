@@ -117,62 +117,221 @@ class TemporalAugmentation:
         return augmented.astype(np.float32)
 
 
-class SignLanguageDataset(Dataset):
-    """
-    Load preprocessed landmarks from NPZ files.
-    Handles variable-length sequences without padding.
-    """
-    def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False):
-        self.npz_dir = Path(npz_dir)
-        self.npz_files = sorted(self.npz_dir.glob("*.npz"))
+class SignLanguageDataset(torch.utils.data.Dataset):
+    """Sign language dataset with advanced augmentation for landmark sequences."""
+
+    def __init__(self, npz_dir, debug=False, augment=False, augment_prob=0.5):
+        self.npz_dir = npz_dir
         self.debug = debug
-
         self.augment = augment
-        if augment:
-            self.augmentation = TemporalAugmentation(prob=0.7)
+        self.augment_prob = augment_prob  # Probability of applying augmentation
 
-        if debug:
-            print(f"\n[DEBUG] SignLanguageDataset.__init__")
-            print(f"  NPZ directory: {self.npz_dir}")
-            print(f"  Total NPZ files found: {len(self.npz_files)}")
+        # Load data
+        self.data = {}
+        self.word_to_idx = {}
+        self.idx_to_word = {}
 
-        if word_to_idx is None:
-            self.word_to_idx = {}
-            for npz_file in self.npz_files:
-                try:
-                    data = np.load(npz_file, allow_pickle=True)
-                    gloss = data["glosses"][0]
-                    if gloss not in self.word_to_idx:
-                        self.word_to_idx[gloss] = len(self.word_to_idx)
-                except Exception as e:
-                    print(f"  [WARNING] Error loading {npz_file}: {e}")
-        else:
-            self.word_to_idx = word_to_idx
+        npz_files = sorted([f for f in os.listdir(npz_dir) if f.endswith('.npz')])
 
-        self.idx_to_word = {v: k for k, v in self.word_to_idx.items()}
+        for idx, npz_file in enumerate(npz_files):
+            word = npz_file.replace('.npz', '')
+            self.word_to_idx[word] = idx
+            self.idx_to_word[idx] = word
 
-        if debug:
-            print(f"  Total unique words: {len(self.word_to_idx)}")
-            print(f"  Word vocabulary: {list(self.word_to_idx.keys())[:10]}...")
+            npz_path = os.path.join(npz_dir, npz_file)
+            npz_data = np.load(npz_path)
+            self.data[idx] = npz_data['data']  # Shape: (num_samples, seq_len, 1659)
+
+        self.num_classes = len(self.word_to_idx)
+        if self.debug:
+            print(f"Loaded {self.num_classes} classes from {npz_dir}")
 
     def __len__(self):
-        return len(self.npz_files)
+        total = 0
+        for word_data in self.data.values():
+            total += len(word_data)
+        return total
 
     def __getitem__(self, idx):
-        npz_file = self.npz_files[idx]
-        data = np.load(npz_file, allow_pickle=True)
+        # Find which class and sample within class
+        current_idx = 0
+        for class_idx in sorted(self.data.keys()):
+            class_data = self.data[class_idx]
+            if current_idx + len(class_data) > idx:
+                sample_idx = idx - current_idx
+                landmarks = class_data[sample_idx].astype(np.float32)
 
-        landmarks = data["landmarks"].astype(np.float32)
-        if self.augment:
-            landmarks = self.augmentation(landmarks)
+                # Apply augmentation
+                if self.augment and np.random.rand() < self.augment_prob:
+                    landmarks = self._augment(landmarks)
 
-        gloss = data["glosses"][0]
-        label = self.word_to_idx[gloss]
+                landmarks_tensor = torch.from_numpy(landmarks)
+                label = torch.tensor(class_idx, dtype=torch.long)
 
-        landmarks_tensor = torch.from_numpy(landmarks)
-        label_tensor = torch.tensor(label, dtype=torch.long)
+                return landmarks_tensor, label
 
-        return landmarks_tensor, label_tensor
+            current_idx += len(class_data)
+
+    def _augment(self, landmarks):
+        """
+        Apply random augmentations to landmark sequence.
+        landmarks: (seq_len, 1659) array
+        """
+        seq_len = landmarks.shape[0]
+
+        # 1. Temporal Jitter - Shift frames slightly in time
+        if np.random.rand() < 0.4:
+            landmarks = self._temporal_jitter(landmarks)
+
+        # 2. Gaussian Noise - Add small random noise to coordinates
+        if np.random.rand() < 0.4:
+            landmarks = self._gaussian_noise(landmarks)
+
+        # 3. Scaling - Scale all coordinates uniformly
+        if np.random.rand() < 0.3:
+            landmarks = self._random_scaling(landmarks)
+
+        # 4. Temporal Dropout - Drop some frames randomly
+        if np.random.rand() < 0.3:
+            landmarks = self._temporal_dropout(landmarks)
+
+        # 5. Smooth Noise - More gradual noise changes over time
+        if np.random.rand() < 0.3:
+            landmarks = self._smooth_noise(landmarks)
+
+        # 6. Speed Variation - Stretch or compress sequence
+        if np.random.rand() < 0.2:
+            landmarks = self._speed_variation(landmarks)
+
+        return landmarks
+
+    def _temporal_jitter(self, landmarks):
+        """
+        Randomly shift landmark frames in time.
+        Simulates timing variations in signing.
+        """
+        seq_len = landmarks.shape[0]
+        max_shift = min(3, seq_len // 10)  # Shift by 1-3 frames max
+
+        if max_shift > 0:
+            # Create a jittered time axis
+            shift = np.random.randint(-max_shift, max_shift + 1)
+
+            if shift > 0:
+                landmarks = np.vstack([
+                    landmarks[shift:],
+                    np.repeat(landmarks[-1:], shift, axis=0)  # Pad with last frame
+                ])
+            elif shift < 0:
+                landmarks = np.vstack([
+                    np.repeat(landmarks[0:1], -shift, axis=0),  # Pad with first frame
+                    landmarks[:shift]
+                ])
+
+        return landmarks
+
+    def _gaussian_noise(self, landmarks, noise_scale=0.02):
+        """
+        Add Gaussian noise to landmark coordinates.
+        noise_scale: standard deviation relative to coordinate values
+        """
+        noise = np.random.normal(0, noise_scale, landmarks.shape)
+        return landmarks + noise
+
+    def _random_scaling(self, landmarks, scale_range=(0.92, 1.08)):
+        """
+        Randomly scale all coordinates uniformly.
+        Simulates different distances from camera.
+        """
+        scale = np.random.uniform(scale_range[0], scale_range[1])
+        return landmarks * scale
+
+    def _temporal_dropout(self, landmarks, drop_prob=0.1):
+        """
+        Randomly drop some frames from the sequence.
+        drop_prob: probability of dropping each frame
+        """
+        seq_len = landmarks.shape[0]
+
+        # Keep at least 70% of frames
+        min_keep = max(3, int(seq_len * 0.7))
+
+        keep_mask = np.random.rand(seq_len) > drop_prob
+
+        # Ensure minimum frames
+        if keep_mask.sum() < min_keep:
+            keep_indices = np.random.choice(seq_len, min_keep, replace=False)
+            keep_mask[:] = False
+            keep_mask[keep_indices] = True
+
+        landmarks = landmarks[keep_mask]
+
+        # Linear interpolate to restore sequence length (optional, remove for variable length)
+        # This keeps the sequence length constant
+        if len(landmarks) < seq_len:
+            indices = np.linspace(0, len(landmarks) - 1, seq_len)
+            landmarks = np.interp(indices, np.arange(len(landmarks)), landmarks.T).T
+
+        return landmarks
+
+    def _smooth_noise(self, landmarks, noise_scale=0.02):
+        """
+        Add smooth (correlated) noise that changes gradually over time.
+        More realistic than pure Gaussian noise.
+        """
+        seq_len, num_features = landmarks.shape
+
+        # Generate smooth noise using interpolation
+        num_keypoints = max(2, seq_len // 5)
+        keypoint_indices = np.linspace(0, seq_len - 1, num_keypoints)
+
+        smooth_noise = np.random.normal(0, noise_scale, (num_keypoints, num_features))
+
+        # Interpolate to sequence length
+        time_axis = np.arange(seq_len)
+        noise = np.zeros_like(landmarks)
+
+        for feature_idx in range(num_features):
+            noise[:, feature_idx] = np.interp(
+                time_axis,
+                keypoint_indices,
+                smooth_noise[:, feature_idx]
+            )
+
+        return landmarks + noise
+
+    def _speed_variation(self, landmarks):
+        """
+        Stretch or compress the sequence in time.
+        Simulates different signing speeds.
+        """
+        seq_len = landmarks.shape[0]
+        speed_factor = np.random.uniform(0.85, 1.15)
+
+        new_len = int(seq_len * speed_factor)
+        new_len = max(10, new_len)  # Keep minimum length
+
+        # Interpolate to new sequence length
+        indices = np.linspace(0, seq_len - 1, new_len)
+        old_indices = np.arange(seq_len)
+
+        new_landmarks = np.zeros((new_len, landmarks.shape[1]))
+        for feat_idx in range(landmarks.shape[1]):
+            new_landmarks[:, feat_idx] = np.interp(
+                indices,
+                old_indices,
+                landmarks[:, feat_idx]
+            )
+
+        # Pad or crop back to original length if needed
+        if new_len < seq_len:
+            padding = np.repeat(new_landmarks[-1:], seq_len - new_len, axis=0)
+            new_landmarks = np.vstack([new_landmarks, padding])
+        elif new_len > seq_len:
+            new_landmarks = new_landmarks[:seq_len]
+
+        return new_landmarks
+
 
 
 class RemappedDataset(torch.utils.data.Dataset):
@@ -828,7 +987,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 50 Words better regularization"
+    RUN_NAME = f"Top 50 Words with augment"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -836,20 +995,23 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     NUM_EPOCHS = 1000
-    BATCH_SIZE = 32              # Keep same
-    LEARNING_RATE = 4e-4         # ↑ Slightly higher
+    BATCH_SIZE = 32
+    LEARNING_RATE = 3e-4
     HIDDEN_SIZE = 128
     NUM_LSTM_LAYERS = 1
-    DROPOUT_RATE = 0.40
-    LSTM_DROPOUT = 0.30
+    DROPOUT_RATE = 0.35
+    LSTM_DROPOUT = 0.25
     NUM_WORKERS = 8
     PIN_MEMORY = True
     PREFETCH_FACTOR = 2
     NUM_ATTENTION_HEADS = 4
 
+    AUGMENT = True
+    AUGMENT_PROBABILITY = 0.6
+
     EARLY_STOPPING_PATIENCE = 25
-    EARLY_STOPPING_MIN_DELTA = 0.01
-    EARLY_STOPPING_METRIC = "val_acc"  # ← Switch to accuracy
+    EARLY_STOPPING_MIN_DELTA = 0.0005
+    EARLY_STOPPING_METRIC = "val_acc"
     EARLY_STOPPING_MODE = "max"
 
     NPZ_DIR = "./word_landmarks_extracted"
@@ -906,7 +1068,7 @@ def main():
             # STEP 1-5: Load and prepare data
             # ================================================================
             print(f"\n[STEP 1] Loading dataset...")
-            dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=False)
+            dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=AUGMENT, augment_prob=AUGMENT_PROBABILITY)
 
             print(f"\n[STEP 2] Analyzing word frequencies...")
             word_counts = Counter()

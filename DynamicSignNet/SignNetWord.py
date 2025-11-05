@@ -464,30 +464,45 @@ class LSTMSignClassifierSimplified(nn.Module):
 
 
 class PadCollate:
-    """Custom collate function to pad variable-length sequences."""
+    """Optimized padding collate function."""
     def __init__(self, debug=False):
         self.debug = debug
-        self.call_count = 0
 
     def __call__(self, batch):
-        self.call_count += 1
-        landmarks_list, labels_list = zip(*batch)
-        labels = torch.stack(labels_list)
-        seq_lengths = torch.tensor([len(lm) for lm in landmarks_list])
+        """
+        Pad sequences efficiently.
+        batch: list of (landmarks, label, seq_length) tuples
+        """
+        landmarks_list = []
+        labels_list = []
+        seq_lengths_list = []
 
-        landmarks_padded = nn.utils.rnn.pad_sequence(
-            landmarks_list, 
-            batch_first=True, 
-            padding_value=0.0
-        )
+        for landmarks, label, seq_length in batch:
+            landmarks_list.append(landmarks)
+            labels_list.append(label)
+            seq_lengths_list.append(seq_length)
 
-        if self.debug and self.call_count == 1:
-            print(f"\n[DEBUG] PadCollate first batch")
-            print(f"  Batch size: {len(batch)}")
-            print(f"  Sequence lengths: min={seq_lengths.min()}, max={seq_lengths.max()}, mean={seq_lengths.float().mean():.1f}")
-            print(f"  Padded shape: {landmarks_padded.shape}")
+        # Stack and pad efficiently using torch operations (on CPU, but faster)
+        seq_lengths_tensor = torch.tensor(seq_lengths_list, dtype=torch.long)
+        max_len = seq_lengths_tensor.max().item()
 
-        return landmarks_padded, labels, seq_lengths
+        # Pad all to max length
+        padded_landmarks = []
+        for landmarks in landmarks_list:
+            if landmarks.shape[0] < max_len:
+                padding = torch.zeros(max_len - landmarks.shape[0], landmarks.shape[1])
+                landmarks = torch.cat([landmarks, padding], dim=0)
+            padded_landmarks.append(landmarks)
+
+        # Stack into tensors
+        landmarks_tensor = torch.stack(padded_landmarks)  # (batch_size, seq_len, features)
+        labels_tensor = torch.stack(labels_list)           # (batch_size,)
+
+        if self.debug:
+            print(f"Batch shapes: landmarks={landmarks_tensor.shape}, labels={labels_tensor.shape}")
+
+        return landmarks_tensor, labels_tensor, seq_lengths_tensor
+
 
 
 def train_epoch(model, train_loader, criterion, optimizer, device, epoch, debug=True):
@@ -915,13 +930,21 @@ def main():
                 train_subset,
                 batch_size=BATCH_SIZE,
                 shuffle=True,
-                collate_fn=PadCollate(debug=True)
+                collate_fn=PadCollate(debug=True),
+                num_workers=8,
+                pin_memory=True,
+                prefetch_factor=2,
+                persistent_workers=True
             )
             val_loader = DataLoader(
                 val_subset,
                 batch_size=BATCH_SIZE,
                 shuffle=False,
-                collate_fn=PadCollate(debug=False)
+                collate_fn=PadCollate(debug=False),
+                num_workers=4,
+                pin_memory=True,
+                prefetch_factor=2,
+                persistent_workers=True
             )
 
             print(f"  Train samples: {len(train_indices)}")

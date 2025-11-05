@@ -821,28 +821,26 @@ def main():
     # HYPERPARAMETERS
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    BATCH_SIZE = 128
-    LEARNING_RATE = 5e-4
+    BATCH_SIZE = 64              # ← Sweet spot
+    LEARNING_RATE = 5e-4         # Keep same
     NUM_EPOCHS = 1000
-    HIDDEN_SIZE = 256
-    NUM_LSTM_LAYERS = 2
-    DROPOUT_RATE = 0.35
-    LSTM_DROPOUT = 0.25
+    HIDDEN_SIZE = 256            # Keep same
+    NUM_LSTM_LAYERS = 2          # Keep same
+    DROPOUT_RATE = 0.30          # Slightly relax
+    LSTM_DROPOUT = 0.20          # Slightly relax
     NUM_ATTENTION_HEADS = 4
-    NPZ_DIR = "./word_landmarks_extracted"
-    MODEL_SAVE_DIR = "./models_enhanced"
-    PLOTS_DIR = "./plots_enhanced"
-
-    EARLY_STOPPING_PATIENCE = 20   # ↑ Increase from 15 (allow more exploration)
-    EARLY_STOPPING_MIN_DELTA = 0.0005  # ✓ Good
-    EARLY_STOPPING_METRIC = "val_loss"
-    EARLY_STOPPING_MODE = "min"
-
-    # ← NEW: DataLoader optimization
     NUM_WORKERS = 8
     PIN_MEMORY = True
     PREFETCH_FACTOR = 2
 
+    EARLY_STOPPING_PATIENCE = 25
+    EARLY_STOPPING_MIN_DELTA = 0.001
+    EARLY_STOPPING_METRIC = "val_accuracy"  # ← Switch to accuracy
+    EARLY_STOPPING_MODE = "max"
+
+    NPZ_DIR = "./word_landmarks_extracted"
+    MODEL_SAVE_DIR = "./models_enhanced"
+    PLOTS_DIR = "./plots_enhanced"
     print(f"\n[CONFIG] Device: {DEVICE}")
     print(f"[CONFIG] Batch size: {BATCH_SIZE}")
     print(f"[CONFIG] Learning rate: {LEARNING_RATE}")

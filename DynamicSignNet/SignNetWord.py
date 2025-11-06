@@ -1138,7 +1138,7 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     NUM_EPOCHS = 1000
-    BATCH_SIZE = 32
+    BATCH_SIZE = 256
     LEARNING_RATE = 3e-4
     HIDDEN_SIZE = 128
     NUM_LSTM_LAYERS = 1

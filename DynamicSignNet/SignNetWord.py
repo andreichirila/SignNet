@@ -896,19 +896,19 @@ def main():
     NUM_EPOCHS = 1000
     BATCH_SIZE = 32
     LEARNING_RATE = 3e-4
-    HIDDEN_SIZE = 256
+    HIDDEN_SIZE = 192
     NUM_LSTM_LAYERS = 2
-    DROPOUT_RATE = 0.4          # ← Changed from 0.45
-    LSTM_DROPOUT = 0.3          # ← Changed from 0.35
-    NUM_WORKERS = 8
-    PIN_MEMORY = True
-    PREFETCH_FACTOR = 2
-    NUM_ATTENTION_HEADS = 4
-    WEIGHT_DECAY = 5e-4          # ← Changed from 8e-4
+    DROPOUT_RATE = 0.45          # ← Changed from 0.45
+    LSTM_DROPOUT = 0.35          # ← Changed from 0.35
+    NUM_ATTENTION_HEADS = 8
+    WEIGHT_DECAY = 1e-3          # ← Changed from 8e-4
 
     AUGMENT = True               # ← Changed from False (CRITICAL!)
     AUGMENT_PROBABILITY = 0.9    # ← Changed from 0.6
 
+    NUM_WORKERS = 8
+    PIN_MEMORY = True
+    PREFETCH_FACTOR = 2
 
     EARLY_STOPPING_PATIENCE = 35
     EARLY_STOPPING_MIN_DELTA = 0.0005

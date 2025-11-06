@@ -886,7 +886,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 300 classes"
+    RUN_NAME = f"Top 150 classes"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -896,15 +896,16 @@ def main():
     NUM_EPOCHS = 1000
     BATCH_SIZE = 32
     LEARNING_RATE = 3e-4
-    HIDDEN_SIZE = 192
-    NUM_LSTM_LAYERS = 2
-    DROPOUT_RATE = 0.45          # ← Changed from 0.45
-    LSTM_DROPOUT = 0.35          # ← Changed from 0.35
-    NUM_ATTENTION_HEADS = 8
-    WEIGHT_DECAY = 1e-3          # ← Changed from 8e-4
+    HIDDEN_SIZE = 128
+    NUM_LSTM_LAYERS = 1
+    DROPOUT_RATE = 0.35          # ← Changed from 0.45
+    LSTM_DROPOUT = 0.25          # ← Changed from 0.35
+    NUM_ATTENTION_HEADS = 4
+    WEIGHT_DECAY = 5e-4          # ← Changed from 8e-4
+
 
     AUGMENT = True               # ← Changed from False (CRITICAL!)
-    AUGMENT_PROBABILITY = 0.9    # ← Changed from 0.6
+    AUGMENT_PROBABILITY = 0.7    # ← Changed from 0.6
 
     NUM_WORKERS = 8
     PIN_MEMORY = True
@@ -986,7 +987,7 @@ def main():
                 word = dataset.idx_to_word[label.item()]
                 word_counts[word] += 1
 
-            number_of_classes = 300
+            number_of_classes = 150
             top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
             print(f"  Top n words: {top_n_words}")
             for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):

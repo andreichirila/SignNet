@@ -165,8 +165,8 @@ class TemporalAugmentation:
 
 class SignLanguageDataset(Dataset):
     """
-    Load preprocessed landmarks from NPZ files.
-    Handles variable-length sequences without padding.
+    Load preprocessed landmarks from NPZ files with per-frame handedness.
+    Aggregates handedness data to sample-level (dominant hand).
     """
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7):
         self.npz_dir = Path(npz_dir)
@@ -175,7 +175,6 @@ class SignLanguageDataset(Dataset):
 
         self.augment = augment
         if augment:
-            # pass probability into augmentation instance
             self.augmentation = TemporalAugmentation(prob=augment_prob)
 
         if debug:
@@ -205,30 +204,83 @@ class SignLanguageDataset(Dataset):
     def __len__(self):
         return len(self.npz_files)
 
+    def _get_dominant_handedness(self, handedness_data):
+        """
+        Aggregate per-frame handedness to sample-level (dominant hand).
+
+        Args:
+            handedness_data: (num_frames, 2) array of ["LEFT"/"RIGHT"/"NONE", "LEFT"/"RIGHT"/"NONE"]
+
+        Returns:
+            0 = LEFT, 1 = RIGHT, 2 = BOTH, 3 = NONE
+        """
+        # Count occurrences across all frames
+        left_count = 0
+        right_count = 0
+
+        for frame_hands in handedness_data:
+            # frame_hands is like ["LEFT", "NONE"] or ["RIGHT", "LEFT"]
+            if isinstance(frame_hands, str):
+                # Single handedness string (not a list)
+                if frame_hands == "LEFT":
+                    left_count += 1
+                elif frame_hands == "RIGHT":
+                    right_count += 1
+            else:
+                # List of handedness for each hand
+                for hand in frame_hands:
+                    if hand == "LEFT":
+                        left_count += 1
+                    elif hand == "RIGHT":
+                        right_count += 1
+
+        # Determine dominant hand
+        if left_count > 0 and right_count == 0:
+            return 0  # LEFT only
+        elif right_count > 0 and left_count == 0:
+            return 1  # RIGHT only
+        elif left_count > 0 and right_count > 0:
+            return 2  # BOTH hands used
+        else:
+            return 3  # No hand detected (NONE)
+
     def __getitem__(self, idx):
         npz_file = self.npz_files[idx]
         data = np.load(npz_file, allow_pickle=True)
 
+        # Load landmarks
         landmarks = data["landmarks"].astype(np.float32)
         if self.augment:
             landmarks = self.augmentation(landmarks)
 
-        gloss = data["glosses"][0]
-        label = self.word_to_idx[gloss]
+        # Load gloss and get label
+        gloss = data["glosses"][0] if len(data["glosses"]) > 0 else "UNKNOWN"
+        label = self.word_to_idx.get(gloss, 0)
 
+        # Load and aggregate handedness
+        if "handedness" in data:
+            handedness_data = data["handedness"]
+            handedness = self._get_dominant_handedness(handedness_data)
+        else:
+            # Default to NONE if not available
+            handedness = 3
+
+        # Convert to tensors
         landmarks_tensor = torch.from_numpy(landmarks)
         label_tensor = torch.tensor(label, dtype=torch.long)
+        handedness_tensor = torch.tensor(handedness, dtype=torch.long)
 
-        return landmarks_tensor, label_tensor
+        return landmarks_tensor, label_tensor, handedness_tensor
 
 
-class RemappedDataset(torch.utils.data.Dataset):
-    """
-    Remaps labels from original dataset to new indices for top N words.
-    Returns (landmarks, new_label, seq_length) tuples.
-    """
-    def __init__(self, original_dataset, indices, old_to_new_idx):
-        self.original_dataset = original_dataset
+
+
+# You need to verify your RemappedDataset looks like this:
+class RemappedDataset(Dataset):
+    """Remaps old class labels to new class labels for filtered dataset."""
+
+    def __init__(self, base_dataset, indices, old_to_new_idx):
+        self.base_dataset = base_dataset
         self.indices = indices
         self.old_to_new_idx = old_to_new_idx
 
@@ -236,21 +288,20 @@ class RemappedDataset(torch.utils.data.Dataset):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        # Get original index
-        original_idx = self.indices[idx]
+        # Get from base dataset
+        base_idx = self.indices[idx]
+        landmarks, old_label, handedness = self.base_dataset[base_idx]
 
-        # Get data from original dataset
-        landmarks, old_label = self.original_dataset[original_idx]
+        # REMAP the label
+        old_label_val = old_label.item()
 
-        # Remap label
-        old_label_item = old_label.item() if hasattr(old_label, 'item') else old_label
-        new_label = self.old_to_new_idx[old_label_item]
+        if old_label_val not in self.old_to_new_idx:
+            raise ValueError(f"Label {old_label_val} not in remapping dict!")
 
-        # Compute sequence length (number of frames)
-        seq_length = landmarks.shape[0]
+        new_label = self.old_to_new_idx[old_label_val]
 
-        # Return as tuple: (landmarks, label, seq_length)
-        return landmarks, torch.tensor(new_label, dtype=torch.long), seq_length
+        return landmarks, torch.tensor(new_label, dtype=torch.long), handedness
+
 
 
 
@@ -533,41 +584,121 @@ class LSTMSignClassifierSimplified(nn.Module):
 
         return logits
 
+class LSTMSignClassifierWithHandedness(nn.Module):
+    """
+    LSTM model with multi-task learning:
+    - Task 1: Sign language classification (main)
+    - Task 2: Handedness prediction (auxiliary)
 
-class PadCollate:
-    """Optimized padding collate function."""
-    def __init__(self, debug=False):
+    Handedness classes:
+    0 = LEFT only
+    1 = RIGHT only
+    2 = BOTH hands
+    3 = NONE (no hands detected)
+    """
+    def __init__(self, input_size=1659, hidden_size=128, num_classes=70,
+                 num_lstm_layers=1, dropout_rate=0.35, lstm_dropout=0.25,
+                 num_attention_heads=4, debug=False):
+        super().__init__()
+
+        self.input_size = input_size
+        self.hidden_size = hidden_size
+        self.num_classes = num_classes
         self.debug = debug
 
+        # LSTM layer
+        self.lstm = nn.LSTM(
+            input_size=input_size,
+            hidden_size=hidden_size,
+            num_layers=num_lstm_layers,
+            batch_first=True,
+            dropout=lstm_dropout if num_lstm_layers > 1 else 0,
+            bidirectional=False
+        )
+
+        # Attention mechanism
+        self.attention = nn.MultiheadAttention(
+            embed_dim=hidden_size,
+            num_heads=num_attention_heads,
+            batch_first=True,
+            dropout=dropout_rate
+        )
+
+        self.dropout = nn.Dropout(dropout_rate)
+
+        # Task 1: Sign classification head
+        self.fc_sign = nn.Linear(hidden_size, num_classes)
+
+        # Task 2: Handedness classification head (4 classes: LEFT, RIGHT, BOTH, NONE)
+        self.fc_handedness = nn.Linear(hidden_size, 4)
+
+        if debug:
+            print(f"[DEBUG] LSTMSignClassifierWithHandedness initialized:")
+            print(f"  Input size: {input_size}")
+            print(f"  Hidden size: {hidden_size}")
+            print(f"  Num classes (sign): {num_classes}")
+            print(f"  Num classes (handedness): 4 (LEFT, RIGHT, BOTH, NONE)")
+
+    def forward(self, landmarks):
+        """
+        Args:
+            landmarks: (batch_size, seq_len, 1659)
+        Returns:
+            sign_logits: (batch_size, num_classes)
+            handedness_logits: (batch_size, 4)
+        """
+        # LSTM forward pass
+        lstm_out, (h_n, c_n) = self.lstm(landmarks)  # lstm_out: (batch, seq_len, hidden)
+
+        # Extract last hidden state properly for attention
+        # h_n shape: (num_layers, batch, hidden)
+        # We want: (batch, 1, hidden) for query
+        last_hidden = h_n[-1].unsqueeze(1)  # (batch, 1, hidden) - FIXED
+
+        # Apply attention
+        context, _ = self.attention(
+            last_hidden,      # Query: (batch, 1, hidden)
+            lstm_out,         # Key/Value: (batch, seq_len, hidden)
+            lstm_out
+        )
+
+        # Remove the middle dimension
+        context = context.squeeze(1)  # (batch, hidden)
+        context = self.dropout(context)
+
+        # Two classification heads
+        sign_logits = self.fc_sign(context)           # (batch, num_classes)
+        handedness_logits = self.fc_handedness(context)  # (batch, 4)
+
+        return sign_logits, handedness_logits
+
+
+class PadCollate:
     def __call__(self, batch):
-        """Pad sequences efficiently."""
-        landmarks_list = []
-        labels_list = []
-        seq_lengths_list = []
+        landmarks_list = [item[0] for item in batch]
+        labels_list = [item[1] for item in batch]
+        handedness_list = [item[2] for item in batch]
 
-        for landmarks, label, seq_length in batch:
-            landmarks_list.append(landmarks)
-            labels_list.append(label)
-            seq_lengths_list.append(seq_length)
+        # Find max sequence length
+        max_seq_len = max([lm.shape[0] for lm in landmarks_list])
 
-        seq_lengths_tensor = torch.tensor(seq_lengths_list, dtype=torch.long)
-        max_len = seq_lengths_tensor.max().item()
-
+        # Pad all sequences to max_seq_len
         padded_landmarks = []
-        for landmarks in landmarks_list:
-            current_len = landmarks.shape[0]
-            if current_len < max_len:
-                padding = torch.zeros(max_len - current_len, landmarks.shape[1], dtype=landmarks.dtype)
-                landmarks = torch.cat([landmarks, padding], dim=0)
-            padded_landmarks.append(landmarks)
+        for lm in landmarks_list:
+            if lm.shape[0] < max_seq_len:
+                # Pad with zeros: (seq_len, 1659) → (max_seq_len, 1659)
+                pad_size = max_seq_len - lm.shape[0]
+                lm_padded = torch.nn.functional.pad(lm, (0, 0, 0, pad_size), mode='constant', value=0.0)
+            else:
+                lm_padded = lm
+            padded_landmarks.append(lm_padded)
 
-        landmarks_tensor = torch.stack(padded_landmarks)
-        labels_tensor = torch.stack(labels_list)
+        # Stack padded sequences (now all same size)
+        landmarks_tensor = torch.stack(padded_landmarks)  # (batch_size, max_seq_len, 1659)
+        labels = torch.tensor(labels_list, dtype=torch.long)
+        handedness = torch.tensor(handedness_list, dtype=torch.long)
 
-        if self.debug:
-            print(f"Batch shapes: landmarks={landmarks_tensor.shape}, labels={labels_tensor.shape}")
-
-        return landmarks_tensor, labels_tensor, seq_lengths_tensor
+        return landmarks_tensor, labels, handedness
 
 
 class FocalLoss(nn.Module):
@@ -581,6 +712,43 @@ class FocalLoss(nn.Module):
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
         return focal_loss.mean()
+
+
+class MultiTaskLoss(nn.Module):
+    """
+    Combines sign classification loss with handedness auxiliary loss.
+    """
+    def __init__(self, alpha=0.85, label_smoothing=0.0):
+        """
+        Args:
+            alpha: Weight for main task (sign classification)
+                   1-alpha weight for auxiliary task (handedness)
+            label_smoothing: Label smoothing for cross-entropy
+        """
+        super().__init__()
+        self.alpha = alpha
+        self.sign_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        self.handedness_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+
+    def forward(self, sign_logits, handedness_logits, sign_labels, handedness_labels):
+        """
+        Args:
+            sign_logits: (batch_size, num_classes)
+            handedness_logits: (batch_size, 3)
+            sign_labels: (batch_size,)
+            handedness_labels: (batch_size,)
+        Returns:
+            total_loss: Weighted combination
+            loss_sign: Sign classification loss
+            loss_handedness: Handedness prediction loss
+        """
+        loss_sign = self.sign_loss(sign_logits, sign_labels)
+        loss_handedness = self.handedness_loss(handedness_logits, handedness_labels)
+
+        # Weighted combination: 85% sign, 15% handedness
+        total_loss = self.alpha * loss_sign + (1 - self.alpha) * loss_handedness
+
+        return total_loss, loss_sign, loss_handedness
 
 
 
@@ -782,49 +950,70 @@ class GracefulShutdown:
 
 
 
-def train_epoch_interruptible(model, train_loader, criterion, optimizer, device, epoch,
-                               interrupt_handler, debug=True):
-    """Train for one epoch with interrupt handling."""
+def train_epoch_interruptible(model, train_loader, optimizer, criterion, device, epoch):
+    """Training with multi-task learning and handedness metrics."""
     model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
 
-    pbar = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]")
+    total_loss = 0.0
+    total_sign_loss = 0.0
+    total_hand_loss = 0.0
+    sign_acc = 0.0
+    hand_acc = 0.0
+    num_batches = 0
 
-    for batch_idx, (landmarks, labels, seq_lengths) in enumerate(pbar):
-        # Check for interrupt signal
-        if interrupt_handler.interrupted:
-            print(f"\n[INTERRUPT] Stopping training at batch {batch_idx}/{len(train_loader)}")
-            return total_loss / (batch_idx + 1) if batch_idx > 0 else 0, correct / total if total > 0 else 0, True
+    pbar = tqdm(train_loader, desc=f"[Epoch {epoch+1}] Train", leave=False)
 
+    for batch in pbar:
+        landmarks, sign_labels, handedness_labels = batch
         landmarks = landmarks.to(device)
-        labels = labels.to(device)
+        sign_labels = sign_labels.to(device)
+        handedness_labels = handedness_labels.to(device)
 
-        logits = model(landmarks)
-        loss = criterion(logits, labels)
+        # Forward pass
+        sign_logits, handedness_logits = model(landmarks)
 
+        # Calculate multi-task loss
+        total_loss_batch, loss_sign, loss_hand = criterion(
+            sign_logits, handedness_logits,
+            sign_labels, handedness_labels
+        )
+
+        # Backward pass
         optimizer.zero_grad()
-        loss.backward()
+        total_loss_batch.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        total_loss += loss.item()
-        _, predicted = torch.max(logits, 1)
-        correct += (predicted == labels).sum().item()
-        total += labels.size(0)
+        # Track metrics
+        total_loss += total_loss_batch.item()
+        total_sign_loss += loss_sign.item()
+        total_hand_loss += loss_hand.item()
 
-        if debug and batch_idx % 5 == 0:
-            batch_acc = (predicted == labels).sum().item() / labels.size(0)
-            pbar.set_postfix({
-                "loss": f"{loss.item():.4f}",
-                "batch_acc": f"{batch_acc:.2%}",
-                "avg_loss": f"{total_loss/(batch_idx+1):.4f}"
-            })
+        # Sign accuracy
+        sign_preds = torch.argmax(sign_logits, dim=1)
+        sign_batch_acc = (sign_preds == sign_labels).float().mean().item()
+        sign_acc += sign_batch_acc
 
-    accuracy = correct / total
-    avg_loss = total_loss / len(train_loader)
-    return avg_loss, accuracy, False
+        # Handedness accuracy
+        hand_preds = torch.argmax(handedness_logits, dim=1)
+        hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
+        hand_acc += hand_batch_acc
+
+        num_batches += 1
+
+        pbar.set_postfix({
+            'Loss': f'{total_loss/num_batches:.4f}',
+            'SignAcc': f'{sign_acc/num_batches:.4f}',
+            'HandAcc': f'{hand_acc/num_batches:.4f}'
+        })
+
+    avg_loss = total_loss / num_batches
+    avg_sign_loss = total_sign_loss / num_batches
+    avg_hand_loss = total_hand_loss / num_batches
+    avg_sign_acc = sign_acc / num_batches
+    avg_hand_acc = hand_acc / num_batches
+
+    return avg_loss, avg_sign_acc, avg_hand_acc, avg_sign_loss, avg_hand_loss
 
 
 def evaluate_interruptible(model, val_loader, criterion, device, epoch,
@@ -867,6 +1056,61 @@ def evaluate_interruptible(model, val_loader, criterion, device, epoch,
     avg_loss = total_loss / len(val_loader)
     return avg_loss, accuracy, False
 
+def validate_epoch(model, val_loader, criterion, device):
+    """Validation with handedness metrics."""
+    model.eval()
+
+    sign_acc = 0.0
+    hand_acc = 0.0
+    total_loss = 0.0
+    num_batches = 0
+
+    # Per-class handedness distribution (for analysis)
+    handedness_distribution = {"LEFT": 0, "RIGHT": 0, "BOTH": 0, "NONE": 0}
+
+    with torch.no_grad():
+        pbar = tqdm(val_loader, desc="[Val]", leave=False)
+
+        for batch in pbar:
+            landmarks, sign_labels, handedness_labels = batch
+            landmarks = landmarks.to(device)
+            sign_labels = sign_labels.to(device)
+            handedness_labels = handedness_labels.to(device)
+
+            # Forward pass
+            sign_logits, handedness_logits = model(landmarks)
+
+            # Loss
+            total_loss_batch, _, _ = criterion(
+                sign_logits, handedness_logits,
+                sign_labels, handedness_labels
+            )
+            total_loss += total_loss_batch.item()
+
+            # Sign accuracy
+            sign_preds = torch.argmax(sign_logits, dim=1)
+            sign_batch_acc = (sign_preds == sign_labels).float().mean().item()
+            sign_acc += sign_batch_acc
+
+            # Handedness accuracy
+            hand_preds = torch.argmax(handedness_logits, dim=1)
+            hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
+            hand_acc += hand_batch_acc
+
+            # Track handedness distribution
+            handedness_names = ["LEFT", "RIGHT", "BOTH", "NONE"]
+            for i, hand_label in enumerate(handedness_labels.cpu().numpy()):
+                handedness_distribution[handedness_names[hand_label]] += 1
+
+            num_batches += 1
+            pbar.set_postfix({'SignAcc': f'{sign_acc/num_batches:.4f}', 'HandAcc': f'{hand_acc/num_batches:.4f}'})
+
+    avg_loss = total_loss / num_batches
+    avg_sign_acc = sign_acc / num_batches
+    avg_hand_acc = hand_acc / num_batches
+
+    return avg_loss, avg_sign_acc, avg_hand_acc, handedness_distribution
+
 
 def main():
     """Main training pipeline with graceful shutdown support."""
@@ -886,7 +1130,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top 150 classes"
+    RUN_NAME = f"Top 150 classes with handedness"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -907,11 +1151,11 @@ def main():
     AUGMENT = True               # ← Changed from False (CRITICAL!)
     AUGMENT_PROBABILITY = 0.7    # ← Changed from 0.6
 
-    NUM_WORKERS = 8
+    NUM_WORKERS = 4
     PIN_MEMORY = True
-    PREFETCH_FACTOR = 2
+    PREFETCH_FACTOR = 4
 
-    EARLY_STOPPING_PATIENCE = 35
+    EARLY_STOPPING_PATIENCE = 15
     EARLY_STOPPING_MIN_DELTA = 0.0005
     EARLY_STOPPING_METRIC = "val_acc"
     EARLY_STOPPING_MODE = "max"
@@ -983,7 +1227,7 @@ def main():
             print(f"\n[STEP 2] Analyzing word frequencies...")
             word_counts = Counter()
             for i in range(len(dataset)):
-                _, label = dataset[i]
+                _, label, _ = dataset[i]
                 word = dataset.idx_to_word[label.item()]
                 word_counts[word] += 1
 
@@ -1001,7 +1245,7 @@ def main():
 
             filtered_indices = []
             for i in range(len(dataset)):
-                _, label = dataset[i]
+                _, label, _ = dataset[i]
                 old_label = label.item()
                 if old_label in old_to_new_idx:
                     filtered_indices.append(i)
@@ -1009,7 +1253,7 @@ def main():
             print(f"\n[STEP 4] Splitting with stratified random split...")
             filtered_labels = []
             for idx in filtered_indices:
-                _, label = dataset[idx]
+                _, label, _ = dataset[idx]
                 word = dataset.idx_to_word[label.item()]
                 filtered_labels.append(word)
 
@@ -1024,12 +1268,38 @@ def main():
             val_subset   = RemappedDataset(dataset_val, val_indices, old_to_new_idx)
             num_classes = len(top_n_words)
 
+            print(f"\n[DIAGNOSTICS]")
+            print(f"  num_classes: {num_classes}")
+            print(f"  old_to_new_idx size: {len(old_to_new_idx)}")
+            print(f"  old_to_new_idx keys: {sorted(old_to_new_idx.keys())}")
+            print(f"  old_to_new_idx values: {sorted(old_to_new_idx.values())}")
+            print(f"  Expected value range: 0 to {num_classes-1}")
+
+            # Check train_subset
+            print(f"\n  train_subset size: {len(train_subset)}")
+            sample_labels = []
+            for i in range(min(100, len(train_subset))):
+                try:
+                    _, label, _ = train_subset[i]
+                    sample_labels.append(label.item())
+                except Exception as e:
+                    print(f"  [ERROR] Sample {i}: {e}")
+
+            if sample_labels:
+                print(f"  Label range in train_subset: {min(sample_labels)} to {max(sample_labels)}")
+                print(f"  Unique labels in train_subset: {sorted(set(sample_labels))}")
+
+                if min(sample_labels) < 0:
+                    print(f"  [ERROR] Found negative labels!")
+                if max(sample_labels) >= num_classes:
+                    print(f"  [ERROR] Found labels >= num_classes!")
+
             print(f"\n[STEP 5] Creating data loaders...")
             train_loader = DataLoader(
                 train_subset,
                 batch_size=BATCH_SIZE,
                 shuffle=True,
-                collate_fn=PadCollate(debug=False),
+                collate_fn=PadCollate(),
                 num_workers=NUM_WORKERS,      # ← ADD
                 pin_memory=PIN_MEMORY,         # ← ADD
                 prefetch_factor=PREFETCH_FACTOR,  # ← ADD
@@ -1040,7 +1310,7 @@ def main():
                 val_subset,
                 batch_size=BATCH_SIZE,
                 shuffle=False,
-                collate_fn=PadCollate(debug=False),
+                collate_fn=PadCollate(),
                 num_workers=NUM_WORKERS,       # ← ADD
                 pin_memory=PIN_MEMORY,         # ← ADD
                 prefetch_factor=PREFETCH_FACTOR,  # ← ADD
@@ -1054,7 +1324,18 @@ def main():
             # STEP 6: Build model
             # ================================================================
             print(f"\n[STEP 6] Building model...")
-            model = LSTMSignClassifierSimplified(
+#            model = LSTMSignClassifierSimplified(
+#                input_size=1659,
+#                hidden_size=HIDDEN_SIZE,
+#                num_classes=num_classes,
+#                num_lstm_layers=NUM_LSTM_LAYERS,
+#                dropout_rate=DROPOUT_RATE,
+#                lstm_dropout=LSTM_DROPOUT,
+#                num_attention_heads=NUM_ATTENTION_HEADS,
+#                debug=True
+#            ).to(DEVICE)
+
+            model = LSTMSignClassifierWithHandedness(
                 input_size=1659,
                 hidden_size=HIDDEN_SIZE,
                 num_classes=num_classes,
@@ -1069,7 +1350,8 @@ def main():
             # STEP 7: Setup training
             # ================================================================
             print(f"\n[STEP 7] Setting up training...")
-            criterion = nn.CrossEntropyLoss()
+            #criterion = nn.CrossEntropyLoss()
+            criterion = MultiTaskLoss(alpha=0.85, label_smoothing=0.0)
             #criterion = nn.CrossEntropyLoss(label_smoothing=0.1)
             #criterion = FocalLoss(alpha=1, gamma=2)
 
@@ -1112,53 +1394,47 @@ def main():
                     print(f"\n[INTERRUPTED] Stopping at epoch {epoch+1}")
                     break
 
-                train_loss, train_acc, interrupted = train_epoch_interruptible(
-                    model, train_loader, criterion, optimizer, DEVICE, epoch,
-                    shutdown_handler, debug=True
-                )
+                train_loss, train_sign_acc, train_hand_acc, train_sign_loss, train_hand_loss = train_epoch_interruptible(model, train_loader, optimizer, criterion, DEVICE, epoch)
 
-                if interrupted:
+                if shutdown_handler.is_interrupted():
                     print(f"[INTERRUPTED] Training stopped during epoch {epoch+1}")
                     break
 
-                val_loss, val_acc, interrupted = evaluate_interruptible(
-                    model, val_loader, criterion, DEVICE, epoch,
-                    shutdown_handler, debug=True
-                )
+                val_loss, val_sign_acc, val_hand_acc, handedness_dist = validate_epoch(model, val_loader, criterion, DEVICE)
 
-                if interrupted:
+                if shutdown_handler.is_interrupted():
                     print(f"[INTERRUPTED] Validation stopped during epoch {epoch+1}")
                     break
 
                 scheduler.step()
                 epochs_trained += 1
 
-                if val_acc > best_val_acc:
-                    best_val_acc = val_acc
+                if val_sign_acc > best_val_acc:
+                    best_val_acc = val_sign_acc
                     best_epoch = epoch
                     best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best.pth")
                     torch.save(model.state_dict(), best_model_path)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
-                train_accs.append(train_acc)
-                val_accs.append(val_acc)
+                train_accs.append(train_sign_acc)
+                val_accs.append(val_sign_acc)
 
                 lr = optimizer.param_groups[0]['lr']
                 print(f"Epoch {epoch+1:4}/{NUM_EPOCHS} │ "
-                      f"Train Loss: {train_loss:.4f} │ Train Acc: {train_acc:.2%} │ "
-                      f"Val Loss: {val_loss:.4f} │ Val Acc: {val_acc:.2%} │ "
+                      f"Train Loss: {train_loss:.4f} │ Train Acc: {train_sign_acc:.2%} │ "
+                      f"Val Loss: {val_loss:.4f} │ Val Acc: {val_sign_acc:.2%} │ "
                       f"LR: {lr:.2e}")
 
                 mlflow.log_metrics({
                     "train_loss": train_loss,
                     "val_loss": val_loss,
-                    "train_accuracy": train_acc,
-                    "val_accuracy": val_acc,
+                    "train_accuracy": train_sign_acc,
+                    "val_accuracy": val_sign_acc,
                     "learning_rate": lr,
                 }, step=epoch)
 
-                if early_stopping(val_acc, epoch):
+                if early_stopping(val_sign_acc, epoch):
                     print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
                     break
 
@@ -1198,7 +1474,14 @@ def main():
             print("="*80)
 
             # Send notification
-            asyncio.run(send_message(f"Training summary: Best val acc \n\n{best_val_acc:.2%}\n Best train acc {best_val_acc:.2%}", CHAT_ID))
+            asyncio.run(send_message(
+                f"Training summary:\n"
+                f"Best Val Acc: {best_val_acc:.2%}\n"
+                f"Final Train Acc: {train_accs[-1]:.2%}\n"
+                f"Final Val Acc: {val_accs[-1]:.2%}\n"
+                f"Epochs: {epochs_trained}",
+                CHAT_ID
+            ))
 
         finally:
             # ====================================================================

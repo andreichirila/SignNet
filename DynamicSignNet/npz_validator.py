@@ -326,6 +326,21 @@ class NPZValidator:
             print(f"\n  Pose landmarks (99):")
             print(f"    Non-zero: {(pose_lms != 0).sum()} / {pose_lms.size}")
 
+            handedness = self.data['handedness']  # (T, 2)
+
+            print(f'Handedness labels (first 5 frames): {handedness[0:5]}')
+
+            # Left hand: indices 0-62
+            left_hand = landmarks[:, 0:63]
+            left_frames = (left_hand != 0).any(axis=1).sum()
+
+            # Right hand: indices 63-125
+            right_hand = landmarks[:, 63:126]
+            right_frames = (right_hand != 0).any(axis=1).sum()
+
+            print(f'Frames with left hand: {left_frames} / {len(landmarks)}')
+            print(f'Frames with right hand: {right_frames} / {len(landmarks)}')
+
         print(f"\n{'='*80}\n")
 
 

@@ -614,7 +614,7 @@ class BidirectionalSkeletonGCN(nn.Module):
     def forward(self, fwd, bwd, node_mask, lengths):
         outs_f = []
         for s in self.streams:
-            outs_f.append(self.forward_streams[s](fwd[s], self.A, node_mask(outs_f, dim=1)  # (B,S,H)
+            outs_f.append(self.forward_streams[s](fwd[s], self.A, node_mask(outs_f, dim=1))  # (B,S,H)
         wf = F.softmax(self.w_fwd, dim=0)
         Ffused = (Fstk * wf.view(1,-1,1)).sum(dim=1)  # (B,H)
 

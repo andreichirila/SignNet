@@ -8,6 +8,8 @@ import os
 from collections import Counter
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, classification_report, f1_score, precision_score, recall_score
+import seaborn as sns
 import mlflow
 import mlflow.pytorch
 import json
@@ -1056,8 +1058,8 @@ def evaluate_interruptible(model, val_loader, criterion, device, epoch,
     avg_loss = total_loss / len(val_loader)
     return avg_loss, accuracy, False
 
-def validate_epoch(model, val_loader, criterion, device):
-    """Validation with handedness metrics."""
+def validate_epoch(model, val_loader, criterion, device, idx_to_word):
+    """Validation with confusion matrix and per-class metrics."""
     model.eval()
 
     sign_acc = 0.0
@@ -1065,8 +1067,11 @@ def validate_epoch(model, val_loader, criterion, device):
     total_loss = 0.0
     num_batches = 0
 
-    # Per-class handedness distribution (for analysis)
     handedness_distribution = {"LEFT": 0, "RIGHT": 0, "BOTH": 0, "NONE": 0}
+
+    # Collect all predictions and labels
+    all_preds = []
+    all_labels = []
 
     with torch.no_grad():
         pbar = tqdm(val_loader, desc="[Val]", leave=False)
@@ -1077,39 +1082,163 @@ def validate_epoch(model, val_loader, criterion, device):
             sign_labels = sign_labels.to(device)
             handedness_labels = handedness_labels.to(device)
 
-            # Forward pass
             sign_logits, handedness_logits = model(landmarks)
 
-            # Loss
             total_loss_batch, _, _ = criterion(
                 sign_logits, handedness_logits,
                 sign_labels, handedness_labels
             )
             total_loss += total_loss_batch.item()
 
-            # Sign accuracy
             sign_preds = torch.argmax(sign_logits, dim=1)
             sign_batch_acc = (sign_preds == sign_labels).float().mean().item()
             sign_acc += sign_batch_acc
 
-            # Handedness accuracy
             hand_preds = torch.argmax(handedness_logits, dim=1)
             hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
             hand_acc += hand_batch_acc
 
-            # Track handedness distribution
             handedness_names = ["LEFT", "RIGHT", "BOTH", "NONE"]
-            for i, hand_label in enumerate(handedness_labels.cpu().numpy()):
+            for hand_label in handedness_labels.cpu().numpy():
                 handedness_distribution[handedness_names[hand_label]] += 1
 
+            # Collect for confusion matrix
+            all_preds.extend(sign_preds.cpu().numpy())
+            all_labels.extend(sign_labels.cpu().numpy())
+
             num_batches += 1
-            pbar.set_postfix({'SignAcc': f'{sign_acc/num_batches:.4f}', 'HandAcc': f'{hand_acc/num_batches:.4f}'})
+            pbar.set_postfix({'SignAcc': f'{sign_acc/num_batches:.4f}'})
 
     avg_loss = total_loss / num_batches
     avg_sign_acc = sign_acc / num_batches
     avg_hand_acc = hand_acc / num_batches
 
-    return avg_loss, avg_sign_acc, avg_hand_acc, handedness_distribution
+    all_preds = np.array(all_preds)
+    all_labels = np.array(all_labels)
+
+    # Compute confusion matrix
+    num_classes = len(idx_to_word)
+    confusion_mat = confusion_matrix(all_labels, all_preds, labels=range(num_classes))
+
+    # Compute per-class metrics
+    class_metrics = {}
+    for class_idx in range(num_classes):
+        class_name = idx_to_word[class_idx]
+        class_mask = (all_labels == class_idx)
+
+        if class_mask.sum() > 0:
+            class_correct = (all_preds[class_mask] == class_idx).sum()
+            class_total = class_mask.sum()
+            class_acc = class_correct / class_total
+
+            class_metrics[class_name] = {
+                'accuracy': float(class_acc),
+                'support': int(class_total),
+                'class_idx': class_idx
+            }
+        else:
+            class_metrics[class_name] = {
+                'accuracy': 0.0,
+                'support': 0,
+                'class_idx': class_idx
+            }
+
+    # Overall metrics
+    f1_macro = f1_score(all_labels, all_preds, average='macro', zero_division=0)
+    f1_weighted = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
+    precision_macro = precision_score(all_labels, all_preds, average='macro', zero_division=0)
+    recall_macro = recall_score(all_labels, all_preds, average='macro', zero_division=0)
+
+    class_metrics['_overall'] = {
+        'f1_macro': float(f1_macro),
+        'f1_weighted': float(f1_weighted),
+        'precision_macro': float(precision_macro),
+        'recall_macro': float(recall_macro)
+    }
+
+    return avg_loss, avg_sign_acc, avg_hand_acc, handedness_distribution, \
+           confusion_mat, class_metrics, all_preds, all_labels
+
+def plot_confusion_matrix(confusion_mat, idx_to_word, save_path, top_n=50):
+    """Plot and save confusion matrix."""
+    num_classes = len(idx_to_word)
+
+    if num_classes > top_n:
+        class_support = confusion_mat.sum(axis=1)
+        top_indices = np.argsort(class_support)[-top_n:][::-1]
+        confusion_mat_filtered = confusion_mat[top_indices][:, top_indices]
+        class_names = [idx_to_word[i] for i in top_indices]
+        title = f'Confusion Matrix (Top {top_n} Classes by Support)'
+    else:
+        confusion_mat_filtered = confusion_mat
+        class_names = [idx_to_word[i] for i in range(num_classes)]
+        title = 'Confusion Matrix (All Classes)'
+
+    plt.figure(figsize=(max(12, top_n * 0.4), max(10, top_n * 0.35)))
+
+    # Normalize row-wise
+    confusion_mat_norm = confusion_mat_filtered.astype('float') / confusion_mat_filtered.sum(axis=1)[:, np.newaxis]
+    confusion_mat_norm = np.nan_to_num(confusion_mat_norm)
+
+    sns.heatmap(confusion_mat_norm,
+                xticklabels=class_names,
+                yticklabels=class_names,
+                cmap='Blues',
+                fmt='.2f',
+                cbar_kws={'label': 'Normalized Count'},
+                square=True,
+                linewidths=0.5,
+                linecolor='gray')
+
+    plt.title(title, fontsize=14, fontweight='bold', pad=20)
+    plt.xlabel('Predicted Label', fontsize=12, fontweight='bold')
+    plt.ylabel('True Label', fontsize=12, fontweight='bold')
+    plt.xticks(rotation=90, ha='right')
+    plt.yticks(rotation=0)
+    plt.tight_layout()
+
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"✓ Confusion matrix saved to {save_path}")
+    plt.close()
+
+    return save_path
+
+def log_class_metrics_to_mlflow(class_metrics, epoch):
+    """Log per-class metrics to MLflow."""
+    if '_overall' in class_metrics:
+        overall = class_metrics['_overall']
+        mlflow.log_metrics({
+            'val_f1_macro': overall['f1_macro'],
+            'val_f1_weighted': overall['f1_weighted'],
+            'val_precision_macro': overall['precision_macro'],
+            'val_recall_macro': overall['recall_macro']
+        }, step=epoch)
+
+    # Log top 20 classes by support
+    class_list = [(name, metrics) for name, metrics in class_metrics.items() if name != '_overall']
+    class_list_sorted = sorted(class_list, key=lambda x: x[1]['support'], reverse=True)
+
+    for name, metrics in class_list_sorted[:20]:
+        metric_name = f"val_class_acc/{name}"
+        mlflow.log_metric(metric_name, metrics['accuracy'], step=epoch)
+
+    # Save detailed JSON
+    class_metrics_table = []
+    for name, metrics in class_list_sorted:
+        class_metrics_table.append({
+            'class': name,
+            'accuracy': f"{metrics['accuracy']:.4f}",
+            'support': metrics['support']
+        })
+
+    metrics_json_path = f"class_metrics_epoch_{epoch}.json"
+    with open(metrics_json_path, 'w') as f:
+        json.dump(class_metrics_table, f, indent=2)
+
+    mlflow.log_artifact(metrics_json_path)
+    os.remove(metrics_json_path)
+
+    print(f"✓ Logged per-class metrics for epoch {epoch}")
 
 
 def main():
@@ -1138,7 +1267,7 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     NUM_EPOCHS = 1000
-    BATCH_SIZE = 256
+    BATCH_SIZE = 32
     LEARNING_RATE = 3e-4
     HIDDEN_SIZE = 128
     NUM_LSTM_LAYERS = 1
@@ -1159,6 +1288,8 @@ def main():
     EARLY_STOPPING_MIN_DELTA = 0.0005
     EARLY_STOPPING_METRIC = "val_acc"
     EARLY_STOPPING_MODE = "max"
+
+    number_of_classes = 150
 
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_enhanced"
@@ -1231,7 +1362,6 @@ def main():
                 word = dataset.idx_to_word[label.item()]
                 word_counts[word] += 1
 
-            number_of_classes = 150
             top_n_words = [word for word, _ in word_counts.most_common(number_of_classes)]
             print(f"  Top n words: {top_n_words}")
             for idx, (word, count) in enumerate(word_counts.most_common(number_of_classes)):
@@ -1400,7 +1530,7 @@ def main():
                     print(f"[INTERRUPTED] Training stopped during epoch {epoch+1}")
                     break
 
-                val_loss, val_sign_acc, val_hand_acc, handedness_dist = validate_epoch(model, val_loader, criterion, DEVICE)
+                val_loss, val_sign_acc, val_hand_acc, handedness_dist, confusion_mat, class_metrics, all_preds, all_labels = validate_epoch(model, val_loader, criterion, DEVICE, dataset.idx_to_word)
 
                 if shutdown_handler.is_interrupted():
                     print(f"[INTERRUPTED] Validation stopped during epoch {epoch+1}")
@@ -1441,6 +1571,15 @@ def main():
             # ================================================================
             # STEP 9: Save results
             # ================================================================
+            # Plot and log confusion matrix
+            confusion_plot_path = os.path.join(PLOTS_DIR, f'confusion_matrix_epoch_{epoch+1}.png')
+            plot_confusion_matrix(confusion_mat, dataset.idx_to_word, confusion_plot_path, top_n=number_of_classes)
+            mlflow.log_artifact(confusion_plot_path)
+            # Print F1 scores
+            print(f"  └─ F1 (macro): {class_metrics['_overall']['f1_macro']:.4f}, "f"F1 (weighted): {class_metrics['_overall']['f1_weighted']:.4f}")
+            # Log per-class metrics
+            log_class_metrics_to_mlflow(class_metrics, epoch)
+
             print("\n" + "="*80)
             print(f"[TRAINING COMPLETE / INTERRUPTED]")
             print(f"  Total epochs trained: {epochs_trained}")

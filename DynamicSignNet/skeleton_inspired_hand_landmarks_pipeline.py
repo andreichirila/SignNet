@@ -480,6 +480,7 @@ class TrueSkeletonCollator:
             # valid if x or y is non-zero (robust when z is depth, not confidence)
             mask = ((np.abs(kc[..., 0]) + np.abs(kc[..., 1])) > 1e-6).astype(np.float32)
 
+
             if kc.shape[0] < max_T:
                 pad = max_T - kc.shape[0]
                 mask = np.pad(mask, ((0,pad),(0,0)), mode='constant')
@@ -719,6 +720,16 @@ class Trainer:
                     print(f"Lengths (first 8): {batch['lengths'][:8].tolist()}")
                     node_mask = batch['node_mask']
                     print(f"Node-mask coverage: {node_mask.mean().item():.4f}")
+                    kc = batch['features_forward']['keypoint_coords']
+                    mask = batch['node_mask']
+
+                    print(f'Keypoint coords min/max: [{kc.min():.3f}, {kc.max():.3f}]')
+                    print(f'Mask coverage: {mask.mean():.4f}')
+
+                    # Check coordinate distribution
+                    kc_xy = kc[0, 0, :, :2].numpy()  # First sample, first frame
+                    coord_valid = (np.abs(kc_xy).sum(axis=1) > 1e-6)
+                    print(f'Nodes with non-zero coords: {coord_valid.sum()} / 27')
                     break
 
             self.hist['train_loss'].append(tr_loss)

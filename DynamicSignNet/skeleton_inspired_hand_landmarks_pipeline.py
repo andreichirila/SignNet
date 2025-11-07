@@ -612,26 +612,32 @@ class BidirectionalSkeletonGCN(nn.Module):
 
     # ==== PATCH: forward takes node_mask and lengths; flips mask for backward ====
     def forward(self, fwd, bwd, node_mask, lengths):
-        outs_f = []
+        # Forward direction
+        outs_f = []  # must be a list of tensors
         for s in self.streams:
-            # pass node_mask and lengths through
-            outs_f.append(self.forward_streams)
+            # CALL the module to produce a tensor, don't append the module itself
+            out_s = self.forward_streamss  # (B,H)
+            outs_f.append(out_s)
+
         Fstk = torch.stack(outs_f, dim=1)  # (B, S, H)
         wf = F.softmax(self.w_fwd, dim=0)
         Ffused = (Fstk * wf.view(1, -1, 1)).sum(dim=1)  # (B, H)
 
-        # backward path uses flipped mask along time
+        # Backward direction: flip mask along time to match reversed sequences
         node_mask_b = node_mask.flip(dims=[1])
         outs_b = []
         for s in self.streams:
-            outs_b.append(self.backward_streamss)
-        Bstk = torch.stack(outs_b, dim=1)
-        wb = F.softmax(self.w_bwd, dim=0)
-        Bfused = (Bstk * wb.view(1, -1, 1)).sum(dim=1)
+            out_s = self.backward_streamss  # (B,H)
+            outs_b.append(out_s)
 
+        Bstk = torch.stack(outs_b, dim=1)  # (B, S, H)
+        wb = F.softmax(self.w_bwd, dim=0)
+        Bfused = (Bstk * wb.view(1, -1, 1)).sum(dim=1)  # (B, H)
+
+        # Directional fusion
         wd = F.softmax(self.w_dir, dim=0)
-        fused = wd[0] * Ffused + wd[1] * Bfused
-        return self.classifier(fused)
+        fused = wd[0] * Ffused + wd[1] * Bfused  # (B, H)
+        return self.classifier(fused)            # (B, num_classes)
 
 
 

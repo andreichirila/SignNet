@@ -614,22 +614,25 @@ class BidirectionalSkeletonGCN(nn.Module):
     def forward(self, fwd, bwd, node_mask, lengths):
         outs_f = []
         for s in self.streams:
-            outs_f.append(self.forward_streams[s](fwd[s], self.A, node_mask(outs_f, dim=1)))  # (B,S,H)
+            # pass node_mask and lengths through
+            outs_f.append(self.forward_streamss)
+        Fstk = torch.stack(outs_f, dim=1)  # (B, S, H)
         wf = F.softmax(self.w_fwd, dim=0)
-        Ffused = (Fstk * wf.view(1,-1,1)).sum(dim=1)  # (B,H)
+        Ffused = (Fstk * wf.view(1, -1, 1)).sum(dim=1)  # (B, H)
 
-        # backward uses reversed mask along time
+        # backward path uses flipped mask along time
         node_mask_b = node_mask.flip(dims=[1])
         outs_b = []
         for s in self.streams:
             outs_b.append(self.backward_streamss)
         Bstk = torch.stack(outs_b, dim=1)
         wb = F.softmax(self.w_bwd, dim=0)
-        Bfused = (Bstk * wb.view(1,-1,1)).sum(dim=1)
+        Bfused = (Bstk * wb.view(1, -1, 1)).sum(dim=1)
 
         wd = F.softmax(self.w_dir, dim=0)
-        fused = wd[0]*Ffused + wd[1]*Bfused
+        fused = wd[0] * Ffused + wd[1] * Bfused
         return self.classifier(fused)
+
 
 
 # ===========================

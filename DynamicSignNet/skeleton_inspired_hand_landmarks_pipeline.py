@@ -778,7 +778,7 @@ def main():
         full_base = TrueSkeletonDataset(DATA_DIR, fe, debug=True)
 
         # Choose top K words
-        TOP_K = 10
+        TOP_K = 2
         top_k_words, _ = build_topk_vocabulary(full_base.files, K=TOP_K, debug=True)
 
         # Create top-K dataset wrapper (new compact vocab)
@@ -827,7 +827,7 @@ def main():
         print(f"\n[INFO] num_classes = {num_classes}")
         model = BidirectionalSkeletonGCN(
             num_classes=num_classes, hidden=HIDDEN,
-            gcn_layers=GCN_LAYERS, p=DROPOUT
+            gcn_layers=GCN_LAYERS, p=DROPOUT, streams=['keypoint_coords']
         )
         mlflow.log_param('top_k', TOP_K)
         with open('topk_words.txt', 'w') as f:

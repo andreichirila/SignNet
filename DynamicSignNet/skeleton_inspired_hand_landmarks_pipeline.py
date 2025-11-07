@@ -300,7 +300,8 @@ class Skeleton27FeatureExtractor:
         T, V = nodes_seq.shape[0], nodes_seq.shape[1]
         K = nodes_seq.copy().astype(np.float32)  # (T,V,3)
         conf = K[..., 2]                         # (T,V)
-        valid = (conf >= self.conf_valid_thresh).astype(np.float32)  # (T,V)
+        # FIXED: Valid if x or y non-zero (don't use z as confidence)
+        valid = ((np.abs(K[..., 0]) + np.abs(K[..., 1])) > 1e-6).astype(np.float32)
 
         # Edge-based features
         # Accumulate per node j over incident edges

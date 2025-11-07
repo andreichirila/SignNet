@@ -839,7 +839,7 @@ def main():
         print(f"\n[INFO] num_classes = {num_classes}")
         model = BidirectionalSkeletonGCN(
             num_classes=num_classes, hidden=HIDDEN,
-            gcn_layers=GCN_LAYERS, p=DROPOUT, streams=['keypoint_coords']
+            gcn_layers=GCN_LAYERS, p=DROPOUT, streams=['keypoint_coords', 'keypoint_velocity']
         )
         mlflow.log_param('top_k', TOP_K)
         with open('topk_words.txt', 'w') as f:

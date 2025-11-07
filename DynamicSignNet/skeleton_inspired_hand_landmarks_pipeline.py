@@ -615,9 +615,9 @@ class BidirectionalSkeletonGCN(nn.Module):
         # Forward direction
         outs_f = []  # must be a list of tensors
         for s in self.streams:
-            # CALL the module to produce a tensor, don't append the module itself
-            out_s = self.forward_streamss  # (B,H)
+            out_s = self.forward_streams[s](fwd[s], self.A, node_mask, lengths)
             outs_f.append(out_s)
+
 
         Fstk = torch.stack(outs_f, dim=1)  # (B, S, H)
         wf = F.softmax(self.w_fwd, dim=0)
@@ -627,8 +627,9 @@ class BidirectionalSkeletonGCN(nn.Module):
         node_mask_b = node_mask.flip(dims=[1])
         outs_b = []
         for s in self.streams:
-            out_s = self.backward_streamss  # (B,H)
+            out_s = self.backward_streams[s](bwd[s], self.A, node_mask_b, lengths)
             outs_b.append(out_s)
+
 
         Bstk = torch.stack(outs_b, dim=1)  # (B, S, H)
         wb = F.softmax(self.w_bwd, dim=0)

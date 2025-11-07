@@ -615,7 +615,7 @@ class BidirectionalSkeletonGCN(nn.Module):
         outs_f = []
         for s in self.streams:
             # pass node_mask and lengths through
-            outs_f.append(self.forward_streamss)
+            outs_f.append(self.forward_streams)
         Fstk = torch.stack(outs_f, dim=1)  # (B, S, H)
         wf = F.softmax(self.w_fwd, dim=0)
         Ffused = (Fstk * wf.view(1, -1, 1)).sum(dim=1)  # (B, H)

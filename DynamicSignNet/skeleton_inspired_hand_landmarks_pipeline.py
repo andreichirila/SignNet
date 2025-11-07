@@ -480,6 +480,20 @@ class TrueSkeletonCollator:
             # valid if x or y is non-zero (robust when z is depth, not confidence)
             mask = ((np.abs(kc[..., 0]) + np.abs(kc[..., 1])) > 1e-6).astype(np.float32)
 
+            #DEBUG
+            print(f"kc shape: {kc.shape}")  # Should be (T, 27, 3)
+            coords_valid = (np.abs(kc[..., 0]) + np.abs(kc[..., 1]) > 1e-6).sum()
+            print(f"Non-zero coordinates: {coords_valid} out of {kc.shape[0] * kc.shape[1]}")
+
+            # Per node type:
+            face_valid = (np.abs(kc[:, 0:3, 0]) + np.abs(kc[:, 0:3, 1]) > 1e-6).sum()
+            pose_valid = (np.abs(kc[:, 3:9, 0]) + np.abs(kc[:, 3:9, 1]) > 1e-6).sum()
+            lhand_valid = (np.abs(kc[:, 9:19, 0]) + np.abs(kc[:, 9:19, 1]) > 1e-6).sum()
+            rhand_valid = (np.abs(kc[:, 19:27, 0]) + np.abs(kc[:, 19:27, 1]) > 1e-6).sum()
+
+            print(f"Face: {face_valid}/{kc.shape[0]*3} | Pose: {pose_valid}/{kc.shape[0]*6} | LHand: {lhand_valid}/{kc.shape[0]*10} | RHand: {rhand_valid}/{kc.shape[0]*8}")
+
+
 
             if kc.shape[0] < max_T:
                 pad = max_T - kc.shape[0]

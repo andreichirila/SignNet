@@ -476,7 +476,9 @@ class TrueSkeletonCollator:
 
             # Node validity mask from keypoint_coords confidence
             kc = streams['keypoint_coords']  # (T,V,3)
-            mask = (kc[..., 2] >= self.conf_valid_thresh).astype(np.float32)  # (T,V)
+            # valid if x or y is non-zero (robust when z is depth, not confidence)
+            mask = ((np.abs(kc[..., 0]) + np.abs(kc[..., 1])) > 1e-6).astype(np.float32)
+
             if kc.shape[0] < max_T:
                 pad = max_T - kc.shape[0]
                 mask = np.pad(mask, ((0,pad),(0,0)), mode='constant')

@@ -2,26 +2,19 @@
 # -*- coding: utf-8 -*-
 """
 True-Skeleton Bidirectional Multi-Stream GCN for Isolated Sign Recognition
-- 27-node upper-body skeleton per the paper (nose, eyes, shoulders, elbows, wrists, hands base+tip)
-- 6 input streams per direction (coords, edge-dist, bones, and their velocities, accelerations)
-- Forward and backward temporal processing with learnable late fusion
-- Stratified train/val/test split, MLflow logging, and test evaluation
-
-Assumptions:
-- Input .npz files contain 'landmarks' (T, D) flattened combined landmarks, and 'glosses' list
-- map_combined_to_27() must be adapted to your exact landmark indexing to select (x,y) + confidence
-
-Usage:
-    python true_skeleton_gcn.py
+Patched version:
+- PACKED LSTM with true sequence lengths
+- Mask-aware weighted node pooling using confidence-derived node mask
+- Fixed edge_distance (magnitudes) vs bone_vectors (signed vectors)
+- Mask-aware velocities/accelerations
+- Backward stream uses flipped node mask
+- Extra sanity logging and class distribution printouts
 """
 
 import os
 import json
 from pathlib import Path
-from collections import Counter
-from collections import defaultdict
-
-
+from collections import Counter, defaultdict
 import numpy as np
 import torch
 import torch.nn as nn
@@ -29,7 +22,6 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
-
 import mlflow
 import mlflow.pytorch
 import platform
@@ -38,7 +30,6 @@ import psutil
 # ===========================
 # Utils: Reproducibility
 # ===========================
-
 def set_seed(seed: int = 42):
     import random
     random.seed(seed)
@@ -48,11 +39,12 @@ def set_seed(seed: int = 42):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
+
 def build_topk_vocabulary(npz_files, K=50, debug=True):
     """
     Scan all .npz files and return:
-      - top_k_words: set of K most frequent glosses
-      - counts: dict gloss -> count
+    - top_k_words: set of K most frequent glosses
+    - counts: dict gloss -> count
     """
     from collections import Counter
     counts = Counter()
@@ -65,17 +57,15 @@ def build_topk_vocabulary(npz_files, K=50, debug=True):
         except Exception:
             skipped += 1
     if debug and skipped:
-        print(f"  [INFO] TopK builder skipped {skipped} unreadable files.")
+        print(f" [INFO] TopK builder skipped {skipped} unreadable files.")
     most_common = counts.most_common(K)
     top_k_words = {w for (w, _) in most_common}
     return top_k_words, dict(counts)
 
 
-
 # ===========================
 # Dataset splitting utilities
 # ===========================
-
 def split_dataset_stratified(dataset,
                              train_ratio=0.7,
                              val_ratio=0.15,
@@ -84,10 +74,9 @@ def split_dataset_stratified(dataset,
                              min_samples_per_class=3,
                              debug=True):
     """
-    Robust stratified split that prevents 'least populated class has 1 member' errors.
-    Works with datasets having .files or .npz_files and a word_to_idx mapping.
+    Robust stratified split with safeguards on rare classes.
+    Works with datasets having .files and a word_to_idx mapping.
     """
-    # Detect file list
     if hasattr(dataset, 'npz_files'):
         file_list = dataset.npz_files
     elif hasattr(dataset, 'files'):
@@ -96,8 +85,8 @@ def split_dataset_stratified(dataset,
         raise AttributeError("Dataset must have either 'npz_files' or 'files'.")
 
     print("\n[DATASET SPLITTING]")
-    print(f"  Total samples: {len(file_list)}")
-    print(f"  Split ratios: Train={train_ratio:.2f}, Val={val_ratio:.2f}, Test={test_ratio:.2f}")
+    print(f" Total samples: {len(file_list)}")
+    print(f" Split ratios: Train={train_ratio:.2f}, Val={val_ratio:.2f}, Test={test_ratio:.2f}")
 
     # Build labels
     labels = []
@@ -111,35 +100,28 @@ def split_dataset_stratified(dataset,
             indices.append(idx)
         except Exception as e:
             skipped.append((idx, str(fpath), str(e)))
-
     if skipped and debug:
-        print(f"  [INFO] Skipped {len(skipped)} files with read/gloss errors.")
+        print(f" [INFO] Skipped {len(skipped)} files with read/gloss errors.")
 
     labels = np.array(labels)
     indices = np.array(indices)
 
-    # Compute strict per-class minimums to make two-level stratification possible
-    # Require at least 1 sample for each of train, val, test per class if possible.
-    # For two stratified splits (train vs temp, then val vs test):
-    # We need at least 2 in temp and 1 in train per class as a hard minimum; thus >= 3 is often OK,
-    # but ratios can make rounding cause a class to drop to 1 in temp -> enforce >= 4 as safer default.
-    # Use the user-provided min_samples_per_class, but raise to 4 if needed.
+    # Enforce min samples per class (>=4 safer for 2-level stratification)
     min_required = max(min_samples_per_class, 4)
-
     counts = Counter(labels)
     rare_classes = [c for c, n in counts.items() if n < min_required]
     if rare_classes:
         if debug:
-            print(f"  [INFO] Filtering {len(rare_classes)} classes with < {min_required} samples")
+            print(f" [INFO] Filtering {len(rare_classes)} classes with < {min_required} samples")
             for c in rare_classes[:10]:
                 cname = dataset.idx_to_word.get(c, str(c))
-                print(f"    - {cname} (count={counts[c]})")
+                print(f"  - {cname} (count={counts[c]})")
         mask = ~np.isin(labels, rare_classes)
         labels = labels[mask]
         indices = indices[mask]
-        print(f"  Remaining samples: {len(indices)} | Remaining classes: {len(set(labels))}")
+        print(f" Remaining samples: {len(indices)} \n Remaining classes: {len(set(labels))}")
 
-    # After filtering, do first stratified split
+    # First split
     try:
         tr_idx, tmp_idx, tr_y, tmp_y = train_test_split(
             indices, labels,
@@ -148,8 +130,7 @@ def split_dataset_stratified(dataset,
             stratify=labels
         )
     except ValueError as e:
-        # If this still fails, fall back to non-stratified at this level, but keep class grouping later
-        print(f"  [WARN] First stratified split failed: {e}")
+        print(f" [WARN] First stratified split failed: {e}")
         tr_idx, tmp_idx, tr_y, tmp_y = train_test_split(
             indices, labels,
             test_size=(val_ratio + test_ratio),
@@ -157,51 +138,38 @@ def split_dataset_stratified(dataset,
             stratify=None
         )
 
-    # For the second split, ensure every class in tmp_y has at least 2 members if stratifying
+    # Ensure tmp has >=2 per class for second stratify
     tmp_counts = Counter(tmp_y)
     too_small_tmp = [c for c, n in tmp_counts.items() if n < 2]
     if too_small_tmp:
-        # Move some samples of those classes from train to tmp to make tmp class count >=2
-        # Or decide to non-stratify only for these classes
         if debug:
-            print(f"  [INFO] Adjusting classes with <2 samples in temp for second stratified split: {len(too_small_tmp)} classes")
-
-        # Build per-class indices
+            print(f" [INFO] Adjusting classes with <2 samples in temp for second split: {len(too_small_tmp)} classes")
         tr_by_c = defaultdict(list)
         tmp_by_c = defaultdict(list)
         for i, c in zip(tr_idx, tr_y):
             tr_by_c[c].append(i)
         for i, c in zip(tmp_idx, tmp_y):
             tmp_by_c[c].append(i)
-
-        # Try to move from train to temp when possible
         moved = 0
         for c in too_small_tmp:
             need = 2 - len(tmp_by_c[c])
             give = min(need, len(tr_by_c[c]))
             if give > 0:
-                # Move 'give' samples from train to temp
                 move_indices = tr_by_c[c][:give]
                 tr_by_c[c] = tr_by_c[c][give:]
                 tmp_by_c[c].extend(move_indices)
                 moved += give
         if debug and moved > 0:
-            print(f"  [INFO] Moved {moved} samples from train to temp to stabilize stratification.")
-
-        # Reconstruct arrays
+            print(f" [INFO] Moved {moved} samples from train to temp to stabilize stratification.")
         tr_idx = np.array([i for ilist in tr_by_c.values() for i in ilist])
         tmp_idx = np.array([i for ilist in tmp_by_c.values() for i in ilist])
-
-        # Rebuild tr_y, tmp_y
         tr_y = np.array([labels[np.where(indices==i)[0][0]] for i in tr_idx])
         tmp_y = np.array([labels[np.where(indices==i)[0][0]] for i in tmp_idx])
 
-        # Recompute tmp_counts
-        tmp_counts = Counter(tmp_y)
-
-    # If still any class in tmp has <2 members, do non-stratified val/test split but preserve global balance
+    tmp_counts = Counter(tmp_y)
     stratify_tmp = None if any(n < 2 for n in tmp_counts.values()) else tmp_y
 
+    # Second split (val vs test)
     try:
         val_size = test_ratio / (val_ratio + test_ratio)
         va_idx, te_idx, va_y, te_y = train_test_split(
@@ -211,7 +179,8 @@ def split_dataset_stratified(dataset,
             stratify=stratify_tmp
         )
     except ValueError as e:
-        print(f"  [WARN] Second stratified split failed: {e}")
+        print(f" [WARN] Second stratified split failed: {e}")
+        val_size = test_ratio / (val_ratio + test_ratio)
         va_idx, te_idx, va_y, te_y = train_test_split(
             tmp_idx, tmp_y,
             test_size=val_size,
@@ -221,14 +190,13 @@ def split_dataset_stratified(dataset,
 
     total = len(tr_idx) + len(va_idx) + len(te_idx)
     print("\n[SPLIT RESULTS]")
-    print(f"  Train: {len(tr_idx)} ({100*len(tr_idx)/total:.1f}%)")
-    print(f"  Val:   {len(va_idx)} ({100*len(va_idx)/total:.1f}%)")
-    print(f"  Test:  {len(te_idx)} ({100*len(te_idx)/total:.1f}%)")
-
+    print(f" Train: {len(tr_idx)} ({100*len(tr_idx)/total:.1f}%)")
+    print(f" Val:   {len(va_idx)} ({100*len(va_idx)/total:.1f}%)")
+    print(f" Test:  {len(te_idx)} ({100*len(te_idx)/total:.1f}%)")
     print("\n[CLASS DISTRIBUTION CHECK]")
-    print(f"  Classes in train: {len(set(tr_y))}")
-    print(f"  Classes in val:   {len(set(va_y))}")
-    print(f"  Classes in test:  {len(set(te_y))}")
+    print(f" Classes in train: {len(set([labels[np.where(indices==i)[0][0]] for i in tr_idx]))}")
+    print(f" Classes in val:   {len(set([labels[np.where(indices==i)[0][0]] for i in va_idx]))}")
+    print(f" Classes in test:  {len(set([labels[np.where(indices==i)[0][0]] for i in te_idx]))}")
 
     return tr_idx.tolist(), va_idx.tolist(), te_idx.tolist()
 
@@ -246,17 +214,16 @@ class SubsetDataset(Dataset):
 # ===========================
 # 27-node skeleton extractor
 # ===========================
-
-
 class Skeleton27FeatureExtractor:
-    def __init__(self):
+    def __init__(self, conf_valid_thresh: float = 0.5):
         self.num_nodes = 27
+        self.conf_valid_thresh = conf_valid_thresh
         # edges per paper (undirected)
         self.edges = [
-            (0,1),(0,2),           # nose-eyes
-            (1,3),(2,4),           # eyes-shoulders
-            (3,5),(4,6),           # shoulders-elbows
-            (5,7),(6,8),           # elbows-wrists
+            (0,1),(0,2),  # nose-eyes
+            (1,3),(2,4),  # eyes-shoulders
+            (3,5),(4,6),  # shoulders-elbows
+            (5,7),(6,8),  # elbows-wrists
             # left hand: base->tip per finger
             (7,9),(9,10),(7,11),(11,12),(7,13),(13,14),(7,15),(15,16),(7,17),(17,18),
             # right hand: base->tip per finger
@@ -265,8 +232,8 @@ class Skeleton27FeatureExtractor:
 
     def map_combined_to_27(self, combined_frame):
         """
-        Map combined = [hand_lms(126), face_lms(1434), pose_lms(99)]
-        to 27 nodes. Handles asymmetric hands (one present, one missing).
+        Map combined = [hand_lms(126), face_lms(1434), pose_lms(99)] to 27 nodes.
+        Output: (27, 3) with (x,y,confidence). Confidence in [0,1].
         """
         nodes = np.zeros((self.num_nodes, 3), dtype=np.float32)
 
@@ -275,12 +242,12 @@ class Skeleton27FeatureExtractor:
         FACE   = combined_frame[126:126+1434].reshape(478, 3)
         POSE   = combined_frame[126+1434:126+1434+99].reshape(33, 3)
 
-        # Face keypoints (always present, or fallback to near-zero)
-        nodes[0] = FACE[1]      # nose
-        nodes[1] = FACE[33]     # left eye
-        nodes[2] = FACE[263]    # right eye
+        # Face keypoints
+        nodes[0] = FACE[1]   # nose
+        nodes[1] = FACE[33]  # left eye
+        nodes[2] = FACE[263] # right eye
 
-        # Pose keypoints (usually present)
+        # Pose keypoints
         nodes[3] = POSE[12]  # left shoulder
         nodes[4] = POSE[11]  # right shoulder
         nodes[5] = POSE[14]  # left elbow
@@ -288,66 +255,113 @@ class Skeleton27FeatureExtractor:
         nodes[7] = POSE[16]  # left wrist
         nodes[8] = POSE[15]  # right wrist
 
-        # LEFT HAND: Check each coordinate independently, not sum
-        # If ANY coordinate is non-zero, the hand has data
-        if np.any(HAND_L != 0):  # Changed from .sum() > 0
+        # LEFT HAND: treat "any nonzero" as data present
+        if np.any(HAND_L != 0):
             nodes[9]  = HAND_L[1];  nodes[10] = HAND_L[4]   # thumb
             nodes[11] = HAND_L[5];  nodes[12] = HAND_L[8]   # index
             nodes[13] = HAND_L[9];  nodes[14] = HAND_L[12]  # middle
             nodes[15] = HAND_L[13]; nodes[16] = HAND_L[16]  # ring
             nodes[17] = HAND_L[17]; nodes[18] = HAND_L[20]  # pinky
         else:
-            # No left hand: zero nodes but keep confidence low
             nodes[9:19] = 0
+            # very low confidence to mark invalid for mask thresholding
             nodes[9:19, 2] = 0.1
 
-        # RIGHT HAND: Same independent check
-        if np.any(HAND_R != 0):  # Changed from .sum() > 0
-            nodes[19] = HAND_R[1];  nodes[20] = HAND_R[4]   # thumb
-            nodes[21] = HAND_R[5];  nodes[22] = HAND_R[8]   # index
-            nodes[23] = HAND_R[9];  nodes[24] = HAND_R[12]  # middle
-            nodes[25] = HAND_R[13]; nodes[26] = HAND_R[16]  # ring
+        # RIGHT HAND
+        if np.any(HAND_R != 0):
+            nodes[19] = HAND_R[1];  nodes[20] = HAND_R[4]
+            nodes[21] = HAND_R[5];  nodes[22] = HAND_R[8]
+            nodes[23] = HAND_R[9];  nodes[24] = HAND_R[12]
+            nodes[25] = HAND_R[13]; nodes[26] = HAND_R[16]
         else:
-            # No right hand
             nodes[19:27] = 0
             nodes[19:27, 2] = 0.1
 
-        # Normalize ranges: Pose and Face are ~[-2, 2] due to MediaPipe coords
-        # Clamp to prevent extreme gradients
+        # Clamp and sanitize ranges
         nodes[:, 0:2] = np.clip(nodes[:, 0:2], -3, 3)
-        nodes[:, 2] = np.clip(nodes[:, 2], 0, 1)
+        nodes[:, 2]   = np.clip(nodes[:, 2], 0, 1)
 
-        # If all nodes are zero (very rare), set uniform confidence
+        # fallback if everything zero coords
         if np.all(nodes[:, :2] == 0):
-            nodes[:, 2] = 0.5
+            nodes[:, 2] = 0.0  # keep invalid; mask will ignore
 
         return nodes
 
-
+    # ==== PATCH: mask-aware streams; fixed edge_distance magnitudes ====
     def compute_streams(self, nodes_seq):
-        T,V = nodes_seq.shape[0], nodes_seq.shape[1]
-        K = nodes_seq.copy()
-        D = np.zeros_like(K)
-        for (i,j) in self.edges:
-            D[:, j, :2] = K[:, j, :2] - K[:, i, :2]
-            D[:, j, 2]  = K[:, j, 2] - K[:, i, 2]
-        B = D.copy()
+        """
+        nodes_seq: (T,V,3) with (x, y, conf) in [0,1]
+        Returns dict of streams each (T,V,3)
+        - keypoint_coords: (x,y,conf)
+        - edge_distance:   (0,0,dist)   where dist is max magnitude to incident neighbor
+        - bone_vectors:    (dx,dy,conf_agg) average vectors over incident edges
+        - *_velocity, *_accel: mask-aware temporal deltas
+        """
+        T, V = nodes_seq.shape[0], nodes_seq.shape[1]
+        K = nodes_seq.copy().astype(np.float32)  # (T,V,3)
+        conf = K[..., 2]                         # (T,V)
+        # FIXED: Valid if x or y non-zero (don't use z as confidence)
+        valid = ((np.abs(K[..., 0]) + np.abs(K[..., 1])) > 1e-6).astype(np.float32)
+
+        # Edge-based features
+        # Accumulate per node j over incident edges
+        B = np.zeros_like(K)   # (dx, dy, conf_agg)
+        D = np.zeros_like(K)   # (0, 0, dist_agg)
+        b_count = np.zeros((T, V, 1), dtype=np.float32)
+        d_count = np.zeros((T, V, 1), dtype=np.float32)
+
+        for (i, j) in self.edges:
+            diff = K[:, j, :2] - K[:, i, :2]             # (T,2)
+            dist = np.linalg.norm(diff, axis=-1, keepdims=True)  # (T,1)
+            conf_ij = 0.5 * (K[:, j, 2:3] + K[:, i, 2:3])        # (T,1)
+
+            # bone vectors: average vector, aggregate confidence
+            B[:, j, :2] += diff
+            B[:, j,  2:3] += conf_ij
+            b_count[:, j, :] += 1.0
+
+            # edge distance: aggregate by max of magnitude (store in z)
+            # We'll keep the maximum distance among incident edges
+            D[:, j, 2:3] = np.maximum(D[:, j, 2:3], dist)
+            d_count[:, j, :] = np.maximum(d_count[:, j, :], 1.0)
+
+        # Avoid divide-by-zero; average bone vectors and conf
+        mask_b = (b_count > 0).astype(np.float32)
+        B[:, :, :2] = np.where(mask_b.astype(bool), B[:, :, :2] / np.maximum(b_count, 1e-6), 0.0)
+        B[:, :,  2] = np.where(mask_b[...,0].astype(bool), B[:, :, 2] / np.maximum(b_count[...,0], 1e-6), 0.0)
+
+        # D: put zeros in x,y; z already holds max distance
+        D[:, :, 0:2] = 0.0
+        # Optional normalization for D.z (keep raw for now)
+
+        # Temporal deltas with validity
         KV = np.zeros_like(K); BV = np.zeros_like(B)
         KA = np.zeros_like(K); BA = np.zeros_like(B)
+
+        # Validity for derived streams (use node validity)
+        valid_b = (B[..., 2] > 0).astype(np.float32)  # derived from aggregated confidence
         for t in range(1, T):
-            KV[t] = K[t] - K[t-1]
-            BV[t] = B[t] - B[t-1]
+            pair_mask_k = (valid[t] * valid[t-1])[..., None]  # (T,V,1)
+            KV[t] = (K[t] - K[t-1]) * pair_mask_k
+
+            pair_mask_b = (valid_b[t] * valid_b[t-1])[..., None]
+            BV[t] = (B[t] - B[t-1]) * pair_mask_b
+
         for t in range(2, T):
-            KA[t] = KV[t] - KV[t-1]
-            BA[t] = BV[t] - BV[t-1]
+            tri_mask_k = (valid[t] * valid[t-1] * valid[t-2])[..., None]
+            KA[t] = (KV[t] - KV[t-1]) * tri_mask_k
+
+            tri_mask_b = (valid_b[t] * valid_b[t-1] * valid_b[t-2])[..., None]
+            BA[t] = (BV[t] - BV[t-1]) * tri_mask_b
+
         return {
             'keypoint_coords': K,
-            'edge_distance': D,
-            'bone_vectors': B,
+            'edge_distance':   D,
+            'bone_vectors':    B,
             'keypoint_velocity': KV,
-            'bone_velocity': BV,
-            'keypoint_accel': KA,
-            'bone_accel': BA,
+            'bone_velocity':     BV,
+            'keypoint_accel':    KA,
+            'bone_accel':        BA,
         }
 
     def extract(self, combined_sequence):
@@ -359,7 +373,6 @@ class Skeleton27FeatureExtractor:
 # ===========================
 # Dataset for true skeleton
 # ===========================
-
 class TrueSkeletonDataset(Dataset):
     def __init__(self, npz_dir, feature_extractor: Skeleton27FeatureExtractor, word_to_idx=None, debug=True):
         self.dir = Path(npz_dir)
@@ -388,10 +401,11 @@ class TrueSkeletonDataset(Dataset):
         f = self.files[idx]
         d = np.load(f, allow_pickle=True)
         X = d['landmarks'].astype(np.float32)  # (T, D)
-        streams = self.fe.extract(X)           # dict of (T,27,3)
+        streams = self.fe.extract(X)  # dict of (T,27,3)
         g = d['glosses'][0] if len(d['glosses'])>0 else 'UNKNOWN'
         y = self.word_to_idx.get(g, 0)
         return streams, torch.tensor(y, dtype=torch.long), f.stem
+
 
 class TopKTrueSkeletonDataset(Dataset):
     """
@@ -403,7 +417,6 @@ class TopKTrueSkeletonDataset(Dataset):
         self.debug = debug
         self.fe = feature_extractor if feature_extractor is not None else self.base.fe
 
-        # Filter file list to top-K
         kept = []
         for f in self.base.files:
             try:
@@ -416,15 +429,13 @@ class TopKTrueSkeletonDataset(Dataset):
                     print('[WARN] filtering top-K:', f, e)
         self.files = kept
 
-        # Build compact vocab for top-K only
         words = []
         for f in self.files:
             d = np.load(f, allow_pickle=True)
             words.append(d['glosses'][0])
         uniq = sorted(set(words))
         if debug:
-            print(f"  [TOP-K] Kept {len(self.files)} files across {len(uniq)} words")
-
+            print(f" [TOP-K] Kept {len(self.files)} files across {len(uniq)} words")
         self.word_to_idx = {w:i for i,w in enumerate(uniq)}
         self.idx_to_word = {i:w for w,i in self.word_to_idx.items()}
 
@@ -441,17 +452,54 @@ class TopKTrueSkeletonDataset(Dataset):
         return streams, torch.tensor(y, dtype=torch.long), f.stem
 
 
+# ==== PATCH: collator with lengths + node mask (confidence > 0.5) ====
 class TrueSkeletonCollator:
+    def __init__(self, conf_valid_thresh: float = 0.5):
+        self.conf_valid_thresh = conf_valid_thresh
+
     def __call__(self, batch):
+        # batch: list of (streams_dict, y, id)
         max_T = max(next(iter(b[0].values())).shape[0] for b in batch)
         stream_names = list(batch[0][0].keys())
+
         fwd = {s: [] for s in stream_names}
         bwd = {s: [] for s in stream_names}
-        labels = []
-        ids = []
+        lengths = []
+        node_masks = []  # (B, T, V)
+
+        labels, ids = [], []
+
         for streams, y, sid in batch:
+            T = next(iter(streams.values())).shape[0]
+            lengths.append(T)
             labels.append(y)
             ids.append(sid)
+
+            # Node validity mask from keypoint_coords confidence
+            kc = streams['keypoint_coords']  # (T,V,3)
+            # valid if x or y is non-zero (robust when z is depth, not confidence)
+            mask = ((np.abs(kc[..., 0]) + np.abs(kc[..., 1])) > 1e-6).astype(np.float32)
+
+            #DEBUG
+            print(f"kc shape: {kc.shape}")  # Should be (T, 27, 3)
+            coords_valid = (np.abs(kc[..., 0]) + np.abs(kc[..., 1]) > 1e-6).sum()
+            print(f"Non-zero coordinates: {coords_valid} out of {kc.shape[0] * kc.shape[1]}")
+
+            # Per node type:
+            face_valid = (np.abs(kc[:, 0:3, 0]) + np.abs(kc[:, 0:3, 1]) > 1e-6).sum()
+            pose_valid = (np.abs(kc[:, 3:9, 0]) + np.abs(kc[:, 3:9, 1]) > 1e-6).sum()
+            lhand_valid = (np.abs(kc[:, 9:19, 0]) + np.abs(kc[:, 9:19, 1]) > 1e-6).sum()
+            rhand_valid = (np.abs(kc[:, 19:27, 0]) + np.abs(kc[:, 19:27, 1]) > 1e-6).sum()
+
+            print(f"Face: {face_valid}/{kc.shape[0]*3} | Pose: {pose_valid}/{kc.shape[0]*6} | LHand: {lhand_valid}/{kc.shape[0]*10} | RHand: {rhand_valid}/{kc.shape[0]*8}")
+
+
+
+            if kc.shape[0] < max_T:
+                pad = max_T - kc.shape[0]
+                mask = np.pad(mask, ((0,pad),(0,0)), mode='constant')
+            node_masks.append(mask)
+
             for s in stream_names:
                 arr = streams[s]
                 if arr.shape[0] < max_T:
@@ -459,17 +507,27 @@ class TrueSkeletonCollator:
                     arr = np.pad(arr, ((0,pad),(0,0),(0,0)), mode='constant')
                 fwd[s].append(arr)
                 bwd[s].append(arr[::-1].copy())
+
         for s in stream_names:
-            fwd[s] = torch.tensor(np.stack(fwd[s], axis=0), dtype=torch.float32)
-            bwd[s] = torch.tensor(np.stack(bwd[s], axis=0), dtype=torch.float32)
-        return {'features_forward': fwd, 'features_backward': bwd,
-                'labels': torch.stack(labels), 'ids': ids}
+            fwd[s] = torch.tensor(np.stack(fwd[s], axis=0), dtype=torch.float32)  # (B,T,V,F)
+            bwd[s] = torch.tensor(np.stack(bwd[s], axis=0), dtype=torch.float32)  # (B,T,V,F)
+
+        lengths = torch.tensor(lengths, dtype=torch.long)  # (B,)
+        node_masks = torch.tensor(np.stack(node_masks, axis=0), dtype=torch.float32)  # (B,T,V)
+
+        return {
+            'features_forward': fwd,
+            'features_backward': bwd,
+            'lengths': lengths,
+            'node_mask': node_masks,
+            'labels': torch.stack(labels),
+            'ids': ids
+        }
 
 
 # ===========================
 # GCN backbone
 # ===========================
-
 class GraphConvolution(nn.Module):
     def __init__(self, in_features, out_features):
         super().__init__()
@@ -482,6 +540,7 @@ class GraphConvolution(nn.Module):
         out = A.unsqueeze(0) @ support
         return out + self.b
 
+
 class GCNLayer(nn.Module):
     def __init__(self, in_f, out_f, p=0.2):
         super().__init__()
@@ -492,37 +551,47 @@ class GCNLayer(nn.Module):
         x = F.relu(x)
         return self.do(x)
 
+
+# ==== PATCH: stream processor with weighted node pooling and packed LSTM ====
 class SkeletonGCNStreamOptimized(nn.Module):
-    """Vectorized temporal processing: reshape to (B*T, V, F), process once, reshape back."""
+    """Vectorized temporal processing with node-masked pooling and packed LSTM."""
     def __init__(self, in_feat=3, hidden=64, layers=3, p=0.2):
         super().__init__()
-        self.layers = nn.ModuleList([GCNLayer(in_feat, hidden, p)] +
-                                    [GCNLayer(hidden, hidden, p) for _ in range(layers-1)])
-        self.temporal = nn.LSTM(input_size=hidden, hidden_size=hidden, num_layers=2,
-                                batch_first=True, dropout=p, bidirectional=False)
+        self.layers = nn.ModuleList(
+            [GCNLayer(in_feat, hidden, p)] +
+            [GCNLayer(hidden, hidden, p) for _ in range(layers-1)]
+        )
+        self.temporal = nn.LSTM(
+            input_size=hidden, hidden_size=hidden, num_layers=2,
+            batch_first=True, dropout=p, bidirectional=False
+        )
 
-    def forward(self, seq, A):
-        # seq: (B, T, V, Fin)
+    def forward(self, seq, A, node_mask, lengths):
+        """
+        seq: (B, T, V, Fin)
+        node_mask: (B, T, V) in {0,1}
+        lengths: (B,)
+        """
         B, T, V, F = seq.shape
-
-        # Vectorize: reshape to (B*T, V, Fin)
+        # GCN over nodes (vectorized over B*T)
         seq_flat = seq.reshape(B*T, V, F)
-
-        # Process all timesteps at once through GCN layers
         x = seq_flat
         for layer in self.layers:
             x = layer(x, A)  # (B*T, V, H)
+        H = x.shape[-1]
+        x = x.reshape(B, T, V, H)
 
-        # Global average pooling over nodes -> (B*T, H)
-        x = x.mean(dim=1)
+        # Weighted pooling over nodes using mask
+        eps = 1e-6
+        w = node_mask.unsqueeze(-1)  # (B,T,V,1)
+        x = (x * w).sum(dim=2) / (w.sum(dim=2) + eps)  # -> (B,T,H)
 
-        # Reshape back to (B, T, H)
-        x = x.reshape(B, T, -1)
-
-        # Temporal LSTM
-        _, (h, _) = self.temporal(x)
-
-        return h[-1]  # (B, H)
+        # Pack sequences to ignore padded timesteps
+        packed = torch.nn.utils.rnn.pack_padded_sequence(
+            x, lengths.cpu(), batch_first=True, enforce_sorted=False
+        )
+        _, (h, _) = self.temporal(packed)
+        return h[-1]  # (B,H)
 
 
 class BidirectionalSkeletonGCN(nn.Module):
@@ -542,6 +611,7 @@ class BidirectionalSkeletonGCN(nn.Module):
             nn.Linear(hidden//2, num_classes)
         )
         self.register_buffer('A', self._build_adj())
+
     def _build_adj(self):
         V = 27
         A = torch.zeros(V,V)
@@ -557,28 +627,42 @@ class BidirectionalSkeletonGCN(nn.Module):
         dinv = torch.pow(d, -0.5)
         dinv[torch.isinf(dinv)] = 0
         return dinv.unsqueeze(1)*A*dinv.unsqueeze(0)
-    def forward(self, fwd, bwd):
-        outs_f = []
+
+    # ==== PATCH: forward takes node_mask and lengths; flips mask for backward ====
+    def forward(self, fwd, bwd, node_mask, lengths):
+        # Forward direction
+        outs_f = []  # must be a list of tensors
         for s in self.streams:
-            outs_f.append(self.forward_streams[s](fwd[s], self.A))
-        Fstk = torch.stack(outs_f, dim=1)   # (B,S,H)
+            out_s = self.forward_streams[s](fwd[s], self.A, node_mask, lengths)
+            outs_f.append(out_s)
+
+
+        Fstk = torch.stack(outs_f, dim=1)  # (B, S, H)
         wf = F.softmax(self.w_fwd, dim=0)
-        Ffused = (Fstk * wf.view(1,-1,1)).sum(dim=1)  # (B,H)
+        Ffused = (Fstk * wf.view(1, -1, 1)).sum(dim=1)  # (B, H)
+
+        # Backward direction: flip mask along time to match reversed sequences
+        node_mask_b = node_mask.flip(dims=[1])
         outs_b = []
         for s in self.streams:
-            outs_b.append(self.backward_streams[s](bwd[s], self.A))
-        Bstk = torch.stack(outs_b, dim=1)
+            out_s = self.backward_streams[s](bwd[s], self.A, node_mask_b, lengths)
+            outs_b.append(out_s)
+
+
+        Bstk = torch.stack(outs_b, dim=1)  # (B, S, H)
         wb = F.softmax(self.w_bwd, dim=0)
-        Bfused = (Bstk * wb.view(1,-1,1)).sum(dim=1)
+        Bfused = (Bstk * wb.view(1, -1, 1)).sum(dim=1)  # (B, H)
+
+        # Directional fusion
         wd = F.softmax(self.w_dir, dim=0)
-        fused = wd[0]*Ffused + wd[1]*Bfused
-        return self.classifier(fused)
+        fused = wd[0] * Ffused + wd[1] * Bfused  # (B, H)
+        return self.classifier(fused)            # (B, num_classes)
+
 
 
 # ===========================
 # Trainer
 # ===========================
-
 class Trainer:
     def __init__(self, model, device='cuda', lr=1e-3, wd=5e-4, epochs=100):
         self.model = model.to(device)
@@ -589,19 +673,23 @@ class Trainer:
         self.sched = torch.optim.lr_scheduler.CosineAnnealingLR(self.optim, T_max=epochs, eta_min=1e-5)
         self.scaler = torch.cuda.amp.GradScaler(enabled=torch.cuda.is_available())
         self.hist = {'train_loss':[], 'val_loss':[], 'train_acc':[], 'val_acc':[]}
+
     def step(self, batch):
         fwd = {k: v.to(self.device) for k,v in batch['features_forward'].items()}
         bwd = {k: v.to(self.device) for k,v in batch['features_backward'].items()}
+        lengths = batch['lengths'].to(self.device)
+        node_mask = batch['node_mask'].to(self.device)
         y = batch['labels'].to(self.device)
         with torch.cuda.amp.autocast(enabled=torch.cuda.is_available()):
-            logits = self.model(fwd, bwd)
+            logits = self.model(fwd, bwd, node_mask, lengths)
             loss = self.crit(logits, y)
-        self.optim.zero_grad()
+        self.optim.zero_grad(set_to_none=True)
         self.scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
         self.scaler.step(self.optim)
         self.scaler.update()
         return loss.item(), (logits.argmax(1)==y).sum().item(), y.size(0)
+
     @torch.no_grad()
     def eval_loop(self, loader):
         self.model.eval()
@@ -609,13 +697,16 @@ class Trainer:
         for batch in loader:
             fwd = {k: v.to(self.device) for k,v in batch['features_forward'].items()}
             bwd = {k: v.to(self.device) for k,v in batch['features_backward'].items()}
+            lengths = batch['lengths'].to(self.device)
+            node_mask = batch['node_mask'].to(self.device)
             y = batch['labels'].to(self.device)
-            logits = self.model(fwd, bwd)
+            logits = self.model(fwd, bwd, node_mask, lengths)
             loss = self.crit(logits, y).item()
             tot_loss += loss
             correct += (logits.argmax(1)==y).sum().item()
             total += y.size(0)
         return tot_loss/len(loader), correct/total
+
     def train(self, train_loader, val_loader, mlflow_log=True):
         best_val = 0
         for ep in range(self.epochs):
@@ -626,23 +717,43 @@ class Trainer:
                 tot_loss += loss
                 correct += c
                 total += n
+
             tr_loss = tot_loss/len(train_loader)
             tr_acc = correct/total
             va_loss, va_acc = self.eval_loop(val_loader)
+
             if ep == 0:
+                # One-time sanity prints on first batch
                 for batch in train_loader:
                     fwd = batch['features_forward']
                     first_stream = next(iter(fwd.values()))  # (B, T, V, F)
                     print(f"Batch shape: {first_stream.shape}")
                     print(f"Stream min/max: {first_stream.min():.4f} to {first_stream.max():.4f}")
-                    print(f"Zeros: {(first_stream == 0).sum().item()} / {first_stream.numel()}")
-                    break  # Just first batch
+                    zeros = (first_stream == 0).sum().item()
+                    print(f"Zeros: {zeros} / {first_stream.numel()}")
+                    print(f"Lengths (first 8): {batch['lengths'][:8].tolist()}")
+                    node_mask = batch['node_mask']
+                    print(f"Node-mask coverage: {node_mask.mean().item():.4f}")
+                    kc = batch['features_forward']['keypoint_coords']
+                    mask = batch['node_mask']
+
+                    print(f'Keypoint coords min/max: [{kc.min():.3f}, {kc.max():.3f}]')
+                    print(f'Mask coverage: {mask.mean():.4f}')
+
+                    # Check coordinate distribution
+                    kc_xy = kc[0, 0, :, :2].numpy()  # First sample, first frame
+                    coord_valid = (np.abs(kc_xy).sum(axis=1) > 1e-6)
+                    print(f'Nodes with non-zero coords: {coord_valid.sum()} / 27')
+                    break
+
             self.hist['train_loss'].append(tr_loss)
             self.hist['val_loss'].append(va_loss)
             self.hist['train_acc'].append(tr_acc)
             self.hist['val_acc'].append(va_acc)
             print(f"Train: Loss={tr_loss:.4f} Acc={tr_acc:.2f} | Val: Loss={va_loss:.4f} Acc={va_acc:.2f}")
+
             self.sched.step()
+
             if mlflow_log:
                 mlflow.log_metrics({
                     'train_loss': tr_loss,
@@ -651,22 +762,21 @@ class Trainer:
                     'val_accuracy': va_acc,
                     'learning_rate': self.optim.param_groups[0]['lr']
                 }, step=ep)
+
             if va_acc > best_val:
                 best_val = va_acc
                 torch.save(self.model.state_dict(), 'best_true_skeleton_gcn.pt')
-                # mlflow.pytorch.log_model(self.model, 'true_skeleton_gcn_best')
+
         return best_val
 
 
 # ===========================
 # Main
 # ===========================
-
 def main():
     set_seed(42)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-
-    RUN_NAME = 'Top 10: True-Skeleton Bidirectional Multi-Stream GCN'
+    RUN_NAME = 'Top 10: True-Skeleton Bidirectional Multi-Stream GCN (Patched)'
 
     # Config
     EPOCHS=100; BATCH=64; HIDDEN=128; GCN_LAYERS=3; DROPOUT=0.2; LR=1e-3
@@ -702,37 +812,66 @@ def main():
             })
 
         # Build dataset
-        fe = Skeleton27FeatureExtractor()
+        fe = Skeleton27FeatureExtractor(conf_valid_thresh=0.5)
         full_base = TrueSkeletonDataset(DATA_DIR, fe, debug=True)
 
         # Choose top K words
-        TOP_K = 10
+        TOP_K = 2
         top_k_words, _ = build_topk_vocabulary(full_base.files, K=TOP_K, debug=True)
 
         # Create top-K dataset wrapper (new compact vocab)
         full = TopKTrueSkeletonDataset(full_base, top_k_words, feature_extractor=fe, debug=True)
 
-
+        # Split
         tr_idx, va_idx, te_idx = split_dataset_stratified(full, 0.7, 0.15, 0.15, random_state=42)
+
+        # Small per-class counts (train only)
+        train_words = []
+        for i in tr_idx:
+            d = np.load(full.files[i], allow_pickle=True)
+            train_words.append(d['glosses'][0])
+        train_counts = Counter(train_words)
+        print("\n[TRAIN CLASS COUNTS] (top 10)")
+        for w, c in train_counts.most_common(10):
+            print(f"  {w}: {c}")
+
         train_ds = SubsetDataset(full, tr_idx)
         val_ds   = SubsetDataset(full, va_idx)
         test_ds  = SubsetDataset(full, te_idx)
 
-        collate = TrueSkeletonCollator()
-        train_loader = DataLoader(train_ds, batch_size=BATCH, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate, prefetch_factor=PREFETCH_FACTOR, persistent_workers=True)
-        val_loader   = DataLoader(val_ds,   batch_size=BATCH, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate, prefetch_factor=PREFETCH_FACTOR, persistent_workers=True)
-        test_loader  = DataLoader(test_ds,  batch_size=BATCH, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate, prefetch_factor=PREFETCH_FACTOR, persistent_workers=True)
+        collate = TrueSkeletonCollator(conf_valid_thresh=fe.conf_valid_thresh)
+
+        train_loader = DataLoader(
+            train_ds, batch_size=BATCH, shuffle=True,
+            num_workers=4, pin_memory=True,
+            collate_fn=collate, prefetch_factor=PREFETCH_FACTOR,
+            persistent_workers=True
+        )
+        val_loader = DataLoader(
+            val_ds, batch_size=BATCH, shuffle=False,
+            num_workers=4, pin_memory=True,
+            collate_fn=collate, prefetch_factor=PREFETCH_FACTOR,
+            persistent_workers=True
+        )
+        test_loader = DataLoader(
+            test_ds, batch_size=BATCH, shuffle=False,
+            num_workers=4, pin_memory=True,
+            collate_fn=collate, prefetch_factor=PREFETCH_FACTOR,
+            persistent_workers=True
+        )
 
         # Model
         num_classes = len(full.word_to_idx)
-        model = BidirectionalSkeletonGCN(num_classes=num_classes, hidden=HIDDEN, gcn_layers=GCN_LAYERS, p=DROPOUT)
-
+        print(f"\n[INFO] num_classes = {num_classes}")
+        model = BidirectionalSkeletonGCN(
+            num_classes=num_classes, hidden=HIDDEN,
+            gcn_layers=GCN_LAYERS, p=DROPOUT, streams=['keypoint_coords', 'keypoint_velocity']
+        )
         mlflow.log_param('top_k', TOP_K)
         with open('topk_words.txt', 'w') as f:
             for w in sorted(full.word_to_idx.keys()):
                 f.write(f"{w}\n")
         mlflow.log_artifact('topk_words.txt')
-
 
         # Train
         trainer = Trainer(model, device=DEVICE, lr=LR, wd=5e-4, epochs=EPOCHS)

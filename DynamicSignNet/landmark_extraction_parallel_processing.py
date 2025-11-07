@@ -160,7 +160,7 @@ def process_one(args):
 
                 # Determine index based on handedness, not enumeration order
                 # This ensures LEFT hand is always at 0-62, RIGHT at 63-125
-                if hand_label == "LEFT":
+                if hand_label == "Left":
                     hand_idx = 0
                 else:  # "RIGHT"
                     hand_idx = 1
@@ -252,7 +252,7 @@ def preprocess_and_save_mp(root, save_dir, max_frames=None, n_workers=8):
 
 if __name__ == "__main__":
     # Your extracted dataset root (contains class folders)
-    root = "./phoenix_words_raw_png"  # e.g., "./output_dir" from extractor
+    root = "../../phoenix-2014/phoenix_words_raw_png"  # e.g., "./output_dir" from extractor
     save_dir = "./word_landmarks_extracted"
 
     preprocess_and_save_mp(

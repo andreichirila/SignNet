@@ -882,7 +882,7 @@ def main():
         print(f"\n[INFO] num_classes = {num_classes}")
         model = BidirectionalSkeletonGCN(
             num_classes=num_classes, hidden=HIDDEN,
-            gcn_layers=GCN_LAYERS, p=DROPOUT, streams=['keypoint_coords', 'edge_distance', 'bone_vectors', 'keypoint_velocity', 'bone_velocity', 'keypoint_accel']
+            gcn_layers=GCN_LAYERS, p=DROPOUT
 
         )
         mlflow.log_param('top_k', TOP_K)
@@ -902,10 +902,8 @@ def main():
         mlflow.log_metrics({'test_loss': test_loss, 'test_acc': test_acc})
         asyncio.run(send_message(
                 f"Training summary:\n"
-                f"Best Val Acc: {best_val_acc:.2%}\n"
-                f"Final Train Acc: {train_accs[-1]:.2%}\n"
-                f"Final Val Acc: {val_accs[-1]:.2%}\n"
-                f"Epochs: {epochs_trained}",
+                f"Best Val Acc: {best_val:.2%}\n"
+                f"Final Test Acc: {test_acc[-1]:.2%}\n",
                 CHAT_ID
             ))
 

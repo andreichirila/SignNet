@@ -795,7 +795,7 @@ def main():
     RUN_NAME = 'Top 150: All Streams True-Skeleton Bidirectional Multi-Stream GCN (Patched)'
 
     # Config
-    EPOCHS=200; BATCH=64; HIDDEN=256; GCN_LAYERS=4; DROPOUT=0.35; LR=1e-3
+    EPOCHS=200; BATCH=32; HIDDEN=256; GCN_LAYERS=4; DROPOUT=0.35; LR=1e-3
     PREFETCH_FACTOR = 4
     WEIGHT_DECAY = 1e-3
     DATA_DIR='./word_landmarks_extracted'

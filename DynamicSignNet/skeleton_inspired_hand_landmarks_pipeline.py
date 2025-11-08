@@ -761,10 +761,10 @@ class Trainer:
 def main():
     set_seed(42)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    RUN_NAME = 'Top 10: True-Skeleton Bidirectional Multi-Stream GCN (Patched)'
+    RUN_NAME = 'Top 50: True-Skeleton Bidirectional Multi-Stream GCN (Patched)'
 
     # Config
-    EPOCHS=100; BATCH=64; HIDDEN=128; GCN_LAYERS=3; DROPOUT=0.2; LR=1e-3
+    EPOCHS=200; BATCH=64; HIDDEN=128; GCN_LAYERS=3; DROPOUT=0.2; LR=1e-3
     PREFETCH_FACTOR = 4
     DATA_DIR='./word_landmarks_extracted'
 
@@ -801,7 +801,7 @@ def main():
         full_base = TrueSkeletonDataset(DATA_DIR, fe, debug=True)
 
         # Choose top K words
-        TOP_K = 2
+        TOP_K = 50
         top_k_words, _ = build_topk_vocabulary(full_base.files, K=TOP_K, debug=True)
 
         # Create top-K dataset wrapper (new compact vocab)

@@ -26,10 +26,28 @@ import mlflow
 import mlflow.pytorch
 import platform
 import psutil
+from telegram import Bot
+import asyncio
+import signal
 
 # ===========================
 # Utils: Reproducibility
 # ===========================
+TELEGRAM_BOT_TOKEN = '8327173184:AAGLA5pcLiAz-vMSVBq4tVJCHo7TPH3Zu8g'
+CHAT_ID = '8541359800'
+
+#Define bot
+bot = Bot(token=TELEGRAM_BOT_TOKEN)
+
+async def send_message(text, chat_id):
+    async with bot:
+        await bot.send_message(text=text, chat_id=chat_id)
+
+async def run_bot(messages, chat_id):
+    text = '\n'.join(messages)
+    await send_message(text, chat_id)
+
+
 def set_seed(seed: int = 42):
     import random
     random.seed(seed)
@@ -774,10 +792,10 @@ class Trainer:
 def main():
     set_seed(42)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    RUN_NAME = 'Top 150: True-Skeleton Bidirectional Multi-Stream GCN (Patched)'
+    RUN_NAME = 'Top 150: All Streams True-Skeleton Bidirectional Multi-Stream GCN (Patched)'
 
     # Config
-    EPOCHS=200; BATCH=64; HIDDEN=128; GCN_LAYERS=3; DROPOUT=0.4; LR=1e-3
+    EPOCHS=200; BATCH=64; HIDDEN=256; GCN_LAYERS=4; DROPOUT=0.35; LR=1e-3
     PREFETCH_FACTOR = 4
     WEIGHT_DECAY = 1e-3
     DATA_DIR='./word_landmarks_extracted'
@@ -864,7 +882,8 @@ def main():
         print(f"\n[INFO] num_classes = {num_classes}")
         model = BidirectionalSkeletonGCN(
             num_classes=num_classes, hidden=HIDDEN,
-            gcn_layers=GCN_LAYERS, p=DROPOUT, streams=['keypoint_coords', 'keypoint_velocity']
+            gcn_layers=GCN_LAYERS, p=DROPOUT, streams=['keypoint_coords', 'edge_distance', 'bone_vectors', 'keypoint_velocity', 'bone_velocity', 'keypoint_accel']
+
         )
         mlflow.log_param('top_k', TOP_K)
         with open('topk_words.txt', 'w') as f:
@@ -881,6 +900,14 @@ def main():
         test_loss, test_acc = trainer.eval_loop(test_loader)
         print(f"Test: Loss={test_loss:.4f} Acc={test_acc:.2f}")
         mlflow.log_metrics({'test_loss': test_loss, 'test_acc': test_acc})
+        asyncio.run(send_message(
+                f"Training summary:\n"
+                f"Best Val Acc: {best_val_acc:.2%}\n"
+                f"Final Train Acc: {train_accs[-1]:.2%}\n"
+                f"Final Val Acc: {val_accs[-1]:.2%}\n"
+                f"Epochs: {epochs_trained}",
+                CHAT_ID
+            ))
 
         # Save split
         with open('dataset_split_true_skeleton.json','w') as f:

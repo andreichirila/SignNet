@@ -694,6 +694,9 @@ class Trainer:
 
     def train(self, train_loader, val_loader, mlflow_log=True):
         best_val = 0
+        patience = 15  # Stop if val doesn't improve for 15 epochs
+        best_val_loss = float('inf')
+        patience_counter = 0
         for ep in range(self.epochs):
             self.model.train()
             tot_loss=0; correct=0; total=0
@@ -706,6 +709,16 @@ class Trainer:
             tr_loss = tot_loss/len(train_loader)
             tr_acc = correct/total
             va_loss, va_acc = self.eval_loop(val_loader)
+
+            if va_loss < best_val_loss:
+                best_val_loss = va_loss
+                patience_counter = 0
+                torch.save(self.model.state_dict(), 'best_model.pt')
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"Early stopping at epoch {ep+1}")
+                    break
 
             if ep == 0:
                 # One-time sanity prints on first batch
@@ -764,8 +777,9 @@ def main():
     RUN_NAME = 'Top 150: True-Skeleton Bidirectional Multi-Stream GCN (Patched)'
 
     # Config
-    EPOCHS=200; BATCH=64; HIDDEN=128; GCN_LAYERS=3; DROPOUT=0.2; LR=1e-3
+    EPOCHS=200; BATCH=64; HIDDEN=128; GCN_LAYERS=3; DROPOUT=0.4; LR=1e-3
     PREFETCH_FACTOR = 4
+    WEIGHT_DECAY = 1e-3
     DATA_DIR='./word_landmarks_extracted'
 
     print('='*80)
@@ -859,7 +873,7 @@ def main():
         mlflow.log_artifact('topk_words.txt')
 
         # Train
-        trainer = Trainer(model, device=DEVICE, lr=LR, wd=5e-4, epochs=EPOCHS)
+        trainer = Trainer(model, device=DEVICE, lr=LR, wd=WEIGHT_DECAY, epochs=EPOCHS)
         best_val = trainer.train(train_loader, val_loader)
         print(f"Best Val Acc: {best_val:.2f}")
 

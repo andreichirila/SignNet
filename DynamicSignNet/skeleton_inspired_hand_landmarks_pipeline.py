@@ -957,7 +957,7 @@ class StableTrainer:
         node_mask = batch['node_mask'].to(self.device)
         y = batch['labels'].to(self.device)
 
-        # Input checks unchanged
+        # Input checks
         for k, v in fwd.items():
             v_max = v.abs().max().item()
             if v_max > 10.0:
@@ -985,7 +985,7 @@ class StableTrainer:
         self.optim.zero_grad(set_to_none=True)
         self.scaler.scale(loss).backward()
 
-        # Gradient norm check (for logging only now)
+        # Gradient norm check (for logging only)
         total_norm = 0
         max_grad = 0
         for p in self.model.parameters():
@@ -995,32 +995,25 @@ class StableTrainer:
                 max_grad = max(max_grad, p.grad.data.abs().max().item())
         total_norm = total_norm ** 0.5
 
-        # FIXED: Higher threshold (50.0), log but DON'T skip; always clip
+        # Higher threshold (50.0), log but DON'T skip; always clip
         if total_norm > 50.0:
             print(f"⚠️  Large gradients: norm={total_norm:.2f}, max={max_grad:.2f}")
             print(f"   Clipping (LR={self.optim.param_groups[0]['lr']:.2e})")
 
-        # FIXED: Always clip (norm to 10.0, value to 1.0)
+        # Always clip (norm to 10.0, value to 1.0)
         self.scaler.unscale_(self.optim)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
-        torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)  # NEW: Per-element cap
+        torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)  # Per-element cap
 
-        # Post-clip check
-        if torch.isnan(self.model.parameters()).any() or torch.isinf(self.model.parameters()).any():
-            print("⚠️  NaN/Inf after clipping, skipping step")
-            self.optim.zero_grad(set_to_none=True)
-            return 0.0, 0, y.size(0)
-
+        # FIXED: Robust NaN/Inf check post-clipping (loop only, no direct generator call)
         has_invalid = False
         for p in self.model.parameters():
-            if p.grad is None:  # Skip non-grad params if needed, but check all
-                continue
             if torch.isnan(p).any() or torch.isinf(p).any():
                 has_invalid = True
-                break
+                break  # Early exit on first invalid
 
         if has_invalid:
-            print("⚠️  NaN/Inf after clipping, skipping step")
+            print("⚠️  NaN/Inf in parameters after clipping, skipping step")
             self.optim.zero_grad(set_to_none=True)
             return 0.0, 0, y.size(0)
 

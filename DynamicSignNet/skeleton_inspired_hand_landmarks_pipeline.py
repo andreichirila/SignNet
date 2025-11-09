@@ -605,44 +605,26 @@ class ChannelAttention(nn.Module):
 
 
 class STCAttentionSimple(nn.Module):
-    """
-    Simplified STC attention that won't explode.
-    Uses sigmoid instead of softmax for stability.
-    """
     def __init__(self, channels, reduction=4):
         super().__init__()
-        # Spatial attention
         self.spatial_conv = nn.Conv2d(channels, 1, kernel_size=1)
-
-        # Temporal attention
         self.temporal_conv = nn.Conv2d(channels, 1, kernel_size=1)
-
-        # Channel attention (squeeze-excitation style)
         self.channel_fc = nn.Sequential(
             nn.Linear(channels, channels // reduction),
             nn.ReLU(inplace=True),
             nn.Linear(channels // reduction, channels),
             nn.Sigmoid()
         )
-
     def forward(self, x):
         # x: (B, C, V, T)
         B, C, V, T = x.shape
-
-        # Spatial attention
         spatial_att = torch.sigmoid(self.spatial_conv(x))  # (B, 1, V, T)
         x = x * spatial_att
-
-        # Temporal attention
         temporal_att = torch.sigmoid(self.temporal_conv(x))  # (B, 1, V, T)
         x = x * temporal_att
-
-        # Channel attention
-        gap = F.adaptive_avg_pool2d(x, (1, 1)).view(B, C)  # (B, C)
-        channel_att = self.channel_fc(gap).view(B, C, 1, 1)  # (B, C, 1, 1)
+        gap = F.adaptive_avg_pool2d(x, (1, 1)).view(B, C)
+        channel_att = self.channel_fc(gap).view(B, C, 1, 1)
         x = x * channel_att
-
-        # Residual scaling (critical for stability)
         return x * 0.1
 
 
@@ -719,18 +701,16 @@ class StableGCNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
         super().__init__()
         self.graph_conv = nn.Linear(in_channels, out_channels, bias=False)
-        self.bn_graph = nn.LayerNorm(out_channels)
+        self.bn_graph = nn.LayerNorm(out_channels)  # normalize feature dim
         self.temporal_conv = nn.Conv2d(
             out_channels, out_channels, kernel_size=(temporal_kernel, 1),
-            padding=((temporal_kernel - 1) // 2, 0), bias=False
-        )
+            padding=((temporal_kernel - 1) // 2, 0), bias=False)
         self.bn_temporal = nn.BatchNorm2d(out_channels)
         self.attention = STCAttentionSimple(out_channels)
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
         self.residual = nn.Linear(in_channels, out_channels, bias=False) if in_channels != out_channels else nn.Identity()
         self._init_weights()
-
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
@@ -746,28 +726,29 @@ class StableGCNBlock(nn.Module):
             elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-
     def forward(self, x, A):
         B, T, V, C_in = x.shape
         x_flat = x.reshape(B * T * V, C_in)
         x_feat = self.graph_conv(x_flat).reshape(B * T, V, -1)   # (B*T, V, C_out)
-        # Safe normalization of A @ X (GCN propagation)
-        x_gcn = torch.matmul(A, x_feat)  # Shape: (B*T, V, C_out)
-        x_gcn = self.bn_graph(x_gcn)     # LayerNorm on last dim (features)
+        x_gcn = torch.matmul(A, x_feat)  # (B*T, V, C_out)
+        x_gcn = self.bn_graph(x_gcn)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
         x_gcn = x_gcn.reshape(B, T, V, -1)
-        # Temporal: (B, C_out, V, T)
         x_temp = x_gcn.permute(0, 3, 2, 1)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
         x_att = self.attention(x_temp)
-        # Residual: (B, C_out, V, T)
-        x_res = x.permute(0, 3, 2, 1) if isinstance(self.residual, nn.Identity) else self.residual(x.permute(0, 3, 2, 1))
-        # Output: (B, T, V, C_out)
-        out = 0.95 * x_res + 0.05 * x_att   # Heavily regularize toward residual
-        return out.permute(0, 3, 2, 1)
+        # Residual connection: correct flatten/reshape for arbitrary T, V
+        if isinstance(self.residual, nn.Identity):
+            x_res = x
+        else:
+            x_res = x.reshape(-1, C_in)
+            x_res = self.residual(x_res)
+            x_res = x_res.reshape(B, T, V, -1)
+        out = 0.95 * x_res + 0.05 * x_att.permute(0, 3, 2, 1)
+        return out
 
 class StableStreamProcessor(nn.Module):
     def __init__(self, in_feat=3, hidden=64, num_blocks=3, temporal_kernel=3, dropout=0.2):

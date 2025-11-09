@@ -719,82 +719,118 @@ class StableGCNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
         super().__init__()
 
-        self.graph_conv = nn.Linear(in_channels, out_channels)
-        self.bn_spatial = nn.BatchNorm1d(out_channels)  # Fixed: normalize over features
+        self.in_channels = in_channels
+        self.out_channels = out_channels
 
+        # Graph convolution layer
+        self.graph_conv = nn.Linear(in_channels, out_channels, bias=False)
+
+        # Spatial batch norm: normalize across feature channels for each node
+        self.bn_spatial = nn.BatchNorm1d(out_channels)  # Fixed: just features, not 27×out_channels
+
+        # Temporal convolution
         self.temporal_conv = nn.Conv2d(
             out_channels, out_channels,
             kernel_size=(temporal_kernel, 1),
-            padding=((temporal_kernel - 1) // 2, 0)
+            padding=((temporal_kernel - 1) // 2, 0),
+            bias=False  # No bias to reduce parameters
         )
         self.bn_temporal = nn.BatchNorm2d(out_channels)
 
+        # Attention mechanism
         self.attention = STCAttentionSimple(out_channels)
+
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
 
+        # Residual connection
+        self.residual_conv = None
         if in_channels != out_channels:
-            self.residual = nn.Linear(in_channels, out_channels)
-        else:
-            self.residual = nn.Identity()
+            self.residual_conv = nn.Linear(in_channels, out_channels)
 
-        # FIXED: Add the missing _init_weights method
-        self._init_weights()
+        # Conservative initialization
+        self._initialize_weights()
 
-    def _init_weights(self):
-        """Ultra-conservative initialization for stability."""
+    def _initialize_weights(self):
+        """Initialize weights to prevent explosion."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight, gain=0.1)
-                if m.bias is not None:
+                nn.init.xavier_uniform_(m.weight, gain=0.1)  # Small initialization
+                if getattr(m, 'bias', None) is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                with torch.no_grad():
-                    m.weight.data *= 0.05  # Scale down for stability
-                if m.bias is not None:
+                nn.init.xavier_uniform_(m.weight, gain=0.1)
+                if getattr(m, 'bias', None) is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x, A):
+        """
+        x: (B, T, V, C_in)
+        A: (V, V) adjacency matrix
+        Returns: (B, T, V, C_out)
+        """
         B, T, V, C_in = x.shape
 
-        # Graph convolution
+        # 1. Apply graph convolution: Linear transform first
+        # x: (B, T, V, C_in) → (B*T*V, C_in) → (B*T*V, C_out)
         x_flat = x.reshape(B * T * V, C_in)
-        x_features = self.graph_conv(x_flat)
-        x_features = x_features.reshape(B * T, V, -1)
+        x_features = self.graph_conv(x_flat)  # (B*T*V, C_out)
 
-        x_gcn = torch.bmm(A.unsqueeze(0).expand(B * T, -1, -1), x_features)
+        # 2. Reshape for adjacency multiplication: (B*T, V, C_out)
+        x_features = x_features.reshape(B * T, V, self.out_channels)  # (B*T, V, C_out)
 
-        # FIXED: Apply BatchNorm1d correctly
+        # 3. Apply adjacency matrix to each feature independently
+        # A @ x_features: (V,V) @ (V, C_out) = (V, C_out) for each time step
+        # For efficiency, do this in a loop over batch*time
+        x_gcn = torch.zeros_like(x_features)  # (B*T, V, C_out)
+        for bt in range(B * T):
+            x_gcn[bt] = torch.matmul(A, x_features[bt])  # (V, C_out)
+
+        # 4. Apply spatial batch normalization
+        # Reshape to (B*T, C_out, V) for BatchNorm1d over nodes dimension
         x_gcn = x_gcn.permute(0, 2, 1)  # (B*T, C_out, V)
-        x_gcn = self.bn_spatial(x_gcn)  # BatchNorm over feature channels
+        x_gcn = self.bn_spatial(x_gcn)  # Apply BatchNorm over feature channels
         x_gcn = x_gcn.permute(0, 2, 1)  # Back to (B*T, V, C_out)
 
-        x_gcn = x_gcn.reshape(B, T, V, -1)
+        # 5. Reshape back to original format
+        x_gcn = x_gcn.reshape(B, T, V, self.out_channels)  # (B, T, V, C_out)
+
+        # 6. Activation and dropout
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
 
-        # Temporal processing
+        # 7. Temporal processing: (B, C_out, V, T)
         x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
 
-        x_att = self.attention(x_temp)
+        # 8. Attention mechanism
+        x_att = self.attention(x_temp)  # (B, C_out, V, T)
 
-        # Residual
+        # 9. Residual connection
         x_res = x.permute(0, 3, 2, 1)  # (B, C_in, V, T)
-        if C_in != x_temp.shape[1]:
-            x_res_flat = x_res.permute(0, 2, 3, 1).reshape(-1, C_in)
-            x_res_flat = self.residual(x_res_flat)
-            x_res = x_res_flat.reshape(B, V, T, x_temp.shape[1]).permute(0, 3, 1, 2)
+        if self.residual_conv is not None:
+            # Apply residual transformation if needed
+            # (B, C_in, V, T) → (B, C_out, V, T)
+            x_res = x_res.permute(0, 2, 3, 1).reshape(-1, C_in)  # (B*V*T, C_in)
+            x_res = self.residual_conv(x_res)  # (B*V*T, C_out)
+            x_res = x_res.reshape(B, V, T, self.out_channels).permute(0, 3, 1, 2)  # (B, C_out, V, T)
+        else:
+            # If input and output channels match, just use as is
+            pass
 
-        # Combine
-        out = 0.8 * x_res + 0.2 * x_att
-        return out.permute(0, 3, 2, 1)  # (B, T, V, C_out)
+        # 10. Combine residual and attention with conservative scaling
+        out = 0.7 * x_res + 0.3 * x_att  # Balanced residual connection
+
+        # 11. Final reshape back to (B, T, V, C_out)
+        out = out.permute(0, 3, 2, 1)  # (B, T, V, C_out)
+
+        return out
+
 
 
 

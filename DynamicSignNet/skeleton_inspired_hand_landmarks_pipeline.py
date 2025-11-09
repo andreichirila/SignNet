@@ -718,140 +718,71 @@ class DropGraph(nn.Module):
 class StableGCNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
         super().__init__()
-
         self.graph_conv = nn.Linear(in_channels, out_channels, bias=False)
-
-        # Batch norm over features for each node and time step
         self.bn_graph = nn.LayerNorm(out_channels)
-
-        # Temporal convolution
         self.temporal_conv = nn.Conv2d(
-            out_channels, out_channels,
-            kernel_size=(temporal_kernel, 1),
-            padding=((temporal_kernel - 1) // 2, 0),
-            bias=False
+            out_channels, out_channels, kernel_size=(temporal_kernel, 1),
+            padding=((temporal_kernel - 1) // 2, 0), bias=False
         )
         self.bn_temporal = nn.BatchNorm2d(out_channels)
-
-        # Simple attention
         self.attention = STCAttentionSimple(out_channels)
-
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
-
-        # Residual
-        self.residual_conv = None
-        if in_channels != out_channels:
-            self.residual_conv = nn.Linear(in_channels, out_channels)
-
-        # Conservative initialization
+        self.residual = nn.Linear(in_channels, out_channels, bias=False) if in_channels != out_channels else nn.Identity()
         self._init_weights()
 
     def _init_weights(self):
-        """Ultra-conservative weights to prevent explosion."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight, gain=0.01)  # Very small
-                if getattr(m, 'bias', None) is not None:
+                nn.init.xavier_uniform_(m.weight, gain=0.01)
+                if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
-                nn.init.xavier_uniform_(m.weight, gain=0.01)  # Very small
-                if getattr(m, 'bias', None) is not None:
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+                with torch.no_grad():
+                    m.weight.data *= 0.01
+                if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x, A):
-        """
-        x: (B, T, V, C_in)
-        A: (V, V) adjacency matrix
-        Returns: (B, T, V, C_out)
-        """
         B, T, V, C_in = x.shape
-
-        # 1. Apply graph convolution: Linear transform
-        # x: (B, T, V, C_in) → (B*T*V, C_in) → (B*T*V, C_out)
         x_flat = x.reshape(B * T * V, C_in)
-        x_features = self.graph_conv(x_flat)  # (B*T*V, C_out)
-
-        # 2. Reshape to (B*T, V, C_out)
-        x_features = x_features.reshape(B * T, V, -1)  # (B*T, V, C_out)
-
-        # 3. Apply adjacency matrix to aggregate neighbors
-        # For each time step and each node: sum weighted by A
-        # A @ x_features: (V,V) @ (V, C_out) = (V, C_out) for each time step
-        x_gcn = torch.bmm(
-            A.unsqueeze(0).expand(B * T, -1, -1),
-            x_features
-        )  # (B*T, V, C_out)
-
-        # 4. Apply layer normalization over features
-        x_gcn = self.bn_graph(x_gcn)  # (B*T, V, C_out)
+        x_feat = self.graph_conv(x_flat).reshape(B * T, V, -1)   # (B*T, V, C_out)
+        # Safe normalization of A @ X (GCN propagation)
+        x_gcn = torch.matmul(A, x_feat)  # Shape: (B*T, V, C_out)
+        x_gcn = self.bn_graph(x_gcn)     # LayerNorm on last dim (features)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
-
-        # 5. Reshape back to (B, T, V, C_out)
-        C_out = x_gcn.shape[-1]
-        x_gcn = x_gcn.reshape(B, T, V, C_out)  # (B, T, V, C_out)
-
-        # 6. Temporal processing: (B, C_out, V, T)
-        x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
+        x_gcn = x_gcn.reshape(B, T, V, -1)
+        # Temporal: (B, C_out, V, T)
+        x_temp = x_gcn.permute(0, 3, 2, 1)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
+        x_att = self.attention(x_temp)
+        # Residual: (B, C_out, V, T)
+        x_res = x.permute(0, 3, 2, 1) if isinstance(self.residual, nn.Identity) else self.residual(x.permute(0, 3, 2, 1))
+        # Output: (B, T, V, C_out)
+        out = 0.95 * x_res + 0.05 * x_att   # Heavily regularize toward residual
+        return out.permute(0, 3, 2, 1)
 
-        # 7. Attention
-        x_att = self.attention(x_temp)  # (B, C_out, V, T)
-
-        # 8. Residual connection
-        if self.residual_conv is not None:
-            # Apply residual transformation if needed
-            x_res = x.reshape(B * T * V, C_in)  # (B*T*V, C_in)
-            x_res = self.residual_conv(x_res)  # (B*T*V, C_out)
-            x_res = x_res.reshape(B, T, V, C_out)  # (B, T, V, C_out)
-        else:
-            x_res = x
-
-        # 9. Combine with residual scaling
-        out = 0.9 * x_res + 0.1 * x_att.permute(0, 3, 2, 1)
-
-        return out
-
-
-
-
-# ===========================
-# NEW: Enhanced Stream Processor with GCN Blocks
-# ===========================
 class StableStreamProcessor(nn.Module):
-    def __init__(self, in_feat=3, hidden=256, num_blocks=3, temporal_kernel=3, dropout=0.2):
+    def __init__(self, in_feat=3, hidden=64, num_blocks=3, temporal_kernel=3, dropout=0.2):
         super().__init__()
-
-        self.blocks = nn.ModuleList()
-        self.blocks.append(StableGCNBlock(in_feat, hidden, temporal_kernel, dropout))
-        for _ in range(num_blocks - 1):
-            self.blocks.append(StableGCNBlock(hidden, hidden, temporal_kernel, dropout))
+        self.blocks = nn.ModuleList([StableGCNBlock(in_feat if i == 0 else hidden, hidden, temporal_kernel, dropout) for i in range(num_blocks)])
 
     def forward(self, seq, A, node_mask, lengths):
-        """
-        seq: (B, T, V, F_in)
-        Returns: (B, H) - pooled features
-        """
         x = seq
-        B, T, V, _ = x.shape
-
         for block in self.blocks:
-            x = block(x, A)  # (B, T, V, H)
+            x = block(x, A)
+        # Masked mean pooling
+        w = node_mask.unsqueeze(-1)
+        x_masked = (x * w).sum(dim=2) / (w.sum(dim=2) + 1e-6)
+        return x_masked.mean(dim=1)
 
-        # Masked node pooling
-        weights = node_mask.unsqueeze(-1)  # (B, T, V, 1)
-        x_masked = (x * weights).sum(dim=2) / (weights.sum(dim=2) + 1e-6)  # (B, T, H)
-
-        # Simple temporal average pooling
-        x_pooled = torch.mean(x_masked, dim=1)  # (B, H)
-
-        return x_pooled
 
 
 

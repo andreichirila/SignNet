@@ -343,6 +343,7 @@ class Skeleton27FeatureExtractor:
         return nodes
 
     def compute_streams(self, nodes_seq):
+        """Compute all feature streams with AGGRESSIVE normalization."""
         T, V = nodes_seq.shape[0], nodes_seq.shape[1]
         K = nodes_seq.copy().astype(np.float32)
         valid = ((np.abs(K[..., 0]) + np.abs(K[..., 1])) > 1e-6).astype(np.float32)
@@ -366,9 +367,16 @@ class Skeleton27FeatureExtractor:
         B[:, :,  2] = np.where(mask_b[...,0].astype(bool), B[:, :, 2] / np.maximum(b_count[...,0], 1e-6), 0.0)
         D[:, :, 0:2] = 0.0
 
-        # CRITICAL: Normalize bone vectors and distances
-        B[:, :, :2] = np.clip(B[:, :, :2], -2, 2)
-        D[:, :, 2] = np.clip(D[:, :, 2], 0, 2)
+        # CRITICAL: Aggressive clipping for bone/distance features
+        B[:, :, :2] = np.clip(B[:, :, :2], -1, 1)   # Bone vectors
+        D[:, :, 2] = np.clip(D[:, :, 2], 0, 2)       # Distances
+
+        # Normalize bone vectors by their magnitude
+        bone_mag = np.linalg.norm(B[:, :, :2], axis=-1, keepdims=True)
+        B[:, :, :2] = np.where(bone_mag > 1e-6, B[:, :, :2] / (bone_mag + 1e-6), B[:, :, :2])
+
+        # Normalize distances to [0, 1] range
+        D[:, :, 2] = D[:, :, 2] / (D[:, :, 2].max() + 1e-6)
 
         KV = np.zeros_like(K); BV = np.zeros_like(B)
         KA = np.zeros_like(K); BA = np.zeros_like(B)
@@ -386,11 +394,11 @@ class Skeleton27FeatureExtractor:
             tri_mask_b = (valid_b[t] * valid_b[t-1] * valid_b[t-2])[..., None]
             BA[t] = (BV[t] - BV[t-1]) * tri_mask_b
 
-        # CRITICAL: Clip velocity and acceleration
-        KV = np.clip(KV, -1, 1)
-        BV = np.clip(BV, -1, 1)
-        KA = np.clip(KA, -1, 1)
-        BA = np.clip(BA, -1, 1)
+        # CRITICAL: Clip ALL velocity and acceleration features
+        KV = np.clip(KV, -0.5, 0.5)   # Keypoint velocity
+        BV = np.clip(BV, -0.5, 0.5)   # Bone velocity
+        KA = np.clip(KA, -0.2, 0.2)   # Keypoint acceleration
+        BA = np.clip(BA, -0.2, 0.2)   # Bone acceleration
 
         return {
             'keypoint_coords': K,
@@ -401,6 +409,7 @@ class Skeleton27FeatureExtractor:
             'keypoint_accel':    KA,
             'bone_accel':        BA,
         }
+
 
     def extract(self, combined_sequence):
         T = combined_sequence.shape[0]
@@ -744,22 +753,27 @@ class StableGCNBlock(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        """Conservative initialization."""
+        """Ultra-conservative initialization for 7-stream model."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight, gain=0.5)  # Reduced gain
+                # Use very small initialization
+                nn.init.xavier_normal_(m.weight, gain=0.01)  # Reduced from 0.5
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                # FIX: Scale weights properly
+                # Scale down by 100x for stability
                 with torch.no_grad():
-                    m.weight.data *= 0.1  # Scale down by 10x
+                    m.weight.data *= 0.01  # Changed from 0.1
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+            elif isinstance(m, nn.LayerNorm):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
 
 
     def forward(self, x, A):
@@ -976,52 +990,62 @@ class StableTrainer:
         node_mask = batch['node_mask'].to(self.device)
         y = batch['labels'].to(self.device)
 
-        # Check inputs
+        # CRITICAL: Check input ranges
         for k, v in fwd.items():
+            v_max = v.abs().max().item()
+            if v_max > 10.0:
+                print(f"⚠️  EXTREME INPUT: {k} has max value {v_max:.2f}")
+                # Clip at runtime as emergency measure
+                fwd[k] = torch.clamp(v, -10, 10)
+                bwd[k] = torch.clamp(bwd[k], -10, 10)
+
             if torch.isnan(v).any() or torch.isinf(v).any():
-                print(f"WARNING: NaN/Inf in {k}")
+                print(f"⚠️  NaN/Inf in input {k}, skipping batch")
                 return 0.0, 0, y.size(0)
 
         with torch.amp.autocast('cuda', enabled=torch.cuda.is_available()):
             logits = self.model(fwd, bwd, node_mask, lengths)
+
+            # Check model output
+            if torch.isnan(logits).any() or torch.isinf(logits).any():
+                print("⚠️  NaN/Inf in model output, skipping batch")
+                return 0.0, 0, y.size(0)
+
             loss = self.crit(logits, y)
 
         if torch.isnan(loss) or torch.isinf(loss):
-            print("WARNING: NaN/Inf loss")
+            print("⚠️  NaN/Inf loss, skipping batch")
             return 0.0, 0, y.size(0)
 
         self.optim.zero_grad(set_to_none=True)
         self.scaler.scale(loss).backward()
 
-        # CHECK gradient norm BEFORE clipping
+        # Check gradient norm
         total_norm = 0
+        max_grad = 0
         for p in self.model.parameters():
             if p.grad is not None:
                 param_norm = p.grad.data.norm(2)
                 total_norm += param_norm.item() ** 2
+                max_grad = max(max_grad, p.grad.data.abs().max().item())
         total_norm = total_norm ** 0.5
 
-        # If gradients explode, skip this batch and reduce LR
-        if total_norm > 50.0:  # Stricter threshold for 150 classes
-            print(f"⚠️  Gradient explosion: {total_norm:.2f}, skipping batch and reducing LR")
+        # STRICTER threshold for 7 streams
+        if total_norm > 10.0:  # Changed from 50.0
+            print(f"⚠️  Gradient explosion: norm={total_norm:.2f}, max={max_grad:.2f}")
+            print(f"   Skipping batch (LR={self.optim.param_groups[0]['lr']:.2e})")
             self.optim.zero_grad(set_to_none=True)
-            # Reduce LR by 50%
-            for param_group in self.optim.param_groups:
-                param_group['lr'] *= 0.5
             return 0.0, 0, y.size(0)
 
-        # Clip gradients
+        # Aggressive clipping
         self.scaler.unscale_(self.optim)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-
-        # Very aggressive clipping
-        self.scaler.unscale_(self.optim)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)  # Changed from 1.0
 
         self.scaler.step(self.optim)
         self.scaler.update()
 
         return loss.item(), (logits.argmax(1) == y).sum().item(), y.size(0)
+
 
     @torch.no_grad()
     def eval_loop(self, loader):
@@ -1115,8 +1139,8 @@ def main():
 
     # Training (conservative for stability)
     EPOCHS = 200
-    BATCH = 24            # Reduced from 32 (7 streams = more memory)
-    LR = 5e-5             # CRITICAL: 4x reduction from 2e-4
+    LR = 1e-5  # Changed from 5e-5 (5x reduction)
+    BATCH = 16 # Reduced from 24
     WEIGHT_DECAY = 2e-4   # Increased from 1e-4
 
     # System
@@ -1214,6 +1238,32 @@ def main():
             model, device=DEVICE, lr=LR, wd=WEIGHT_DECAY,
             epochs=EPOCHS
         )
+
+
+        # DIAGNOSTIC: Check first batch
+        print("\n[DIAGNOSTIC] Checking first batch...")
+        for batch in train_loader:
+            print("Batch shapes:")
+            for k, v in batch['features_forward'].items():
+                print(f"  {k}: {v.shape}, range=[{v.min():.4f}, {v.max():.4f}], mean={v.mean():.4f}")
+
+            # Check for extreme values
+            all_ok = True
+            for k, v in batch['features_forward'].items():
+                if v.abs().max() > 5.0:
+                    print(f"  ⚠️  WARNING: {k} has extreme values!")
+                    all_ok = False
+                if torch.isnan(v).any():
+                    print(f"  ⚠️  WARNING: {k} contains NaN!")
+                    all_ok = False
+
+            if all_ok:
+                print("  ✓ All inputs look reasonable")
+            break
+        print()
+
+
+
         best_val = trainer.train(train_loader, val_loader)
         print(f"Best Val Acc: {best_val:.2%}")
 

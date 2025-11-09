@@ -634,33 +634,31 @@ class STCAttentionSimple(nn.Module):
     def forward(self, x, lengths=None):
         B, C, T, V = x.shape
 
-        # FIXED: Apply temporal masking if lengths provided (zero pads)
+        # Apply temporal masking if lengths provided (zero pads)
         if lengths is not None:
             max_t = T  # Assume x padded to fixed max_T (e.g., 75)
-            t_idx = torch.arange(max_t, device=x.device).unsqueeze(0).expand(B, -1)  # (B, T), long tensor
-            mask = t_idx < lengths.unsqueeze(1)  # Bool mask (B, T): True for valid timesteps
-            mask = mask.unsqueeze(1).unsqueeze(-1)  # (B, 1, T, 1) for broadcasting to (B, C, T, V)
-            x = x.masked_fill(~mask, 0.0)  # Zero padded regions
+            t_idx = torch.arange(max_t, device=x.device).unsqueeze(0).expand(B, -1)  # (B, T), long
+            mask = t_idx < lengths.unsqueeze(1)  # Bool mask (B, T)
+            mask = mask.unsqueeze(1).unsqueeze(-1)  # (B, 1, T, 1) broadcasts to (B, C, T, V)
+            x = x.masked_fill(~mask, 0.0)
 
-        # Spatial attention (per node/timestep)
+        # Spatial attention
         spatial_att = self.sigmoid(self.spatial_conv(x))  # (B, 1, T, V)
-        x_spatial = (x * spatial_att).sum(dim=-1)  # (B, C, T) - sum over V (nodes)
 
-        # Temporal attention (per node/channel)
+        # Temporal attention
         temporal_att = self.sigmoid(self.temporal_conv(x))  # (B, 1, T, V)
-        x_temporal = (x * temporal_att).sum(dim=2)  # (B, C, V) - sum over T (time)
 
-        # Channel attention: Global spatial-temporal avg
-        x_channel_in = x.mean(dim=[2, 3])  # (B, C) - global avg pool
+        # Channel attention: Global avg pool for gating
+        x_channel_in = x.mean(dim=[2, 3])  # (B, C)
         x_channel = torch.relu(self.channel_conv(x_channel_in.unsqueeze(-1)).squeeze(-1))  # (B, C//r)
         x_channel = self.sigmoid(self.fc(x_channel))  # (B, C)
-        x_channel = x_channel.view(B, C, 1, 1)  # (B, C, 1, 1) for broadcasting
+        x_channel = x_channel.view(B, C, 1, 1)  # (B, C, 1, 1)
 
-        # Combined attention: Multiply spatial-temporal with channel gate
-        out = x * x_channel  # Channel gating on original x
+        # FIXED: Full STC: Modulate x with all attentions (broadcast)
+        out = x * spatial_att * temporal_att * x_channel  # (B, C, T, V) - element-wise
 
-        # Return globally pooled for fusion (adjust if full tensor needed)
-        return out.mean(dim=[2, 3])  # (B, C) global avg
+        # FIXED: Return full tensor for block-level addition (no early pooling)
+        return out  # Shape: (B, C, T, V)
 
 
 

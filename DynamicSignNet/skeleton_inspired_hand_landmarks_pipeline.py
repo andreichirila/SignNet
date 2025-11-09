@@ -605,23 +605,18 @@ class ChannelAttention(nn.Module):
 
 
 class STCAttentionSimple(nn.Module):
-    def __init__(self, channels, reduction=8):
-        super().__init__()
-        self.spatial_conv = nn.Conv2d(channels, 1, 1)  # Expects (B, channels, T, V) or (B, channels, V, T)—adjust if V-first
-        self.temporal_conv = nn.Conv2d(channels, 1, 1)
-        self.channel_conv = nn.Conv1d(channels, channels // reduction, 1)
-        self.fc = nn.Linear(channels // reduction, channels)
-        # ... (rest unchanged)
+    # __init__ unchanged from previous
 
-    def forward(self, x):  # x now guaranteed (B, C, T, V)
+    def forward(self, x, lengths=None):  # FIXED: Added lengths=None param
         B, C, T, V = x.shape
 
-        # FIXED: Add masking if lengths provided (assume passed as arg; else propagate from model)
-        # For now, assume no mask; add if variable T causes issues:
-        # if lengths is not None:
-        #     mask = torch.arange(T, device=x.device).expand(B, -1) < lengths.unsqueeze(1)
-        #     mask = mask.unsqueeze(-1).unsqueeze(1)  # (B, 1, T, 1)
-        #     x = x.masked_fill(~mask, 0)
+        # FIXED: Apply temporal masking if lengths provided (zero pads)
+        if lengths is not None:
+            max_t = T  # Assume x padded to fixed max_T
+            mask = torch.arange(max_t, device=x.device, dtype=torch.bool).unsqueeze(0).expand(B, -1) < lengths.unsqueeze(1)
+            mask = mask.unsqueeze(-1).unsqueeze(1)  # (B, 1, T, 1) for broadcasting to (B, C, T, V)
+            x = x.masked_fill(~mask, 0.0)
+            # Also mask attention weights later if needed, but convs handle zeros gracefully
 
         spatial_att = torch.sigmoid(self.spatial_conv(x))  # (B, 1, T, V)
         x_spatial = (x * spatial_att).sum(dim=-1)  # (B, C, T) sum over V
@@ -629,14 +624,15 @@ class STCAttentionSimple(nn.Module):
         temporal_att = torch.sigmoid(self.temporal_conv(x))  # (B, 1, T, V)
         x_temporal = (x * temporal_att).sum(dim=-2)  # (B, C, V) sum over T
 
-        # Channel attention (flatten spatial/temporal)
+        # Channel attention (unchanged)
         x_channel_in = x.view(B, C, -1).mean(dim=-1)  # (B, C)
         x_channel = torch.relu(self.channel_conv(x_channel_in))  # (B, C//r)
         x_channel = torch.sigmoid(self.fc(x_channel)).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
 
         out = x * x_channel  # (B, C, T, V)
-        return out.sum(dim=(2,3)) / (T * V)  # Global avg pool to (B, C) for fusion
-        # Or return full if needed; adjust based on your original return shape
+        return out.sum(dim=(2,3)) / (T * V)  # Global avg pool to (B, C); adjust if original returns full tensor
+        # If your original returns the full attended x, change to: return out
+
 
 
 
@@ -741,7 +737,7 @@ class StableGCNBlock(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, x, A):
+    def forward(self, x, A, lengths=None):  # FIXED: Added lengths=None param
         B, T, V, C_in = x.shape
         x_flat = x.view(B * T * V, C_in)
         x_feat = self.graph_conv(x_flat)
@@ -757,31 +753,32 @@ class StableGCNBlock(nn.Module):
         x_temp = self.temporal_conv(x_temp)  # (B, C_out, V, T)
         x_temp = self.bn_temporal(x_temp)
 
-        # FIXED: Permute back to (B, T, V, C_out) before LN
-        x_temp = x_temp.permute(0, 3, 2, 1).contiguous()  # Now correct order (B, T, V, C_out)
+        # Permute back to (B, T, V, C_out) before LN
+        x_temp = x_temp.permute(0, 3, 2, 1).contiguous()  # (B, T, V, C_out)
         assert x_temp.shape == (B, T, V, self.ln_temporal.normalized_shape[0]), f"LN shape mismatch: {x_temp.shape}"
         x_temp = self.ln_temporal(x_temp)  # Norm over C_out dim
         x_temp = self.relu(x_temp)
 
-        # FIXED: Permute to (B, C_out, T, V) for attention (matches conv expectations)
+        # Permute to (B, C_out, T, V) for attention
         x_att_input = x_temp.permute(0, 3, 1, 2)  # (B, C_out, T, V)
         assert x_att_input.shape[1] == self.attention.spatial_conv.in_channels, f"Attention input channels: {x_att_input.shape[1]} expected {self.attention.spatial_conv.in_channels}"
-        x_att = self.attention(x_att_input)
+        x_att = self.attention(x_att_input, lengths=lengths)  # FIXED: Pass lengths to attention
 
-        # Permute attention output back if needed (assume it returns (B, C, T, V), adjust to (B, T, V, C))
-        if x_att.dim() == 4 and x_att.shape[1] == x_temp.shape[-1]:  # (B, C, T, V) -> (B, T, V, C)
+        # Permute attention output back (B, C, T, V) -> (B, T, V, C)
+        if x_att.dim() == 4 and x_att.shape[1] == x_temp.shape[-1]:
             x_att = x_att.permute(0, 2, 3, 1).contiguous()
         x_att = self.dropout(x_att)
 
-        # Residual (on (B, T, V, C_out))
+        # Residual (unchanged)
         if isinstance(self.residual, nn.Identity):
             x_res = x
-            if x.shape[-1] != x_att.shape[-1]:  # Projection if dims differ
+            if x.shape[-1] != x_att.shape[-1]:
                 x_res = self.residual(x.view(-1, C_in)).view(B, T, V, -1)
         else:
             x_res = self.residual(x.view(-1, C_in)).view(B, T, V, -1)
         out = 0.98 * x_res + 0.02 * x_att
         return out
+
 
 
 

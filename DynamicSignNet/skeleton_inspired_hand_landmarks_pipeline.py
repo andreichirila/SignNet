@@ -1139,7 +1139,7 @@ def main():
     try:
         mlflow.log_params({
             'epochs': EPOCHS, 'batch_size': BATCH, 'hidden': HIDDEN,
-            'num_blocks': NUM_BLOCKS, 'groups': GROUPS, 'temporal_kernel': TEMPORAL_KERNEL,
+            'num_blocks': NUM_BLOCKS, 'temporal_kernel': TEMPORAL_KERNEL,
             'dropout': DROPOUT, 'lr': LR, 'weight_decay': WEIGHT_DECAY,
             'optimizer': 'SGD_Nesterov',
             'lr_schedule': 'MultiStep_150_200', 'device': DEVICE

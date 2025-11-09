@@ -1071,22 +1071,34 @@ class StableTrainer:
 def main():
     set_seed(42)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    RUN_NAME = 'Top20 Enhanced: STC+DecoupledGCN+StartEnd+PaperHyperparams'
 
-    # Paper-exact hyperparameters
     DATA_DIR = './word_landmarks_extracted'
-    GROUPS = 8
-    TOP_K = 20
-    EPOCHS = 100  # Reduced from 300
-    BATCH = 16    # Reduced from 64
-    HIDDEN = 128  # Increased from 64
-    NUM_BLOCKS = 4  # Reduced from 10
-    TEMPORAL_KERNEL = 3  # Reduced from 9
-    DROPOUT = 0.3  # Increased from 0.2
-    LR = 1e-4  # CRITICAL: Changed from 0.1 to 0.0001
-    WEIGHT_DECAY = 1e-4
-    PREFETCH_FACTOR = 4
-    MOMENTUM = 0.9
+    TOP_K = 150
+    RUN_NAME = 'Top {TOP_K} Enhanced: STC+DecoupledGCN+StartEnd+PaperHyperparams'
+
+    # ===========================
+    # SCALED HYPERPARAMETERS for 150 classes
+    # ===========================
+
+    # Architecture (increased capacity)
+    NUM_BLOCKS = 6          # Increased from 4 (more depth for complexity)
+    HIDDEN = 256            # Increased from 128 (more capacity per block)
+    TEMPORAL_KERNEL = 5     # Increased from 3 (capture longer temporal patterns)
+    GROUPS = 8              # Keep at 8 (for decoupled GCN if using)
+    DROPOUT = 0.25          # Decreased from 0.3 (need less regularization with more data)
+
+    # Training (longer schedule for convergence)
+    EPOCHS = 200            # Increased from 100 (150 classes need more training)
+    BATCH = 32              # Increased from 16 (better gradient estimates)
+    LR = 2e-4               # Increased from 1e-4 (higher LR for larger problem)
+    WEIGHT_DECAY = 1e-4     # Keep same (balanced regularization)
+
+    # System
+    PREFETCH_FACTOR = 4     # Keep same
+    NUM_WORKERS = 6         # Increase for faster data loading
+
+    # Not used by Adam optimizer (can remove)
+    MOMENTUM = 0.9          # Only for SGD
 
     print('=' * 80)
     print(RUN_NAME)

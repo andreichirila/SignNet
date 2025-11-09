@@ -1089,7 +1089,7 @@ def main():
 
     # Training (longer schedule for convergence)
     EPOCHS = 200            # Increased from 100 (150 classes need more training)
-    BATCH = 32              # Increased from 16 (better gradient estimates)
+    BATCH = 16              # Increased from 16 (better gradient estimates)
     LR = 2e-4               # Increased from 1e-4 (higher LR for larger problem)
     WEIGHT_DECAY = 1e-4     # Keep same (balanced regularization)
 

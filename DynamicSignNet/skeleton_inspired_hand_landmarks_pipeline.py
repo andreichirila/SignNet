@@ -631,15 +631,16 @@ class STCAttentionSimple(nn.Module):
             elif isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
 
-    def forward(self, x, lengths=None):  # Unchanged from previous (with masking)
+    def forward(self, x, lengths=None):
         B, C, T, V = x.shape
 
-        # Apply temporal masking if lengths provided (zero pads)
+        # FIXED: Apply temporal masking if lengths provided (zero pads)
         if lengths is not None:
             max_t = T  # Assume x padded to fixed max_T (e.g., 75)
-            mask = torch.arange(max_t, device=x.device, dtype=torch.bool).unsqueeze(0).expand(B, -1) < lengths.unsqueeze(1)
-            mask = mask.unsqueeze(-1).unsqueeze(1)  # (B, 1, T, 1) broadcasts to (B, C, T, V)
-            x = x.masked_fill(~mask, 0.0)
+            t_idx = torch.arange(max_t, device=x.device).unsqueeze(0).expand(B, -1)  # (B, T), long tensor
+            mask = t_idx < lengths.unsqueeze(1)  # Bool mask (B, T): True for valid timesteps
+            mask = mask.unsqueeze(1).unsqueeze(-1)  # (B, 1, T, 1) for broadcasting to (B, C, T, V)
+            x = x.masked_fill(~mask, 0.0)  # Zero padded regions
 
         # Spatial attention (per node/timestep)
         spatial_att = self.sigmoid(self.spatial_conv(x))  # (B, 1, T, V)
@@ -650,7 +651,6 @@ class STCAttentionSimple(nn.Module):
         x_temporal = (x * temporal_att).sum(dim=2)  # (B, C, V) - sum over T (time)
 
         # Channel attention: Global spatial-temporal avg
-        # Flatten to (B, C, T*V), mean over spatial, then 1D conv
         x_channel_in = x.mean(dim=[2, 3])  # (B, C) - global avg pool
         x_channel = torch.relu(self.channel_conv(x_channel_in.unsqueeze(-1)).squeeze(-1))  # (B, C//r)
         x_channel = self.sigmoid(self.fc(x_channel))  # (B, C)
@@ -658,10 +658,9 @@ class STCAttentionSimple(nn.Module):
 
         # Combined attention: Multiply spatial-temporal with channel gate
         out = x * x_channel  # Channel gating on original x
-        # Note: For full STC, could multiply spatial_att and temporal_att, but simplified here
 
-        # Return globally pooled for fusion (as in prior; adjust to return full 'out' if needed in block)
-        return out.mean(dim=[2, 3])  # (B, C) global avg; or return out for per-timestep
+        # Return globally pooled for fusion (adjust if full tensor needed)
+        return out.mean(dim=[2, 3])  # (B, C) global avg
 
 
 

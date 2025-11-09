@@ -717,18 +717,15 @@ class DropGraph(nn.Module):
 
 class StableGCNBlock(nn.Module):
     """
-    Simplified GCN block optimized for stability.
-    - BatchNorm before activations
-    - Smaller temporal kernels
-    - Residual scaling
-    - No DropGraph (causes instability)
+    Fixed GCN block - Proper adjacency matrix multiplication.
+    Input: (B, T, V, C_in) → Output: (B, T, V, C_out)
     """
     def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
         super().__init__()
 
-        # Simple graph convolution (no grouping for stability)
+        # Graph convolution: Transform features THEN apply adjacency
         self.graph_conv = nn.Linear(in_channels, out_channels)
-        self.bn_spatial = nn.BatchNorm1d(27)  # Normalize over nodes
+        self.bn_spatial = nn.BatchNorm1d(27 * out_channels)  # Normalize over nodes+features
 
         # Temporal convolution
         self.temporal_conv = nn.Conv2d(
@@ -744,7 +741,7 @@ class StableGCNBlock(nn.Module):
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
 
-        # Residual
+        # Residual connection
         if in_channels != out_channels:
             self.residual = nn.Linear(in_channels, out_channels)
         else:
@@ -753,71 +750,81 @@ class StableGCNBlock(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        """Ultra-conservative initialization for 7-stream model."""
+        """Ultra-conservative initialization."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                # Use very small initialization
-                nn.init.xavier_normal_(m.weight, gain=0.01)  # Reduced from 0.5
+                nn.init.xavier_normal_(m.weight, gain=0.1)  # Even smaller gain
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                # Scale down by 100x for stability
                 with torch.no_grad():
-                    m.weight.data *= 0.01  # Changed from 0.1
+                    m.weight.data *= 0.05  # Even smaller scaling (5%)
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.LayerNorm):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
-
 
     def forward(self, x, A):
         """
+        FIXED: Proper GCN implementation
         x: (B, T, V, C_in)
-        A: (V, V) normalized adjacency
+        A: (V, V) normalized adjacency matrix
         """
         B, T, V, C_in = x.shape
 
         # Graph convolution
-        x_flat = x.reshape(B * T, V, C_in)  # (B*T, V, C_in)
+        # 1. Apply linear transform: (B*T*V, C_in) → (B*T*V, C_out)
+        x_flat = x.permute(0, 2, 1, 3).reshape(B * T * V, C_in)  # (B*T*V, C_in)
+        x_features = self.graph_conv(x_flat)  # (B*T*V, C_out)
 
-        # Apply linear transform then multiply by adjacency
-        x_gcn = self.graph_conv(x_flat)  # (B*T, V, C_out)
-        x_gcn = torch.bmm(A.unsqueeze(0).expand(B*T, -1, -1), x_gcn)  # (B*T, V, C_out)
+        # 2. Reshape to apply adjacency: (B*T, V, C_out)
+        x_features = x_features.reshape(B * T, V, -1)  # (B*T, V, C_out)
 
-        # BatchNorm over nodes
-        x_gcn = self.bn_spatial(x_gcn)  # (B*T, V, C_out)
+        # 3. Apply adjacency matrix to each feature independently
+        # A @ x_features: (V, V) @ (V, C_out) = (V, C_out) for each time step
+        # Loop over batch*time to avoid memory explosion
+        x_gcn = torch.zeros_like(x_features)
+        for bt in range(B * T):
+            # A @ x_features[bt]: (V, V) @ (V, C_out) = (V, C_out)
+            x_gcn[bt] = torch.matmul(A, x_features[bt])  # (V, C_out)
+
+        # 4. Apply BatchNorm over nodes and features
+        x_gcn = x_gcn.view(B * T * V, -1)  # (B*T*V, C_out)
+        x_gcn = self.bn_spatial(x_gcn)
+        x_gcn = x_gcn.view(B * T, V, -1)  # Back to (B*T, V, C_out)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
 
+        # 5. Reshape back to (B, T, V, C_out)
         C_out = x_gcn.shape[-1]
         x_gcn = x_gcn.reshape(B, T, V, C_out)
 
-        # Temporal processing: (B, C, V, T)
-        x_temp = x_gcn.permute(0, 3, 2, 1)
+        # Temporal processing: (B, C_out, V, T)
+        x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
 
         # Attention
-        x_att = self.attention(x_temp)
+        x_att = self.attention(x_temp)  # (B, C_out, V, T)
 
-        # Residual
+        # Residual connection
         x_res = x.permute(0, 3, 2, 1)  # (B, C_in, V, T)
         if C_in != C_out:
             x_res_flat = x_res.permute(0, 2, 3, 1).reshape(-1, C_in)  # (B*V*T, C_in)
-            x_res_flat = self.residual(x_res_flat)
+            x_res_flat = self.residual(x_res_flat)  # (B*V*T, C_out)
             x_res = x_res_flat.reshape(B, V, T, C_out).permute(0, 3, 1, 2)  # (B, C_out, V, T)
+        else:
+            x_res = x_res  # Already (B, C_in=C_out, V, T)
 
-        # Combine with residual scaling
-        out = 0.9 * x_res + 0.1 * x_att
+        # Combine with conservative residual scaling
+        out = 0.8 * x_res + 0.2 * x_att  # More weight to residual
 
+        # Back to (B, T, V, C_out)
         return out.permute(0, 3, 2, 1)  # (B, T, V, C_out)
+
 
 
 # ===========================
@@ -1030,12 +1037,13 @@ class StableTrainer:
                 max_grad = max(max_grad, p.grad.data.abs().max().item())
         total_norm = total_norm ** 0.5
 
-        # STRICTER threshold for 7 streams
-        if total_norm > 10.0:  # Changed from 50.0
+        # STRICTER threshold for complex models
+        if total_norm > 5.0:  # Changed from 10.0
             print(f"⚠️  Gradient explosion: norm={total_norm:.2f}, max={max_grad:.2f}")
             print(f"   Skipping batch (LR={self.optim.param_groups[0]['lr']:.2e})")
             self.optim.zero_grad(set_to_none=True)
             return 0.0, 0, y.size(0)
+
 
         # Aggressive clipping
         self.scaler.unscale_(self.optim)

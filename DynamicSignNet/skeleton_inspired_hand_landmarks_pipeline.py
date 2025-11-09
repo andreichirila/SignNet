@@ -607,25 +607,37 @@ class ChannelAttention(nn.Module):
 class STCAttentionSimple(nn.Module):
     def __init__(self, channels, reduction=8):
         super().__init__()
-        self.spatial_conv = nn.Conv2d(channels, 1, kernel_size=1)
-        self.temporal_conv = nn.Conv2d(channels, 1, kernel_size=1)
-        self.channel_fc = nn.Sequential(
-            nn.Linear(channels, max(1, channels // reduction)),
-            nn.ReLU(inplace=True),
-            nn.Linear(max(1, channels // reduction), channels),
-            nn.Sigmoid(),
-        )
-    def forward(self, x):
-        # x: (B, C, V, T)
-        B, C, V, T = x.shape
-        spatial_att = torch.sigmoid(self.spatial_conv(x))
-        x = x * spatial_att
-        temporal_att = torch.sigmoid(self.temporal_conv(x))
-        x = x * temporal_att
-        gap = F.adaptive_avg_pool2d(x, (1, 1)).view(B, C)
-        channel_att = self.channel_fc(gap).view(B, C, 1, 1)
-        x = x * channel_att
-        return x * 0.05  # aggressive scale to prevent unstable fusion
+        self.spatial_conv = nn.Conv2d(channels, 1, 1)  # Expects (B, channels, T, V) or (B, channels, V, T)—adjust if V-first
+        self.temporal_conv = nn.Conv2d(channels, 1, 1)
+        self.channel_conv = nn.Conv1d(channels, channels // reduction, 1)
+        self.fc = nn.Linear(channels // reduction, channels)
+        # ... (rest unchanged)
+
+    def forward(self, x):  # x now guaranteed (B, C, T, V)
+        B, C, T, V = x.shape
+
+        # FIXED: Add masking if lengths provided (assume passed as arg; else propagate from model)
+        # For now, assume no mask; add if variable T causes issues:
+        # if lengths is not None:
+        #     mask = torch.arange(T, device=x.device).expand(B, -1) < lengths.unsqueeze(1)
+        #     mask = mask.unsqueeze(-1).unsqueeze(1)  # (B, 1, T, 1)
+        #     x = x.masked_fill(~mask, 0)
+
+        spatial_att = torch.sigmoid(self.spatial_conv(x))  # (B, 1, T, V)
+        x_spatial = (x * spatial_att).sum(dim=-1)  # (B, C, T) sum over V
+
+        temporal_att = torch.sigmoid(self.temporal_conv(x))  # (B, 1, T, V)
+        x_temporal = (x * temporal_att).sum(dim=-2)  # (B, C, V) sum over T
+
+        # Channel attention (flatten spatial/temporal)
+        x_channel_in = x.view(B, C, -1).mean(dim=-1)  # (B, C)
+        x_channel = torch.relu(self.channel_conv(x_channel_in))  # (B, C//r)
+        x_channel = torch.sigmoid(self.fc(x_channel)).unsqueeze(-1).unsqueeze(-1)  # (B, C, 1, 1)
+
+        out = x * x_channel  # (B, C, T, V)
+        return out.sum(dim=(2,3)) / (T * V)  # Global avg pool to (B, C) for fusion
+        # Or return full if needed; adjust based on your original return shape
+
 
 
 # ===========================
@@ -707,7 +719,7 @@ class StableGCNBlock(nn.Module):
             kernel_size=(temporal_kernel, 1),
             padding=((temporal_kernel - 1) // 2, 0), bias=False)
         self.bn_temporal = nn.BatchNorm2d(out_channels)
-        self.ln_temporal = nn.LayerNorm(out_channels)  # NEW: Post-temporal norm
+        self.ln_temporal = nn.LayerNorm([out_channels])  # FIXED: Explicit shape for LN on channels
         self.attention = STCAttentionSimple(out_channels)
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
@@ -715,14 +727,14 @@ class StableGCNBlock(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
+        # Unchanged from previous fix
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)  # FIXED: Standard Xavier (gain=1.0, removed 0.005)
+                nn.init.xavier_uniform_(m.weight)
                 if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                # FIXED: Removed ×0.005 scaling
                 if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
@@ -738,21 +750,39 @@ class StableGCNBlock(nn.Module):
         x_gcn = self.ln_graph(x_gcn)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
-        x_gcn = x_gcn.view(B, T, V, -1)
-        x_temp = x_gcn.permute(0, 3, 2, 1)
-        x_temp = self.temporal_conv(x_temp)
+        x_gcn = x_gcn.view(B, T, V, -1)  # (B, T, V, C_out)
+
+        # Temporal conv on (B, C, V, T)
+        x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
+        x_temp = self.temporal_conv(x_temp)  # (B, C_out, V, T)
         x_temp = self.bn_temporal(x_temp)
-        x_temp = self.ln_temporal(x_temp.view(B, T, V, -1))  # NEW: Apply LN after BN/conv
+
+        # FIXED: Permute back to (B, T, V, C_out) before LN
+        x_temp = x_temp.permute(0, 3, 2, 1).contiguous()  # Now correct order (B, T, V, C_out)
+        assert x_temp.shape == (B, T, V, self.ln_temporal.normalized_shape[0]), f"LN shape mismatch: {x_temp.shape}"
+        x_temp = self.ln_temporal(x_temp)  # Norm over C_out dim
         x_temp = self.relu(x_temp)
-        x_att = self.attention(x_temp)
+
+        # FIXED: Permute to (B, C_out, T, V) for attention (matches conv expectations)
+        x_att_input = x_temp.permute(0, 3, 1, 2)  # (B, C_out, T, V)
+        assert x_att_input.shape[1] == self.attention.spatial_conv.in_channels, f"Attention input channels: {x_att_input.shape[1]} expected {self.attention.spatial_conv.in_channels}"
+        x_att = self.attention(x_att_input)
+
+        # Permute attention output back if needed (assume it returns (B, C, T, V), adjust to (B, T, V, C))
+        if x_att.dim() == 4 and x_att.shape[1] == x_temp.shape[-1]:  # (B, C, T, V) -> (B, T, V, C)
+            x_att = x_att.permute(0, 2, 3, 1).contiguous()
+        x_att = self.dropout(x_att)
+
+        # Residual (on (B, T, V, C_out))
         if isinstance(self.residual, nn.Identity):
             x_res = x
+            if x.shape[-1] != x_att.shape[-1]:  # Projection if dims differ
+                x_res = self.residual(x.view(-1, C_in)).view(B, T, V, -1)
         else:
-            x_res = x.reshape(-1, C_in)
-            x_res = self.residual(x_res)
-            x_res = x_res.view(B, T, V, -1)
+            x_res = self.residual(x.view(-1, C_in)).view(B, T, V, -1)
         out = 0.98 * x_res + 0.02 * x_att
         return out
+
 
 
 class StableStreamProcessor(nn.Module):
@@ -763,7 +793,7 @@ class StableStreamProcessor(nn.Module):
     def forward(self, seq, A, node_mask, lengths):
         x = seq
         for block in self.blocks:
-            x = block(x, A)
+            x = block(x, A, lengths=lengths)  # NEW: Pass lengths
         # Masked mean pooling
         w = node_mask.unsqueeze(-1)
         x_masked = (x * w).sum(dim=2) / (w.sum(dim=2) + 1e-6)

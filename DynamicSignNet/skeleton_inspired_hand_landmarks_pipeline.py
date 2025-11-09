@@ -1011,6 +1011,19 @@ class StableTrainer:
             self.optim.zero_grad(set_to_none=True)
             return 0.0, 0, y.size(0)
 
+        has_invalid = False
+        for p in self.model.parameters():
+            if p.grad is None:  # Skip non-grad params if needed, but check all
+                continue
+            if torch.isnan(p).any() or torch.isinf(p).any():
+                has_invalid = True
+                break
+
+        if has_invalid:
+            print("⚠️  NaN/Inf after clipping, skipping step")
+            self.optim.zero_grad(set_to_none=True)
+            return 0.0, 0, y.size(0)
+
         self.scaler.step(self.optim)
         self.scaler.update()
 

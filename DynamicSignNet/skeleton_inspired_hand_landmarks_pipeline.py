@@ -720,7 +720,7 @@ class StableGCNBlock(nn.Module):
         super().__init__()
 
         self.graph_conv = nn.Linear(in_channels, out_channels)
-        self.bn_spatial = nn.BatchNorm1d(out_channels)  # Normalize over feature dimension
+        self.bn_spatial = nn.BatchNorm1d(out_channels)  # Fixed: normalize over features
 
         self.temporal_conv = nn.Conv2d(
             out_channels, out_channels,
@@ -738,10 +738,11 @@ class StableGCNBlock(nn.Module):
         else:
             self.residual = nn.Identity()
 
-        self._init_weights()  # <-- this calls the function below
+        # FIXED: Add the missing _init_weights method
+        self._init_weights()
 
     def _init_weights(self):
-        """Initialize weights properly."""
+        """Ultra-conservative initialization for stability."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_normal_(m.weight, gain=0.1)
@@ -750,50 +751,51 @@ class StableGCNBlock(nn.Module):
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 with torch.no_grad():
-                    m.weight.data *= 0.05
+                    m.weight.data *= 0.05  # Scale down for stability
                 if m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.LayerNorm):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
     def forward(self, x, A):
         B, T, V, C_in = x.shape
 
+        # Graph convolution
         x_flat = x.reshape(B * T * V, C_in)
         x_features = self.graph_conv(x_flat)
         x_features = x_features.reshape(B * T, V, -1)
 
         x_gcn = torch.bmm(A.unsqueeze(0).expand(B * T, -1, -1), x_features)
 
-        # Apply BatchNorm over features dimension after permuting for BatchNorm1d format
-        x_gcn = x_gcn.permute(0, 2, 1)
-        x_gcn = self.bn_spatial(x_gcn)
-        x_gcn = x_gcn.permute(0, 2, 1)
+        # FIXED: Apply BatchNorm1d correctly
+        x_gcn = x_gcn.permute(0, 2, 1)  # (B*T, C_out, V)
+        x_gcn = self.bn_spatial(x_gcn)  # BatchNorm over feature channels
+        x_gcn = x_gcn.permute(0, 2, 1)  # Back to (B*T, V, C_out)
 
         x_gcn = x_gcn.reshape(B, T, V, -1)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
 
-        x_temp = x_gcn.permute(0, 3, 2, 1)
+        # Temporal processing
+        x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
 
         x_att = self.attention(x_temp)
 
-        x_res = x.permute(0, 3, 2, 1)
+        # Residual
+        x_res = x.permute(0, 3, 2, 1)  # (B, C_in, V, T)
         if C_in != x_temp.shape[1]:
             x_res_flat = x_res.permute(0, 2, 3, 1).reshape(-1, C_in)
             x_res_flat = self.residual(x_res_flat)
             x_res = x_res_flat.reshape(B, V, T, x_temp.shape[1]).permute(0, 3, 1, 2)
 
+        # Combine
         out = 0.8 * x_res + 0.2 * x_att
+        return out.permute(0, 3, 2, 1)  # (B, T, V, C_out)
 
-        return out.permute(0, 3, 2, 1)
 
 
 

@@ -716,18 +716,11 @@ class DropGraph(nn.Module):
 
 
 class StableGCNBlock(nn.Module):
-    """
-    Fixed GCN block - Proper adjacency matrix multiplication.
-    Input: (B, T, V, C_in) → Output: (B, T, V, C_out)
-    """
     def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
         super().__init__()
-
-        # Graph convolution: Transform features THEN apply adjacency
         self.graph_conv = nn.Linear(in_channels, out_channels)
-        self.bn_spatial = nn.BatchNorm1d(27 * out_channels)  # Normalize over nodes+features
+        self.bn_spatial = nn.BatchNorm1d(out_channels)  # Normalize over features dimension
 
-        # Temporal convolution
         self.temporal_conv = nn.Conv2d(
             out_channels, out_channels,
             kernel_size=(temporal_kernel, 1),
@@ -735,13 +728,10 @@ class StableGCNBlock(nn.Module):
         )
         self.bn_temporal = nn.BatchNorm2d(out_channels)
 
-        # Simplified attention
         self.attention = STCAttentionSimple(out_channels)
-
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
 
-        # Residual connection
         if in_channels != out_channels:
             self.residual = nn.Linear(in_channels, out_channels)
         else:
@@ -749,81 +739,43 @@ class StableGCNBlock(nn.Module):
 
         self._init_weights()
 
-    def _init_weights(self):
-        """Ultra-conservative initialization."""
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight, gain=0.1)  # Even smaller gain
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, nn.Conv2d):
-                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                with torch.no_grad():
-                    m.weight.data *= 0.05  # Even smaller scaling (5%)
-                if m.bias is not None:
-                    nn.init.constant_(m.bias, 0)
-            elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
-                nn.init.constant_(m.weight, 1)
-                nn.init.constant_(m.bias, 0)
-
     def forward(self, x, A):
-        """
-        FIXED: Proper GCN implementation
-        x: (B, T, V, C_in)
-        A: (V, V) normalized adjacency matrix
-        """
         B, T, V, C_in = x.shape
 
-        # Graph convolution
-        # 1. Apply linear transform: (B*T*V, C_in) → (B*T*V, C_out)
-        x_flat = x.permute(0, 2, 1, 3).reshape(B * T * V, C_in)  # (B*T*V, C_in)
+        x_flat = x.reshape(B * T * V, C_in)
         x_features = self.graph_conv(x_flat)  # (B*T*V, C_out)
-
-        # 2. Reshape to apply adjacency: (B*T, V, C_out)
         x_features = x_features.reshape(B * T, V, -1)  # (B*T, V, C_out)
 
-        # 3. Apply adjacency matrix to each feature independently
-        # A @ x_features: (V, V) @ (V, C_out) = (V, C_out) for each time step
-        # Loop over batch*time to avoid memory explosion
-        x_gcn = torch.zeros_like(x_features)
-        for bt in range(B * T):
-            # A @ x_features[bt]: (V, V) @ (V, C_out) = (V, C_out)
-            x_gcn[bt] = torch.matmul(A, x_features[bt])  # (V, C_out)
+        x_gcn = torch.bmm(A.unsqueeze(0).expand(B * T, -1, -1), x_features)  # (B*T, V, C_out)
 
-        # 4. Apply BatchNorm over nodes and features
-        x_gcn = x_gcn.view(B * T * V, -1)  # (B*T*V, C_out)
-        x_gcn = self.bn_spatial(x_gcn)
-        x_gcn = x_gcn.view(B * T, V, -1)  # Back to (B*T, V, C_out)
+        # Permute to (B*T, C_out, V) for BatchNorm1d over nodes dimension
+        x_gcn = x_gcn.permute(0, 2, 1)  # (B*T, C_out, V)
+        x_gcn = self.bn_spatial(x_gcn)  # BatchNorm over features dimension (C_out)
+        x_gcn = x_gcn.permute(0, 2, 1)  # back to (B*T, V, C_out)
+
+        x_gcn = x_gcn.reshape(B, T, V, -1)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
 
-        # 5. Reshape back to (B, T, V, C_out)
-        C_out = x_gcn.shape[-1]
-        x_gcn = x_gcn.reshape(B, T, V, C_out)
-
-        # Temporal processing: (B, C_out, V, T)
         x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
 
-        # Attention
-        x_att = self.attention(x_temp)  # (B, C_out, V, T)
+        x_att = self.attention(x_temp)
 
-        # Residual connection
         x_res = x.permute(0, 3, 2, 1)  # (B, C_in, V, T)
-        if C_in != C_out:
-            x_res_flat = x_res.permute(0, 2, 3, 1).reshape(-1, C_in)  # (B*V*T, C_in)
-            x_res_flat = self.residual(x_res_flat)  # (B*V*T, C_out)
-            x_res = x_res_flat.reshape(B, V, T, C_out).permute(0, 3, 1, 2)  # (B, C_out, V, T)
-        else:
-            x_res = x_res  # Already (B, C_in=C_out, V, T)
+        if C_in != x_temp.shape[1]:
+            x_res_flat = x_res.permute(0, 2, 3, 1).reshape(-1, C_in)
+            x_res_flat = self.residual(x_res_flat)
+            x_res = x_res_flat.reshape(B, V, T, x_temp.shape[1]).permute(0, 3, 1, 2)
 
-        # Combine with conservative residual scaling
-        out = 0.8 * x_res + 0.2 * x_att  # More weight to residual
+        out = 0.8 * x_res + 0.2 * x_att
+        out = out.permute(0, 3, 2, 1)  # (B, T, V, C_out)
 
-        # Back to (B, T, V, C_out)
-        return out.permute(0, 3, 2, 1)  # (B, T, V, C_out)
+        return out
+
+
 
 
 

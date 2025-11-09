@@ -605,27 +605,27 @@ class ChannelAttention(nn.Module):
 
 
 class STCAttentionSimple(nn.Module):
-    def __init__(self, channels, reduction=4):
+    def __init__(self, channels, reduction=8):
         super().__init__()
         self.spatial_conv = nn.Conv2d(channels, 1, kernel_size=1)
         self.temporal_conv = nn.Conv2d(channels, 1, kernel_size=1)
         self.channel_fc = nn.Sequential(
-            nn.Linear(channels, channels // reduction),
+            nn.Linear(channels, max(1, channels // reduction)),
             nn.ReLU(inplace=True),
-            nn.Linear(channels // reduction, channels),
-            nn.Sigmoid()
+            nn.Linear(max(1, channels // reduction), channels),
+            nn.Sigmoid(),
         )
     def forward(self, x):
         # x: (B, C, V, T)
         B, C, V, T = x.shape
-        spatial_att = torch.sigmoid(self.spatial_conv(x))  # (B, 1, V, T)
+        spatial_att = torch.sigmoid(self.spatial_conv(x))
         x = x * spatial_att
-        temporal_att = torch.sigmoid(self.temporal_conv(x))  # (B, 1, V, T)
+        temporal_att = torch.sigmoid(self.temporal_conv(x))
         x = x * temporal_att
         gap = F.adaptive_avg_pool2d(x, (1, 1)).view(B, C)
         channel_att = self.channel_fc(gap).view(B, C, 1, 1)
         x = x * channel_att
-        return x * 0.1
+        return x * 0.05  # aggressive scale to prevent unstable fusion
 
 
 # ===========================
@@ -701,9 +701,10 @@ class StableGCNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
         super().__init__()
         self.graph_conv = nn.Linear(in_channels, out_channels, bias=False)
-        self.bn_graph = nn.LayerNorm(out_channels)  # normalize feature dim
+        self.ln_graph = nn.LayerNorm(out_channels)
         self.temporal_conv = nn.Conv2d(
-            out_channels, out_channels, kernel_size=(temporal_kernel, 1),
+            out_channels, out_channels,
+            kernel_size=(temporal_kernel, 1),
             padding=((temporal_kernel - 1) // 2, 0), bias=False)
         self.bn_temporal = nn.BatchNorm2d(out_channels)
         self.attention = STCAttentionSimple(out_channels)
@@ -714,13 +715,13 @@ class StableGCNBlock(nn.Module):
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight, gain=0.01)
+                nn.init.xavier_uniform_(m.weight, gain=0.005)
                 if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
                 with torch.no_grad():
-                    m.weight.data *= 0.01
+                    m.weight.data *= 0.005
                 if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
@@ -728,26 +729,29 @@ class StableGCNBlock(nn.Module):
                 nn.init.constant_(m.bias, 0)
     def forward(self, x, A):
         B, T, V, C_in = x.shape
-        x_flat = x.reshape(B * T * V, C_in)
-        x_feat = self.graph_conv(x_flat).reshape(B * T, V, -1)   # (B*T, V, C_out)
+        x_flat = x.view(B * T * V, C_in)
+        x_feat = self.graph_conv(x_flat) * 0.5
+        x_feat = x_feat.view(B * T, V, -1)  # (B*T, V, C_out)
+        # Safe propagation: A is (V,V) symmetrical, pre-normalized
         x_gcn = torch.matmul(A, x_feat)  # (B*T, V, C_out)
-        x_gcn = self.bn_graph(x_gcn)
+        x_gcn = self.ln_graph(x_gcn)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
-        x_gcn = x_gcn.reshape(B, T, V, -1)
+        x_gcn = x_gcn.view(B, T, V, -1)
         x_temp = x_gcn.permute(0, 3, 2, 1)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
         x_att = self.attention(x_temp)
-        # Residual connection: correct flatten/reshape for arbitrary T, V
+        # Robust residual handling: always flatten and restore
         if isinstance(self.residual, nn.Identity):
             x_res = x
         else:
             x_res = x.reshape(-1, C_in)
             x_res = self.residual(x_res)
-            x_res = x_res.reshape(B, T, V, -1)
-        out = 0.95 * x_res + 0.05 * x_att.permute(0, 3, 2, 1)
+            x_res = x_res.view(B, T, V, -1)
+        # Very conservative residual weighting
+        out = 0.98 * x_res + 0.02 * x_att.permute(0, 3, 2, 1)
         return out
 
 class StableStreamProcessor(nn.Module):

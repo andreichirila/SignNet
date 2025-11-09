@@ -848,12 +848,23 @@ class StableStreamProcessor(nn.Module):
 # NEW: Enhanced Bidirectional GCN Model
 # ===========================
 class StableBidirectionalGCN(nn.Module):
-    """Stable version with conservative design choices."""
-    def __init__(self, num_classes, hidden=64, num_blocks=4, temporal_kernel=3, dropout=0.2):
+    """Stable version with ALL 7 paper streams for 150 classes."""
+    def __init__(self, num_classes, hidden=256, num_blocks=6, temporal_kernel=5, dropout=0.25):
         super().__init__()
 
-        streams = ['keypoint_coords', 'bone_vectors', 'keypoint_velocity']  # Reduced streams
+        # CRITICAL: Use all 7 streams for 150-class problem
+        streams = [
+            'keypoint_coords',    # (x, y, conf)
+            'edge_distance',      # Distance features
+            'bone_vectors',       # Bone direction vectors
+            'keypoint_velocity',  # First derivative
+            'bone_velocity',      # Bone movement
+            'keypoint_accel',     # Second derivative
+            'bone_accel'          # Bone acceleration
+        ]
         self.streams = streams
+
+        print(f"[MODEL] Using {len(streams)} streams: {streams}")
 
         self.forward_streams = nn.ModuleDict({
             s: StableStreamProcessor(3, hidden, num_blocks, temporal_kernel, dropout)
@@ -864,17 +875,18 @@ class StableBidirectionalGCN(nn.Module):
             for s in streams
         })
 
-        # Learnable fusion weights
+        # Initialize fusion weights
         self.w_fwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
         self.w_bwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
         self.w_dir = nn.Parameter(torch.tensor([0.5, 0.5]))
 
-        # Classifier with layer norm
+        # Classifier with stronger regularization for 150 classes
         self.classifier = nn.Sequential(
             nn.LayerNorm(hidden),
+            nn.Dropout(dropout),
             nn.Linear(hidden, hidden // 2),
             nn.ReLU(),
-            nn.Dropout(dropout),
+            nn.Dropout(dropout + 0.1),  # Extra dropout
             nn.LayerNorm(hidden // 2),
             nn.Linear(hidden // 2, num_classes)
         )
@@ -894,10 +906,7 @@ class StableBidirectionalGCN(nn.Module):
             A[i, j] = 1
             A[j, i] = 1
 
-        # Add self-loops (critical for stability)
         A = A + torch.eye(V)
-
-        # Symmetric normalization: D^(-1/2) A D^(-1/2)
         d = A.sum(dim=1)
         d_inv_sqrt = torch.pow(d, -0.5)
         d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0
@@ -929,6 +938,7 @@ class StableBidirectionalGCN(nn.Module):
         fused = wd[0] * Ffused + wd[1] * Bfused
 
         return self.classifier(fused)
+
 
 
 # ===========================
@@ -982,6 +992,27 @@ class StableTrainer:
 
         self.optim.zero_grad(set_to_none=True)
         self.scaler.scale(loss).backward()
+
+        # CHECK gradient norm BEFORE clipping
+        total_norm = 0
+        for p in self.model.parameters():
+            if p.grad is not None:
+                param_norm = p.grad.data.norm(2)
+                total_norm += param_norm.item() ** 2
+        total_norm = total_norm ** 0.5
+
+        # If gradients explode, skip this batch and reduce LR
+        if total_norm > 50.0:  # Stricter threshold for 150 classes
+            print(f"⚠️  Gradient explosion: {total_norm:.2f}, skipping batch and reducing LR")
+            self.optim.zero_grad(set_to_none=True)
+            # Reduce LR by 50%
+            for param_group in self.optim.param_groups:
+                param_group['lr'] *= 0.5
+            return 0.0, 0, y.size(0)
+
+        # Clip gradients
+        self.scaler.unscale_(self.optim)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
 
         # Very aggressive clipping
         self.scaler.unscale_(self.optim)
@@ -1071,34 +1102,28 @@ class StableTrainer:
 def main():
     set_seed(42)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-
     DATA_DIR = './word_landmarks_extracted'
+
+    # REVISED HYPERPARAMETERS for 150 classes with stability
     TOP_K = 150
-    RUN_NAME = f'Top {TOP_K} Enhanced: STC+DecoupledGCN+StartEnd+PaperHyperparams'
 
-    # ===========================
-    # SCALED HYPERPARAMETERS for 150 classes
-    # ===========================
+    # Architecture (increased for 7 streams)
+    NUM_BLOCKS = 5        # Reduced from 6 (7 streams add enough capacity)
+    HIDDEN = 256          # Keep 256
+    TEMPORAL_KERNEL = 5   # Keep 5
+    DROPOUT = 0.3         # Increased from 0.25 for stability
 
-    # Architecture (increased capacity)
-    NUM_BLOCKS = 6          # Increased from 4 (more depth for complexity)
-    HIDDEN = 256            # Increased from 128 (more capacity per block)
-    TEMPORAL_KERNEL = 5     # Increased from 3 (capture longer temporal patterns)
-    GROUPS = 8              # Keep at 8 (for decoupled GCN if using)
-    DROPOUT = 0.25          # Decreased from 0.3 (need less regularization with more data)
-
-    # Training (longer schedule for convergence)
-    EPOCHS = 200            # Increased from 100 (150 classes need more training)
-    BATCH = 16              # Increased from 16 (better gradient estimates)
-    LR = 2e-4               # Increased from 1e-4 (higher LR for larger problem)
-    WEIGHT_DECAY = 1e-4     # Keep same (balanced regularization)
+    # Training (conservative for stability)
+    EPOCHS = 200
+    BATCH = 24            # Reduced from 32 (7 streams = more memory)
+    LR = 5e-5             # CRITICAL: 4x reduction from 2e-4
+    WEIGHT_DECAY = 2e-4   # Increased from 1e-4
 
     # System
-    PREFETCH_FACTOR = 4     # Keep same
-    NUM_WORKERS = 6         # Increase for faster data loading
+    PREFETCH_FACTOR = 4
+    NUM_WORKERS = 6
 
-    # Not used by Adam optimizer (can remove)
-    MOMENTUM = 0.9          # Only for SGD
+    RUN_NAME = f'Top{TOP_K} ALL-STREAMS: 7 Streams × 5 Blocks × 256 Hidden'
 
     print('=' * 80)
     print(RUN_NAME)
@@ -1116,7 +1141,7 @@ def main():
             'epochs': EPOCHS, 'batch_size': BATCH, 'hidden': HIDDEN,
             'num_blocks': NUM_BLOCKS, 'groups': GROUPS, 'temporal_kernel': TEMPORAL_KERNEL,
             'dropout': DROPOUT, 'lr': LR, 'weight_decay': WEIGHT_DECAY,
-            'momentum': MOMENTUM, 'optimizer': 'SGD_Nesterov',
+            'optimizer': 'SGD_Nesterov',
             'lr_schedule': 'MultiStep_150_200', 'device': DEVICE
         })
         mlflow.log_params({

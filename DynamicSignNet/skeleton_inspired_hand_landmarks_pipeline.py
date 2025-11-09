@@ -707,32 +707,33 @@ class StableGCNBlock(nn.Module):
             kernel_size=(temporal_kernel, 1),
             padding=((temporal_kernel - 1) // 2, 0), bias=False)
         self.bn_temporal = nn.BatchNorm2d(out_channels)
+        self.ln_temporal = nn.LayerNorm(out_channels)  # NEW: Post-temporal norm
         self.attention = STCAttentionSimple(out_channels)
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
         self.residual = nn.Linear(in_channels, out_channels, bias=False) if in_channels != out_channels else nn.Identity()
         self._init_weights()
+
     def _init_weights(self):
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight, gain=0.005)
+                nn.init.xavier_uniform_(m.weight)  # FIXED: Standard Xavier (gain=1.0, removed 0.005)
                 if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
                 nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
-                with torch.no_grad():
-                    m.weight.data *= 0.005
+                # FIXED: Removed ×0.005 scaling
                 if hasattr(m, 'bias') and m.bias is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
+
     def forward(self, x, A):
         B, T, V, C_in = x.shape
         x_flat = x.view(B * T * V, C_in)
-        x_feat = self.graph_conv(x_flat) * 0.5
+        x_feat = self.graph_conv(x_flat)
         x_feat = x_feat.view(B * T, V, -1)  # (B*T, V, C_out)
-        # Safe propagation: A is (V,V) symmetrical, pre-normalized
         x_gcn = torch.matmul(A, x_feat)  # (B*T, V, C_out)
         x_gcn = self.ln_graph(x_gcn)
         x_gcn = self.relu(x_gcn)
@@ -741,18 +742,18 @@ class StableGCNBlock(nn.Module):
         x_temp = x_gcn.permute(0, 3, 2, 1)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
+        x_temp = self.ln_temporal(x_temp.view(B, T, V, -1))  # NEW: Apply LN after BN/conv
         x_temp = self.relu(x_temp)
         x_att = self.attention(x_temp)
-        # Robust residual handling: always flatten and restore
         if isinstance(self.residual, nn.Identity):
             x_res = x
         else:
             x_res = x.reshape(-1, C_in)
             x_res = self.residual(x_res)
             x_res = x_res.view(B, T, V, -1)
-        # Very conservative residual weighting
-        out = 0.98 * x_res + 0.02 * x_att.permute(0, 3, 2, 1)
+        out = 0.98 * x_res + 0.02 * x_att
         return out
+
 
 class StableStreamProcessor(nn.Module):
     def __init__(self, in_feat=3, hidden=64, num_blocks=3, temporal_kernel=3, dropout=0.2):
@@ -799,6 +800,9 @@ class StableBidirectionalGCN(nn.Module):
             for s in streams
         })
 
+        # NEW: LayerNorm for fused outputs
+        self.ln_fused = nn.LayerNorm(hidden)
+
         # Fusion weights
         self.w_fwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
         self.w_bwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
@@ -840,9 +844,9 @@ class StableBidirectionalGCN(nn.Module):
 
         Fstk = torch.stack(outs_f, dim=1)  # (B, S, H)
         wf = F.softmax(self.w_fwd, dim=0)
-        Ffused = (Fstk * wf.view(1, -1, 1)).sum(dim=1)  # (B, H)
+        Ffused = self.ln_fused((Fstk * wf.view(1, -1, 1)).sum(dim=1))  # NEW: Norm after fusion
 
-        # Backward pass
+        # Backward pass (similar, with node_mask_b)
         node_mask_b = node_mask.flip(dims=[1])
         outs_b = []
         for s in self.streams:
@@ -851,7 +855,7 @@ class StableBidirectionalGCN(nn.Module):
 
         Bstk = torch.stack(outs_b, dim=1)  # (B, S, H)
         wb = F.softmax(self.w_bwd, dim=0)
-        Bfused = (Bstk * wb.view(1, -1, 1)).sum(dim=1)  # (B, H)
+        Bfused = self.ln_fused((Bstk * wb.view(1, -1, 1)).sum(dim=1))  # NEW: Norm
 
         # Directional fusion
         wd = F.softmax(self.w_dir, dim=0)
@@ -862,18 +866,19 @@ class StableBidirectionalGCN(nn.Module):
 
 
 
+
 # ===========================
 # NEW: Trainer with Paper-Exact Hyperparameters
 # ===========================
 class StableTrainer:
     """Ultra-conservative trainer for gradient stability."""
-    def __init__(self, model, device='cuda', lr=1e-4, wd=1e-4, epochs=100):
+    def __init__(self, model, device='cuda', lr=5e-5, wd=1e-4, epochs=100):  # FIXED: LR up to 5e-5, wd down
         self.model = model.to(device)
         self.device = device
         self.epochs = epochs
 
-        # Use Adam for better stability than SGD
-        self.optim = torch.optim.Adam(
+        # FIXED: Use AdamW for decoupled decay
+        self.optim = torch.optim.AdamW(
             model.parameters(),
             lr=lr,
             weight_decay=wd,
@@ -881,7 +886,7 @@ class StableTrainer:
             eps=1e-8
         )
 
-        # Cosine annealing for smooth decay
+        # Cosine annealing unchanged
         self.sched = torch.optim.lr_scheduler.CosineAnnealingLR(
             self.optim, T_max=epochs, eta_min=1e-6
         )
@@ -897,12 +902,11 @@ class StableTrainer:
         node_mask = batch['node_mask'].to(self.device)
         y = batch['labels'].to(self.device)
 
-        # CRITICAL: Check input ranges
+        # Input checks unchanged
         for k, v in fwd.items():
             v_max = v.abs().max().item()
             if v_max > 10.0:
                 print(f"⚠️  EXTREME INPUT: {k} has max value {v_max:.2f}")
-                # Clip at runtime as emergency measure
                 fwd[k] = torch.clamp(v, -10, 10)
                 bwd[k] = torch.clamp(bwd[k], -10, 10)
 
@@ -913,7 +917,6 @@ class StableTrainer:
         with torch.amp.autocast('cuda', enabled=torch.cuda.is_available()):
             logits = self.model(fwd, bwd, node_mask, lengths)
 
-            # Check model output
             if torch.isnan(logits).any() or torch.isinf(logits).any():
                 print("⚠️  NaN/Inf in model output, skipping batch")
                 return 0.0, 0, y.size(0)
@@ -927,7 +930,7 @@ class StableTrainer:
         self.optim.zero_grad(set_to_none=True)
         self.scaler.scale(loss).backward()
 
-        # Check gradient norm
+        # Gradient norm check (for logging only now)
         total_norm = 0
         max_grad = 0
         for p in self.model.parameters():
@@ -937,17 +940,21 @@ class StableTrainer:
                 max_grad = max(max_grad, p.grad.data.abs().max().item())
         total_norm = total_norm ** 0.5
 
-        # STRICTER threshold for complex models
-        if total_norm > 5.0:  # Changed from 10.0
-            print(f"⚠️  Gradient explosion: norm={total_norm:.2f}, max={max_grad:.2f}")
-            print(f"   Skipping batch (LR={self.optim.param_groups[0]['lr']:.2e})")
+        # FIXED: Higher threshold (50.0), log but DON'T skip; always clip
+        if total_norm > 50.0:
+            print(f"⚠️  Large gradients: norm={total_norm:.2f}, max={max_grad:.2f}")
+            print(f"   Clipping (LR={self.optim.param_groups[0]['lr']:.2e})")
+
+        # FIXED: Always clip (norm to 10.0, value to 1.0)
+        self.scaler.unscale_(self.optim)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+        torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)  # NEW: Per-element cap
+
+        # Post-clip check
+        if torch.isnan(self.model.parameters()).any() or torch.isinf(self.model.parameters()).any():
+            print("⚠️  NaN/Inf after clipping, skipping step")
             self.optim.zero_grad(set_to_none=True)
             return 0.0, 0, y.size(0)
-
-
-        # Aggressive clipping
-        self.scaler.unscale_(self.optim)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=0.5)  # Changed from 1.0
 
         self.scaler.step(self.optim)
         self.scaler.update()
@@ -1038,18 +1045,14 @@ def main():
 
     # REVISED HYPERPARAMETERS for 150 classes with stability
     TOP_K = 150
-
-    # Architecture (increased for 7 streams)
-    NUM_BLOCKS = 5        # Reduced from 6 (7 streams add enough capacity)
-    HIDDEN = 256          # Keep 256
-    TEMPORAL_KERNEL = 5   # Keep 5
-    DROPOUT = 0.3         # Increased from 0.25 for stability
-
-    # Training (conservative for stability)
+    NUM_BLOCKS = 5
+    HIDDEN = 256
+    TEMPORAL_KERNEL = 5
+    DROPOUT = 0.3
     EPOCHS = 200
-    LR = 1e-5  # Changed from 5e-5 (5x reduction)
-    BATCH = 16 # Reduced from 24
-    WEIGHT_DECAY = 2e-4   # Increased from 1e-4
+    LR = 5e-5  # FIXED: Increased from 1e-5
+    BATCH = 16
+    WEIGHT_DECAY = 1e-4  # FIXED: Decreased from 2e-4
 
     # System
     PREFETCH_FACTOR = 4

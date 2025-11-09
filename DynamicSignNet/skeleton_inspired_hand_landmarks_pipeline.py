@@ -1074,7 +1074,7 @@ def main():
 
     DATA_DIR = './word_landmarks_extracted'
     TOP_K = 150
-    RUN_NAME = 'Top {TOP_K} Enhanced: STC+DecoupledGCN+StartEnd+PaperHyperparams'
+    RUN_NAME = f'Top {TOP_K} Enhanced: STC+DecoupledGCN+StartEnd+PaperHyperparams'
 
     # ===========================
     # SCALED HYPERPARAMETERS for 150 classes

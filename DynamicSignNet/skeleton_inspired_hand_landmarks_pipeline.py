@@ -719,50 +719,46 @@ class StableGCNBlock(nn.Module):
     def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
         super().__init__()
 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-
-        # Graph convolution layer
         self.graph_conv = nn.Linear(in_channels, out_channels, bias=False)
 
-        # Spatial batch norm: normalize across feature channels for each node
-        self.bn_spatial = nn.BatchNorm1d(out_channels)  # Fixed: just features, not 27×out_channels
+        # Batch norm over features for each node and time step
+        self.bn_graph = nn.LayerNorm(out_channels)
 
         # Temporal convolution
         self.temporal_conv = nn.Conv2d(
             out_channels, out_channels,
             kernel_size=(temporal_kernel, 1),
             padding=((temporal_kernel - 1) // 2, 0),
-            bias=False  # No bias to reduce parameters
+            bias=False
         )
         self.bn_temporal = nn.BatchNorm2d(out_channels)
 
-        # Attention mechanism
+        # Simple attention
         self.attention = STCAttentionSimple(out_channels)
 
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
 
-        # Residual connection
+        # Residual
         self.residual_conv = None
         if in_channels != out_channels:
             self.residual_conv = nn.Linear(in_channels, out_channels)
 
         # Conservative initialization
-        self._initialize_weights()
+        self._init_weights()
 
-    def _initialize_weights(self):
-        """Initialize weights to prevent explosion."""
+    def _init_weights(self):
+        """Ultra-conservative weights to prevent explosion."""
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight, gain=0.1)  # Small initialization
+                nn.init.xavier_uniform_(m.weight, gain=0.01)  # Very small
                 if getattr(m, 'bias', None) is not None:
                     nn.init.constant_(m.bias, 0)
             elif isinstance(m, nn.Conv2d):
-                nn.init.xavier_uniform_(m.weight, gain=0.1)
+                nn.init.xavier_uniform_(m.weight, gain=0.01)  # Very small
                 if getattr(m, 'bias', None) is not None:
                     nn.init.constant_(m.bias, 0)
-            elif isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d)):
+            elif isinstance(m, (nn.BatchNorm2d, nn.LayerNorm)):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
@@ -774,66 +770,53 @@ class StableGCNBlock(nn.Module):
         """
         B, T, V, C_in = x.shape
 
-        # 1. Apply graph convolution: Linear transform first
+        # 1. Apply graph convolution: Linear transform
         # x: (B, T, V, C_in) → (B*T*V, C_in) → (B*T*V, C_out)
         x_flat = x.reshape(B * T * V, C_in)
         x_features = self.graph_conv(x_flat)  # (B*T*V, C_out)
 
-        # 2. Reshape for adjacency multiplication: (B*T, V, C_out)
-        x_features = x_features.reshape(B * T, V, self.out_channels)  # (B*T, V, C_out)
+        # 2. Reshape to (B*T, V, C_out)
+        x_features = x_features.reshape(B * T, V, -1)  # (B*T, V, C_out)
 
-        # 3. Apply adjacency matrix to each feature independently
+        # 3. Apply adjacency matrix to aggregate neighbors
+        # For each time step and each node: sum weighted by A
         # A @ x_features: (V,V) @ (V, C_out) = (V, C_out) for each time step
-        # For efficiency, do this in a loop over batch*time
-        x_gcn = torch.zeros_like(x_features)  # (B*T, V, C_out)
-        for bt in range(B * T):
-            x_gcn[bt] = torch.matmul(A, x_features[bt])  # (V, C_out)
+        x_gcn = torch.bmm(
+            A.unsqueeze(0).expand(B * T, -1, -1),
+            x_features
+        )  # (B*T, V, C_out)
 
-        # 4. Apply spatial batch normalization
-        # Reshape to (B*T, C_out, V) for BatchNorm1d over nodes dimension
-        x_gcn = x_gcn.permute(0, 2, 1)  # (B*T, C_out, V)
-        x_gcn = self.bn_spatial(x_gcn)  # Apply BatchNorm over feature channels
-        x_gcn = x_gcn.permute(0, 2, 1)  # Back to (B*T, V, C_out)
-
-        # 5. Reshape back to original format
-        x_gcn = x_gcn.reshape(B, T, V, self.out_channels)  # (B, T, V, C_out)
-
-        # 6. Activation and dropout
+        # 4. Apply layer normalization over features
+        x_gcn = self.bn_graph(x_gcn)  # (B*T, V, C_out)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
 
-        # 7. Temporal processing: (B, C_out, V, T)
+        # 5. Reshape back to (B, T, V, C_out)
+        C_out = x_gcn.shape[-1]
+        x_gcn = x_gcn.reshape(B, T, V, C_out)  # (B, T, V, C_out)
+
+        # 6. Temporal processing: (B, C_out, V, T)
         x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
         x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
         x_temp = self.relu(x_temp)
 
-        # 8. Attention mechanism
+        # 7. Attention
         x_att = self.attention(x_temp)  # (B, C_out, V, T)
 
-        # 9. Residual connection
-        x_res = x.permute(0, 3, 2, 1)  # (B, C_in, V, T)
+        # 8. Residual connection
         if self.residual_conv is not None:
             # Apply residual transformation if needed
-            # (B, C_in, V, T) → (B, C_out, V, T)
-            x_res = x_res.permute(0, 2, 3, 1).reshape(-1, C_in)  # (B*V*T, C_in)
-            x_res = self.residual_conv(x_res)  # (B*V*T, C_out)
-            x_res = x_res.reshape(B, V, T, self.out_channels).permute(0, 3, 1, 2)  # (B, C_out, V, T)
+            x_res = x.reshape(B * T * V, C_in)  # (B*T*V, C_in)
+            x_res = self.residual_conv(x_res)  # (B*T*V, C_out)
+            x_res = x_res.reshape(B, T, V, C_out)  # (B, T, V, C_out)
         else:
-            # If input and output channels match, just use as is
-            pass
+            x_res = x
 
-        # 10. Combine residual and attention with conservative scaling
-        out = 0.7 * x_res + 0.3 * x_att  # Balanced residual connection
-
-        # 11. Final reshape back to (B, T, V, C_out)
-        out = out.permute(0, 3, 2, 1)  # (B, T, V, C_out)
+        # 9. Combine with residual scaling
+        out = 0.9 * x_res + 0.1 * x_att.permute(0, 3, 2, 1)
 
         return out
-
-
-
-
 
 
 
@@ -842,8 +825,7 @@ class StableGCNBlock(nn.Module):
 # NEW: Enhanced Stream Processor with GCN Blocks
 # ===========================
 class StableStreamProcessor(nn.Module):
-    """Simplified stream processor with fewer blocks."""
-    def __init__(self, in_feat=3, hidden=64, num_blocks=4, temporal_kernel=3, dropout=0.2):
+    def __init__(self, in_feat=3, hidden=256, num_blocks=3, temporal_kernel=3, dropout=0.2):
         super().__init__()
 
         self.blocks = nn.ModuleList()
@@ -851,52 +833,46 @@ class StableStreamProcessor(nn.Module):
         for _ in range(num_blocks - 1):
             self.blocks.append(StableGCNBlock(hidden, hidden, temporal_kernel, dropout))
 
-        self.pool = nn.AdaptiveAvgPool2d((1, 1))
-
     def forward(self, seq, A, node_mask, lengths):
         """
         seq: (B, T, V, F_in)
-        A: (V, V)
-        node_mask: (B, T, V)
+        Returns: (B, H) - pooled features
         """
         x = seq
+        B, T, V, _ = x.shape
 
         for block in self.blocks:
-            x = block(x, A)
+            x = block(x, A)  # (B, T, V, H)
 
-        # Masked pooling
-        B, T, V, H = x.shape
-        w = node_mask.unsqueeze(-1)
-        x_masked = (x * w).sum(dim=2) / (w.sum(dim=2) + 1e-6)
+        # Masked node pooling
+        weights = node_mask.unsqueeze(-1)  # (B, T, V, 1)
+        x_masked = (x * weights).sum(dim=2) / (weights.sum(dim=2) + 1e-6)  # (B, T, H)
 
-        # Temporal pooling
-        x_pooled = x_masked.permute(0, 2, 1).unsqueeze(-1)
-        x_out = self.pool(x_pooled).squeeze(-1).squeeze(-1)
+        # Simple temporal average pooling
+        x_pooled = torch.mean(x_masked, dim=1)  # (B, H)
 
-        return x_out
+        return x_pooled
+
 
 
 # ===========================
 # NEW: Enhanced Bidirectional GCN Model
 # ===========================
 class StableBidirectionalGCN(nn.Module):
-    """Stable version with ALL 7 paper streams for 150 classes."""
-    def __init__(self, num_classes, hidden=256, num_blocks=6, temporal_kernel=5, dropout=0.25):
+    def __init__(self, num_classes, hidden=256, num_blocks=3, temporal_kernel=3, dropout=0.3):
         super().__init__()
 
-        # CRITICAL: Use all 7 streams for 150-class problem
+        # All 7 streams for full paper implementation
         streams = [
-            'keypoint_coords',    # (x, y, conf)
-            'edge_distance',      # Distance features
-            'bone_vectors',       # Bone direction vectors
-            'keypoint_velocity',  # First derivative
-            'bone_velocity',      # Bone movement
-            'keypoint_accel',     # Second derivative
-            'bone_accel'          # Bone acceleration
+            'keypoint_coords',
+            'edge_distance',
+            'bone_vectors',
+            'keypoint_velocity',
+            'bone_velocity',
+            'keypoint_accel',
+            'bone_accel'
         ]
         self.streams = streams
-
-        print(f"[MODEL] Using {len(streams)} streams: {streams}")
 
         self.forward_streams = nn.ModuleDict({
             s: StableStreamProcessor(3, hidden, num_blocks, temporal_kernel, dropout)
@@ -907,26 +883,22 @@ class StableBidirectionalGCN(nn.Module):
             for s in streams
         })
 
-        # Initialize fusion weights
+        # Fusion weights
         self.w_fwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
         self.w_bwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
         self.w_dir = nn.Parameter(torch.tensor([0.5, 0.5]))
 
-        # Classifier with stronger regularization for 150 classes
+        # Classifier
         self.classifier = nn.Sequential(
-            nn.LayerNorm(hidden),
-            nn.Dropout(dropout),
             nn.Linear(hidden, hidden // 2),
             nn.ReLU(),
-            nn.Dropout(dropout + 0.1),  # Extra dropout
-            nn.LayerNorm(hidden // 2),
+            nn.Dropout(dropout),
             nn.Linear(hidden // 2, num_classes)
         )
 
         self.register_buffer('A', self._build_adj())
 
     def _build_adj(self):
-        """Build normalized adjacency matrix with self-loops."""
         V = 27
         A = torch.zeros(V, V)
         edges = [
@@ -937,39 +909,40 @@ class StableBidirectionalGCN(nn.Module):
         for i, j in edges:
             A[i, j] = 1
             A[j, i] = 1
-
         A = A + torch.eye(V)
         d = A.sum(dim=1)
         d_inv_sqrt = torch.pow(d, -0.5)
         d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0
-        D_inv_sqrt = torch.diag(d_inv_sqrt)
-
-        return D_inv_sqrt @ A @ D_inv_sqrt
+        return d_inv_sqrt.unsqueeze(0) * A * d_inv_sqrt.unsqueeze(1)
 
     def forward(self, fwd, bwd, node_mask, lengths):
+        # Forward pass
         outs_f = []
         for s in self.streams:
             out_s = self.forward_streams[s](fwd[s], self.A, node_mask, lengths)
             outs_f.append(out_s)
 
-        Fstk = torch.stack(outs_f, dim=1)
+        Fstk = torch.stack(outs_f, dim=1)  # (B, S, H)
         wf = F.softmax(self.w_fwd, dim=0)
-        Ffused = (Fstk * wf.view(1, -1, 1)).sum(dim=1)
+        Ffused = (Fstk * wf.view(1, -1, 1)).sum(dim=1)  # (B, H)
 
+        # Backward pass
         node_mask_b = node_mask.flip(dims=[1])
         outs_b = []
         for s in self.streams:
             out_s = self.backward_streams[s](bwd[s], self.A, node_mask_b, lengths)
             outs_b.append(out_s)
 
-        Bstk = torch.stack(outs_b, dim=1)
+        Bstk = torch.stack(outs_b, dim=1)  # (B, S, H)
         wb = F.softmax(self.w_bwd, dim=0)
-        Bfused = (Bstk * wb.view(1, -1, 1)).sum(dim=1)
+        Bfused = (Bstk * wb.view(1, -1, 1)).sum(dim=1)  # (B, H)
 
+        # Directional fusion
         wd = F.softmax(self.w_dir, dim=0)
         fused = wd[0] * Ffused + wd[1] * Bfused
 
         return self.classifier(fused)
+
 
 
 

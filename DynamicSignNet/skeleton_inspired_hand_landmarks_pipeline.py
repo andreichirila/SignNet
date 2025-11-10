@@ -949,7 +949,11 @@ class StableTrainer:
 
         self.crit = nn.CrossEntropyLoss()
         self.scaler = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
-        self.hist = {'train_loss': [], 'val_loss': [], 'train_acc': [], 'val_acc': []}
+        self.hist = {
+            'train_loss': [], 'val_loss': [],
+            'train_acc': [], 'val_acc': [],
+            'train_top5': [], 'val_top5': []
+        }
 
     def step(self, batch):
         fwd = {k: v.to(self.device) for k, v in batch['features_forward'].items()}
@@ -1021,14 +1025,26 @@ class StableTrainer:
         self.scaler.step(self.optim)
         self.scaler.update()
 
-        return loss.item(), (logits.argmax(1) == y).sum().item(), y.size(0)
+        # Compute top-1 and top-5 accuracy
+        num_classes = logits.size(1)
+        k = min(5, num_classes)  # Handle cases where num_classes < 5
+
+        # Top-1
+        top1_correct = (logits.argmax(1) == y).sum().item()
+
+        # Top-5: Check if true label in top-k predictions
+        _, topk_preds = logits.topk(k, dim=1)  # (B, k)
+        top5_correct = (topk_preds == y.unsqueeze(1)).any(dim=1).sum().item()
+
+        return loss.item(), top1_correct, top5_correct, y.size(0)
 
 
     @torch.no_grad()
     def eval_loop(self, loader):
         self.model.eval()
         tot_loss = 0
-        correct = 0
+        top1_correct = 0
+        top5_correct = 0
         total = 0
         for batch in loader:
             fwd = {k: v.to(self.device) for k, v in batch['features_forward'].items()}
@@ -1040,13 +1056,26 @@ class StableTrainer:
             logits = self.model(fwd, bwd, node_mask, lengths)
             loss = self.crit(logits, y).item()
             tot_loss += loss
-            correct += (logits.argmax(1) == y).sum().item()
+
+            # Compute top-1 and top-5
+            num_classes = logits.size(1)
+            k = min(5, num_classes)
+
+            top1_correct += (logits.argmax(1) == y).sum().item()
+
+            _, topk_preds = logits.topk(k, dim=1)
+            top5_correct += (topk_preds == y.unsqueeze(1)).any(dim=1).sum().item()
+
             total += y.size(0)
 
             if self.shutdown_handler.is_interrupted()
                 break
 
-        return tot_loss / max(len(loader), 1), correct / max(total, 1)
+        avg_loss = tot_loss / max(len(loader), 1)
+        top1_acc = top1_correct / max(total, 1)
+        top5_acc = top5_correct / max(total, 1)
+
+        return avg_loss, top1_acc, top5_acc
 
     def train(self, train_loader, val_loader, mlflow_log=True):
         best_val = 0
@@ -1056,13 +1085,15 @@ class StableTrainer:
         for ep in range(self.epochs):
             self.model.train()
             tot_loss = 0
-            correct = 0
+            top1_correct = 0
+            top5_correct = 0
             total = 0
 
             for batch in tqdm(train_loader, desc=f'Epoch {ep+1}/{self.epochs}'):
-                loss, c, n = self.step(batch)
+                loss, c1, c5, n = self.step(batch)
                 tot_loss += loss
-                correct += c
+                top1_correct += c1
+                top5_correct += c5
                 total += n
                 if self.shutdown_handler.is_interrupted()
                     break
@@ -1071,8 +1102,8 @@ class StableTrainer:
                 break
 
             tr_loss = tot_loss / len(train_loader)
-            tr_acc = correct / total
-            va_loss, va_acc = self.eval_loop(val_loader)
+            tr_top1 = top1_correct / max(total, 1)
+            tr_top5 = top5_correct / max(total, 1)
 
             if va_acc > best_val:
                 best_val = va_acc
@@ -1086,10 +1117,14 @@ class StableTrainer:
 
             self.hist['train_loss'].append(tr_loss)
             self.hist['val_loss'].append(va_loss)
-            self.hist['train_acc'].append(tr_acc)
-            self.hist['val_acc'].append(va_acc)
+            self.hist['train_acc'].append(tr_top1)
+            self.hist['val_acc'].append(va_top1)
+            self.hist['train_top5'].append(tr_top5)
+            self.hist['val_top5'].append(va_top5)
 
-            print(f"Epoch {ep+1}: Train Loss={tr_loss:.4f} Acc={tr_acc:.2%} | Val Loss={va_loss:.4f} Acc={va_acc:.2%} | LR={self.optim.param_groups[0]['lr']:.6f}")
+            print(f"Epoch {ep+1}: Train Loss={tr_loss:.4f} Top1={tr_top1:.2%} Top5={tr_top5:.2%} | "
+              f"Val Loss={va_loss:.4f} Top1={va_top1:.2%} Top5={va_top5:.2%} | "
+              f"LR={self.optim.param_groups[0]['lr']:.6f}")
 
             self.sched.step()
 
@@ -1097,8 +1132,10 @@ class StableTrainer:
                 mlflow.log_metrics({
                     'train_loss': tr_loss,
                     'val_loss': va_loss,
-                    'train_accuracy': tr_acc,
-                    'val_accuracy': va_acc,
+                    'train_top1_accuracy': tr_top1,
+                    'val_top1_accuracy': va_top1,
+                    'train_top5_accuracy': tr_top5,  # NEW
+                    'val_top5_accuracy': va_top5,    # NEW
                     'learning_rate': self.optim.param_groups[0]['lr']
                 }, step=ep)
 

@@ -311,30 +311,24 @@ class SkeletonAugmentation:
     def mirror(self, nodes_seq):
         """
         Horizontal flip (mirroring) with left-right hand swap.
-        nodes_seq: (T, V, 3) where V=27
+        nodes_seq: (T, V=29, 3)
         """
         nodes = nodes_seq.copy()
+
         # Flip x-coordinates
         nodes[:, :, 0] = -nodes[:, :, 0]
 
-        # Swap left-right pairs
-        # Eyes: 1 (left) <-> 2 (right)
-        nodes[:, [1, 2]] = nodes[:, [2, 1]]
+        # Swap left-right body parts
+        nodes[:, [1, 2]] = nodes[:, [2, 1]]  # Eyes
+        nodes[:, [3, 4]] = nodes[:, [4, 3]]  # Shoulders
+        nodes[:, [5, 6]] = nodes[:, [6, 5]]  # Elbows
+        nodes[:, [7, 8]] = nodes[:, [8, 7]]  # Wrists
 
-        # Shoulders: 3 (left) <-> 4 (right)
-        nodes[:, [3, 4]] = nodes[:, [4, 3]]
-
-        # Elbows: 5 (left) <-> 6 (right)
-        nodes[:, [5, 6]] = nodes[:, [6, 5]]
-
-        # Wrists: 7 (left) <-> 8 (right)
-        nodes[:, [7, 8]] = nodes[:, [8, 7]]
-
-        # Left hand (9-18) <-> Right hand (19-26)
-        left_hand = nodes[:, 9:19].copy()
-        right_hand = nodes[:, 19:27].copy()
-        nodes[:, 9:19] = right_hand[:, :10]  # Right -> Left
-        nodes[:, 19:27] = left_hand[:, :8]   # Left -> Right (partial)
+        # Swap hands - NOW SYMMETRIC (both 10 nodes)
+        left_hand = nodes[:, 9:19].copy()    # Nodes 9-18 (10 nodes)
+        right_hand = nodes[:, 19:29].copy()  # Nodes 19-28 (10 nodes)
+        nodes[:, 9:19] = right_hand          # Right → Left
+        nodes[:, 19:29] = left_hand          # Left → Right
 
         return nodes
 
@@ -439,17 +433,22 @@ class SkeletonAugmentation:
 # 27-node skeleton extractor
 # ===========================
 class Skeleton27FeatureExtractor:
+    """29-node skeleton extractor (updated from 27 for symmetric hands)"""
     def __init__(self, conf_valid_thresh: float = 0.5, augmentation=None):
-        self.num_nodes = 27
+        self.num_nodes = 29  # CHANGED: 27 → 29
         self.conf_valid_thresh = conf_valid_thresh
-        self.augmentation = augmentation  # NEW: Add augmentation support
+        self.augmentation = augmentation
         self.edges = [
+            # Body connections (0-8)
             (0,1),(0,2),(1,3),(2,4),(3,5),(4,6),(5,7),(6,8),
+            # Left hand (9-18): 10 nodes
             (7,9),(9,10),(7,11),(11,12),(7,13),(13,14),(7,15),(15,16),(7,17),(17,18),
-            (8,19),(19,20),(8,21),(21,22),(8,23),(23,24),(8,25),(25,26)
+            # Right hand (19-28): 10 nodes - SYMMETRIC NOW
+            (8,19),(19,20),(8,21),(21,22),(8,23),(23,24),(8,25),(25,26),(8,27),(27,28)
         ]
 
     def map_combined_to_27(self, combined_frame):
+        """Map to 29-node skeleton with symmetric 10-node hands."""
         nodes = np.zeros((self.num_nodes, 3), dtype=np.float32)
 
         HAND_L = combined_frame[0:63].reshape(21, 3)
@@ -457,36 +456,50 @@ class Skeleton27FeatureExtractor:
         FACE   = combined_frame[126:126+1434].reshape(478, 3)
         POSE   = combined_frame[126+1434:126+1434+99].reshape(33, 3)
 
-        nodes[0] = FACE[1]
-        nodes[1] = FACE[33]
-        nodes[2] = FACE[263]
-        nodes[3] = POSE[12]
-        nodes[4] = POSE[11]
-        nodes[5] = POSE[14]
-        nodes[6] = POSE[13]
-        nodes[7] = POSE[16]
-        nodes[8] = POSE[15]
+        # Upper body (nodes 0-8)
+        nodes[0] = FACE[1]    # Nose
+        nodes[1] = FACE[33]   # Left eye
+        nodes[2] = FACE[263]  # Right eye
+        nodes[3] = POSE[12]   # Left shoulder
+        nodes[4] = POSE[11]   # Right shoulder
+        nodes[5] = POSE[14]   # Left elbow
+        nodes[6] = POSE[13]   # Right elbow
+        nodes[7] = POSE[16]   # Left wrist
+        nodes[8] = POSE[15]   # Right wrist
 
+        # Left hand (nodes 9-18): 10 nodes - base + tip of 5 fingers
         if np.any(HAND_L != 0):
-            nodes[9]  = HAND_L[1];  nodes[10] = HAND_L[4]
-            nodes[11] = HAND_L[5];  nodes[12] = HAND_L[8]
-            nodes[13] = HAND_L[9];  nodes[14] = HAND_L[12]
-            nodes[15] = HAND_L[13]; nodes[16] = HAND_L[16]
-            nodes[17] = HAND_L[17]; nodes[18] = HAND_L[20]
+            nodes[9]  = HAND_L[1]   # Thumb base
+            nodes[10] = HAND_L[4]   # Thumb tip
+            nodes[11] = HAND_L[5]   # Index base
+            nodes[12] = HAND_L[8]   # Index tip
+            nodes[13] = HAND_L[9]   # Middle base
+            nodes[14] = HAND_L[12]  # Middle tip
+            nodes[15] = HAND_L[13]  # Ring base
+            nodes[16] = HAND_L[16]  # Ring tip
+            nodes[17] = HAND_L[17]  # Pinky base
+            nodes[18] = HAND_L[20]  # Pinky tip
         else:
             nodes[9:19] = 0
             nodes[9:19, 2] = 0.1
 
+        # Right hand (nodes 19-28): 10 nodes - SYMMETRIC to left hand
         if np.any(HAND_R != 0):
-            nodes[19] = HAND_R[1];  nodes[20] = HAND_R[4]
-            nodes[21] = HAND_R[5];  nodes[22] = HAND_R[8]
-            nodes[23] = HAND_R[9];  nodes[24] = HAND_R[12]
-            nodes[25] = HAND_R[13]; nodes[26] = HAND_R[16]
+            nodes[19] = HAND_R[1]   # Thumb base
+            nodes[20] = HAND_R[4]   # Thumb tip
+            nodes[21] = HAND_R[5]   # Index base
+            nodes[22] = HAND_R[8]   # Index tip
+            nodes[23] = HAND_R[9]   # Middle base
+            nodes[24] = HAND_R[12]  # Middle tip
+            nodes[25] = HAND_R[13]  # Ring base
+            nodes[26] = HAND_R[16]  # Ring tip
+            nodes[27] = HAND_R[17]  # Pinky base
+            nodes[28] = HAND_R[20]  # Pinky tip
         else:
-            nodes[19:27] = 0
-            nodes[19:27, 2] = 0.1
+            nodes[19:29] = 0
+            nodes[19:29, 2] = 0.1
 
-        # CRITICAL: Strict normalization to [-1, 1]
+        # Normalization
         nodes[:, 0:2] = np.clip(nodes[:, 0:2], -1, 1)
         nodes[:, 2]   = np.clip(nodes[:, 2], 0, 1)
 
@@ -1042,12 +1055,16 @@ class StableBidirectionalGCN(nn.Module):
         self.register_buffer('A', self._build_adj())
 
     def _build_adj(self):
-        V = 27
+        """Build adjacency matrix for 29 nodes."""
+        V = 29  # CHANGED: 27 → 29
         A = torch.zeros(V, V)
         edges = [
+            # Body (0-8)
             (0,1),(0,2),(1,3),(2,4),(3,5),(4,6),(5,7),(6,8),
+            # Left hand (9-18): 10 nodes
             (7,9),(9,10),(7,11),(11,12),(7,13),(13,14),(7,15),(15,16),(7,17),(17,18),
-            (8,19),(19,20),(8,21),(21,22),(8,23),(23,24),(8,25),(25,26)
+            # Right hand (19-28): 10 nodes
+            (8,19),(19,20),(8,21),(21,22),(8,23),(23,24),(8,25),(25,26),(8,27),(27,28)
         ]
         for i, j in edges:
             A[i, j] = 1

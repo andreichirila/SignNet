@@ -283,13 +283,166 @@ def extract_bbox_features(landmarks_seq):
     return features
 
 
+class SkeletonAugmentation:
+    """
+    Data augmentation for skeleton sequences as described in the paper.
+    Implements: random sampling, mirroring, rotation, scaling, and shifting.
+    """
+    def __init__(self,
+                 mirror_prob=0.5,
+                 rotation_range=(-10, 10),  # degrees
+                 scale_range=(0.9, 1.1),
+                 shift_range=(-0.1, 0.1),
+                 apply_prob=0.8):
+        """
+        Args:
+            mirror_prob: Probability of applying horizontal flip
+            rotation_range: Range of rotation angles in degrees (min, max)
+            scale_range: Range of scaling factors (min, max)
+            shift_range: Range of translation in normalized coordinates
+            apply_prob: Overall probability of applying augmentation
+        """
+        self.mirror_prob = mirror_prob
+        self.rotation_range = rotation_range
+        self.scale_range = scale_range
+        self.shift_range = shift_range
+        self.apply_prob = apply_prob
+
+    def mirror(self, nodes_seq):
+        """
+        Horizontal flip (mirroring) with left-right hand swap.
+        nodes_seq: (T, V, 3) where V=27
+        """
+        nodes = nodes_seq.copy()
+        # Flip x-coordinates
+        nodes[:, :, 0] = -nodes[:, :, 0]
+
+        # Swap left-right pairs
+        # Eyes: 1 (left) <-> 2 (right)
+        nodes[:, [1, 2]] = nodes[:, [2, 1]]
+
+        # Shoulders: 3 (left) <-> 4 (right)
+        nodes[:, [3, 4]] = nodes[:, [4, 3]]
+
+        # Elbows: 5 (left) <-> 6 (right)
+        nodes[:, [5, 6]] = nodes[:, [6, 5]]
+
+        # Wrists: 7 (left) <-> 8 (right)
+        nodes[:, [7, 8]] = nodes[:, [8, 7]]
+
+        # Left hand (9-18) <-> Right hand (19-26)
+        left_hand = nodes[:, 9:19].copy()
+        right_hand = nodes[:, 19:27].copy()
+        nodes[:, 9:19] = right_hand[:, :10]  # Right -> Left
+        nodes[:, 19:27] = left_hand[:, :8]   # Left -> Right (partial)
+
+        return nodes
+
+    def rotate(self, nodes_seq, angle):
+        """
+        Rotate skeleton around the nose (center point).
+        angle: rotation angle in degrees
+        """
+        nodes = nodes_seq.copy()
+        angle_rad = np.deg2rad(angle)
+        cos_a = np.cos(angle_rad)
+        sin_a = np.sin(angle_rad)
+
+        # Rotation matrix
+        rotation_matrix = np.array([
+            [cos_a, -sin_a],
+            [sin_a, cos_a]
+        ])
+
+        # Get center (nose is node 0)
+        center = nodes[:, 0:1, :2]  # (T, 1, 2)
+
+        # Rotate around center
+        coords = nodes[:, :, :2] - center
+        T, V = coords.shape[:2]
+        coords_flat = coords.reshape(-1, 2)
+        rotated = (rotation_matrix @ coords_flat.T).T
+        nodes[:, :, :2] = rotated.reshape(T, V, 2) + center
+
+        return nodes
+
+    def scale(self, nodes_seq, scale_factor):
+        """
+        Scale skeleton size around the nose (center point).
+        """
+        nodes = nodes_seq.copy()
+        center = nodes[:, 0:1, :2]  # (T, 1, 2)
+
+        # Scale around center
+        coords = nodes[:, :, :2] - center
+        coords = coords * scale_factor
+        nodes[:, :, :2] = coords + center
+
+        # Clip to valid range
+        nodes[:, :, 0] = np.clip(nodes[:, :, 0], -1, 1)
+        nodes[:, :, 1] = np.clip(nodes[:, :, 1], -1, 1)
+
+        return nodes
+
+    def shift(self, nodes_seq, shift_x, shift_y):
+        """
+        Translate skeleton in x and y directions.
+        """
+        nodes = nodes_seq.copy()
+        nodes[:, :, 0] += shift_x
+        nodes[:, :, 1] += shift_y
+
+        # Clip to valid range
+        nodes[:, :, 0] = np.clip(nodes[:, :, 0], -1, 1)
+        nodes[:, :, 1] = np.clip(nodes[:, :, 1], -1, 1)
+
+        return nodes
+
+    def __call__(self, nodes_seq):
+        """
+        Apply random augmentations to skeleton sequence.
+        nodes_seq: (T, V, 3) numpy array
+        Returns: augmented (T, V, 3) array
+        """
+        # Skip augmentation with probability (1 - apply_prob)
+        if np.random.rand() > self.apply_prob:
+            return nodes_seq
+
+        nodes = nodes_seq.copy()
+
+        T_orig = nodes.shape[0]
+        if T_orig > 32 and np.random.rand() < 0.3:  # 30% chance to shorten
+            target_T = np.random.randint(24, T_orig)
+            indices = np.linspace(0, T_orig-1, target_T, dtype=int)
+            nodes = nodes[indices]
+
+        # Mirroring
+        if np.random.rand() < self.mirror_prob:
+            nodes = self.mirror(nodes)
+
+        # Rotation
+        angle = np.random.uniform(*self.rotation_range)
+        nodes = self.rotate(nodes, angle)
+
+        # Scaling
+        scale_factor = np.random.uniform(*self.scale_range)
+        nodes = self.scale(nodes, scale_factor)
+
+        # Shifting
+        shift_x = np.random.uniform(*self.shift_range)
+        shift_y = np.random.uniform(*self.shift_range)
+        nodes = self.shift(nodes, shift_x, shift_y)
+
+        return nodes
+
 # ===========================
 # 27-node skeleton extractor
 # ===========================
 class Skeleton27FeatureExtractor:
-    def __init__(self, conf_valid_thresh: float = 0.5):
+    def __init__(self, conf_valid_thresh: float = 0.5, augmentation=None):
         self.num_nodes = 27
         self.conf_valid_thresh = conf_valid_thresh
+        self.augmentation = augmentation  # NEW: Add augmentation support
         self.edges = [
             (0,1),(0,2),(1,3),(2,4),(3,5),(4,6),(5,7),(6,8),
             (7,9),(9,10),(7,11),(11,12),(7,13),(13,14),(7,15),(15,16),(7,17),(17,18),
@@ -411,9 +564,18 @@ class Skeleton27FeatureExtractor:
         }
 
 
-    def extract(self, combined_sequence):
+    def extract(self, combined_sequence, apply_augmentation=True):
+        """
+        Extract features with optional augmentation.
+        apply_augmentation: bool, whether to apply augmentation (set False for val/test)
+        """
         T = combined_sequence.shape[0]
         nodes_seq = np.stack([self.map_combined_to_27(combined_sequence[t]) for t in range(T)], axis=0)
+
+        # NEW: Apply augmentation if enabled
+        if apply_augmentation and self.augmentation is not None:
+            nodes_seq = self.augmentation(nodes_seq)
+
         return self.compute_streams(nodes_seq)
 
 
@@ -421,11 +583,14 @@ class Skeleton27FeatureExtractor:
 # Dataset for true skeleton
 # ===========================
 class TrueSkeletonDataset(Dataset):
-    def __init__(self, npz_dir, feature_extractor: Skeleton27FeatureExtractor, word_to_idx=None, debug=True):
+    def __init__(self, npz_dir, feature_extractor: Skeleton27FeatureExtractor,
+                 word_to_idx=None, debug=True, is_training=True):
         self.dir = Path(npz_dir)
         self.files = sorted(self.dir.glob('*.npz'))
         self.fe = feature_extractor
         self.debug = debug
+        self.is_training = is_training  # NEW: Track if training mode
+
         if word_to_idx is None:
             self.word_to_idx = {}
             for f in self.files:
@@ -448,17 +613,19 @@ class TrueSkeletonDataset(Dataset):
         f = self.files[idx]
         d = np.load(f, allow_pickle=True)
         X = d['landmarks'].astype(np.float32)
-        streams = self.fe.extract(X)
+        # NEW: Pass is_training flag to enable/disable augmentation
+        streams = self.fe.extract(X, apply_augmentation=self.is_training)
         g = d['glosses'][0] if len(d['glosses'])>0 else 'UNKNOWN'
         y = self.word_to_idx.get(g, 0)
         return streams, torch.tensor(y, dtype=torch.long), f.stem
 
 
 class TopKTrueSkeletonDataset(Dataset):
-    """Top-K vocabulary filtering."""
-    def __init__(self, base_dataset: 'TrueSkeletonDataset', top_k_words: set, feature_extractor=None, debug=True):
+    def __init__(self, base_dataset: 'TrueSkeletonDataset', top_k_words: set,
+                 feature_extractor=None, debug=True, is_training=True):
         self.base = base_dataset
         self.debug = debug
+        self.is_training = is_training  # NEW: Track training mode
         self.fe = feature_extractor if feature_extractor is not None else self.base.fe
 
         kept = []
@@ -490,7 +657,8 @@ class TopKTrueSkeletonDataset(Dataset):
         f = self.files[idx]
         d = np.load(f, allow_pickle=True)
         X = d['landmarks'].astype(np.float32)
-        streams = self.fe.extract(X)
+        # NEW: Pass training flag for augmentation
+        streams = self.fe.extract(X, apply_augmentation=self.is_training)
         g = d['glosses'][0]
         y = self.word_to_idx[g]
         return streams, torch.tensor(y, dtype=torch.long), f.stem
@@ -962,35 +1130,36 @@ class StableTrainer:
         node_mask = batch['node_mask'].to(self.device)
         y = batch['labels'].to(self.device)
 
-        # Input checks
+        # Input validation
         for k, v in fwd.items():
             v_max = v.abs().max().item()
             if v_max > 10.0:
-                print(f"⚠️  EXTREME INPUT: {k} has max value {v_max:.2f}")
+                print(f'[EXTREME INPUT] {k} has max value {v_max:.2f}')
                 fwd[k] = torch.clamp(v, -10, 10)
                 bwd[k] = torch.clamp(bwd[k], -10, 10)
-
             if torch.isnan(v).any() or torch.isinf(v).any():
-                print(f"⚠️  NaN/Inf in input {k}, skipping batch")
-                return 0.0, 0, y.size(0)
+                print(f'[NaN/Inf in input {k}], skipping batch')
+                return 0.0, 0, 0, y.size(0)  # Return zeros for metrics
 
+        # Forward pass
         with torch.amp.autocast('cuda', enabled=torch.cuda.is_available()):
             logits = self.model(fwd, bwd, node_mask, lengths)
 
             if torch.isnan(logits).any() or torch.isinf(logits).any():
-                print("⚠️  NaN/Inf in model output, skipping batch")
-                return 0.0, 0, y.size(0)
+                print('[NaN/Inf in model output], skipping batch')
+                return 0.0, 0, 0, y.size(0)
 
             loss = self.crit(logits, y)
 
-        if torch.isnan(loss) or torch.isinf(loss):
-            print("⚠️  NaN/Inf loss, skipping batch")
-            return 0.0, 0, y.size(0)
+            if torch.isnan(loss) or torch.isinf(loss):
+                print('[NaN/Inf loss], skipping batch')
+                return 0.0, 0, 0, y.size(0)
 
+        # Backward pass
         self.optim.zero_grad(set_to_none=True)
         self.scaler.scale(loss).backward()
 
-        # Gradient norm check (for logging only)
+        # Gradient checks
         total_norm = 0
         max_grad = 0
         for p in self.model.parameters():
@@ -1000,40 +1169,38 @@ class StableTrainer:
                 max_grad = max(max_grad, p.grad.data.abs().max().item())
         total_norm = total_norm ** 0.5
 
-        # Higher threshold (500.0), log but DON'T skip; always clip
         if total_norm > 500.0:
-            print(f"⚠️  Large gradients: norm={total_norm:.2f}, max={max_grad:.2f}")
-            print(f"   Clipping (LR={self.optim.param_groups[0]['lr']:.2e})")
+            print(f'[Large gradients] norm={total_norm:.2f}, max={max_grad:.2f}')
+            print(f'[Clipping] LR={self.optim.param_groups[0]["lr"]:.2e}')
 
-        # Always clip (norm to 10.0, value to 1.0)
+        # Gradient clipping
         self.scaler.unscale_(self.optim)
         torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
-        torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)  # Per-element cap
+        torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
 
-        # FIXED: Robust NaN/Inf check post-clipping (loop only, no direct generator call)
+        # Check for NaN/Inf in parameters after clipping
         has_invalid = False
         for p in self.model.parameters():
             if torch.isnan(p).any() or torch.isinf(p).any():
                 has_invalid = True
-                break  # Early exit on first invalid
+                break
 
         if has_invalid:
-            print("⚠️  NaN/Inf in parameters after clipping, skipping step")
+            print('[NaN/Inf in parameters after clipping], skipping step')
             self.optim.zero_grad(set_to_none=True)
-            return 0.0, 0, y.size(0)
+            return 0.0, 0, 0, y.size(0)
 
+        # Optimizer step
         self.scaler.step(self.optim)
         self.scaler.update()
 
-        # Compute top-1 and top-5 accuracy
-        num_classes = logits.size(1)
-        k = min(5, num_classes)  # Handle cases where num_classes < 5
-
-        # Top-1
+        # Calculate metrics
         top1_correct = (logits.argmax(1) == y).sum().item()
 
-        # Top-5: Check if true label in top-k predictions
-        _, topk_preds = logits.topk(k, dim=1)  # (B, k)
+        # Top-5 calculation (FIXED - was missing)
+        num_classes = logits.size(1)
+        k = min(5, num_classes)
+        _, topk_preds = logits.topk(k, dim=1)
         top5_correct = (topk_preds == y.unsqueeze(1)).any(dim=1).sum().item()
 
         return loss.item(), top1_correct, top5_correct, y.size(0)
@@ -1046,6 +1213,7 @@ class StableTrainer:
         top1_correct = 0
         top5_correct = 0
         total = 0
+
         for batch in loader:
             fwd = {k: v.to(self.device) for k, v in batch['features_forward'].items()}
             bwd = {k: v.to(self.device) for k, v in batch['features_backward'].items()}
@@ -1055,7 +1223,7 @@ class StableTrainer:
 
             logits = self.model(fwd, bwd, node_mask, lengths)
             loss = self.crit(logits, y).item()
-            tot_loss += loss
+            tot_loss += loss * y.size(0)  # Weight by batch size
 
             # Compute top-1 and top-5
             num_classes = logits.size(1)
@@ -1068,14 +1236,14 @@ class StableTrainer:
 
             total += y.size(0)
 
-            if self.shutdown_handler.is_interrupted()
+            if self.shutdown_handler.is_interrupted():
                 break
 
-        avg_loss = tot_loss / max(len(loader), 1)
+        avg_loss = tot_loss / max(total, 1)
         top1_acc = top1_correct / max(total, 1)
         top5_acc = top5_correct / max(total, 1)
 
-        return avg_loss, top1_acc, top5_acc
+        return avg_loss, top1_acc, top5_acc  # FIXED: Return all three metrics
 
     def train(self, train_loader, val_loader, mlflow_log=True):
         best_val = 0
@@ -1083,6 +1251,7 @@ class StableTrainer:
         patience_counter = 0
 
         for ep in range(self.epochs):
+            # Training phase
             self.model.train()
             tot_loss = 0
             top1_correct = 0
@@ -1091,22 +1260,26 @@ class StableTrainer:
 
             for batch in tqdm(train_loader, desc=f'Epoch {ep+1}/{self.epochs}'):
                 loss, c1, c5, n = self.step(batch)
-                tot_loss += loss
+                tot_loss += loss * n  # Weight by batch size
                 top1_correct += c1
                 top5_correct += c5
                 total += n
-                if self.shutdown_handler.is_interrupted()
+                if self.shutdown_handler.is_interrupted():
                     break
 
-            if self.shutdown_handler.is_interrupted()
+            if self.shutdown_handler.is_interrupted():
                 break
 
-            tr_loss = tot_loss / len(train_loader)
+            tr_loss = tot_loss / max(total, 1)
             tr_top1 = top1_correct / max(total, 1)
             tr_top5 = top5_correct / max(total, 1)
 
-            if va_acc > best_val:
-                best_val = va_acc
+            # Validation phase - FIXED: Add actual evaluation
+            va_loss, va_top1, va_top5 = self.eval_loop(val_loader)
+
+            # Early stopping
+            if va_top1 > best_val:  # FIXED: Use va_top1 instead of undefined va_acc
+                best_val = va_top1
                 patience_counter = 0
                 torch.save(self.model.state_dict(), 'best_stable_model.pt')
             else:
@@ -1115,6 +1288,7 @@ class StableTrainer:
                     print(f"Early stopping at epoch {ep+1}")
                     break
 
+            # History logging
             self.hist['train_loss'].append(tr_loss)
             self.hist['val_loss'].append(va_loss)
             self.hist['train_acc'].append(tr_top1)
@@ -1123,8 +1297,8 @@ class StableTrainer:
             self.hist['val_top5'].append(va_top5)
 
             print(f"Epoch {ep+1}: Train Loss={tr_loss:.4f} Top1={tr_top1:.2%} Top5={tr_top5:.2%} | "
-              f"Val Loss={va_loss:.4f} Top1={va_top1:.2%} Top5={va_top5:.2%} | "
-              f"LR={self.optim.param_groups[0]['lr']:.6f}")
+                f"Val Loss={va_loss:.4f} Top1={va_top1:.2%} Top5={va_top5:.2%} | "
+                f"LR={self.optim.param_groups[0]['lr']:.6f}")
 
             self.sched.step()
 
@@ -1134,11 +1308,10 @@ class StableTrainer:
                     'val_loss': va_loss,
                     'train_top1_accuracy': tr_top1,
                     'val_top1_accuracy': va_top1,
-                    'train_top5_accuracy': tr_top5,  # NEW
-                    'val_top5_accuracy': va_top5,    # NEW
+                    'train_top5_accuracy': tr_top5,
+                    'val_top5_accuracy': va_top5,
                     'learning_rate': self.optim.param_groups[0]['lr']
                 }, step=ep)
-
 
         return best_val
 
@@ -1205,7 +1378,6 @@ def main():
             'epochs': EPOCHS, 'batch_size': BATCH, 'hidden': HIDDEN,
             'num_blocks': NUM_BLOCKS, 'temporal_kernel': TEMPORAL_KERNEL,
             'dropout': DROPOUT, 'lr': LR, 'weight_decay': WEIGHT_DECAY,
-            'optimizer': 'SGD_Nesterov',
             'lr_schedule': 'MultiStep_150_200', 'device': DEVICE
         })
         mlflow.log_params({
@@ -1222,19 +1394,37 @@ def main():
                 'gpu_mem_gb': round(torch.cuda.get_device_properties(0).total_memory / (1024**3), 2)
             })
 
-        # Build dataset
-        fe = Skeleton27FeatureExtractor(conf_valid_thresh=0.5)
-        full_base = TrueSkeletonDataset(DATA_DIR, fe, debug=True)
+        train_augmentation = SkeletonAugmentation(
+            mirror_prob=0.5,
+            rotation_range=(-10, 10),
+            scale_range=(0.9, 1.1),
+            shift_range=(-0.1, 0.1),
+            apply_prob=0.8  # Apply augmentation to 80% of training samples
+        )
+
+        # Build dataset with augmentation for training
+        fe_train = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=train_augmentation)
+        fe_val = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=None)  # No augmentation for val/test
+
+        fe_clean = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=None)
+        full_base = TrueSkeletonDataset(DATA_DIR, fe_clean, debug=True, is_training=False)  # Clean for vocab
         top_k_words, _ = build_topk_vocabulary(full_base.files, K=TOP_K, debug=True)
-        full = TopKTrueSkeletonDataset(full_base, top_k_words, feature_extractor=fe, debug=True)
 
-        tr_idx, va_idx, te_idx = split_dataset_stratified(full, 0.7, 0.15, 0.15, random_state=42)
+        # Create datasets with appropriate augmentation settings
+        full_train = TopKTrueSkeletonDataset(full_base, top_k_words, feature_extractor=fe_train,
+                                   debug=True, is_training=True)
 
-        train_ds = SubsetDataset(full, tr_idx)
-        val_ds = SubsetDataset(full, va_idx)
-        test_ds = SubsetDataset(full, te_idx)
+        tr_idx, va_idx, te_idx = split_dataset_stratified(full_train, 0.7, 0.15, 0.15, random_state=42)
 
-        collate = TrueSkeletonCollator(conf_valid_thresh=fe.conf_valid_thresh)
+        # Training set: uses augmentation
+        train_ds = SubsetDataset(full_train, tr_idx)
+
+        # Val/Test sets: no augmentation
+        full_val = TopKTrueSkeletonDataset(full_base, top_k_words, feature_extractor=fe_val, debug=True, is_training=False)
+        val_ds = SubsetDataset(full_val, va_idx)
+        test_ds = SubsetDataset(full_val, te_idx)
+
+        collate = TrueSkeletonCollator(conf_valid_thresh=full_train.fe.conf_valid_thresh)
 
         train_loader = DataLoader(
             train_ds, batch_size=BATCH, shuffle=True,
@@ -1256,7 +1446,7 @@ def main():
         )
 
         # Model
-        num_classes = len(full.word_to_idx)
+        num_classes = len(full_train.word_to_idx)
         print(f"\n[INFO] num_classes = {num_classes}")
 
         model = StableBidirectionalGCN(
@@ -1269,7 +1459,7 @@ def main():
 
         mlflow.log_param('top_k', TOP_K)
         with open('topk_words.txt', 'w') as f:
-            for w in sorted(full.word_to_idx.keys()):
+            for w in sorted(full_train.word_to_idx.keys()):
                 f.write(f"{w}\n")
         mlflow.log_artifact('topk_words.txt')
 
@@ -1308,14 +1498,18 @@ def main():
         print(f"Best Val Acc: {best_val:.2%}")
 
         # Test
-        test_loss, test_acc = trainer.eval_loop(test_loader)
-        print(f"Test: Loss={test_loss:.4f} Acc={test_acc:.2%}")
-        mlflow.log_metrics({'test_loss': test_loss, 'test_acc': test_acc})
+        test_loss, test_top1, test_top5 = trainer.eval_loop(test_loader)
+        print(f"Test: Loss={test_loss:.4f} Top1={test_top1:.2%} Top5={test_top5:.2%}")
+        mlflow.log_metrics({
+            'test_loss': test_loss,
+            'test_top1_accuracy': test_top1,
+            'test_top5_accuracy': test_top5
+        })
 
         asyncio.run(send_message(
             f"Training complete!\n"
             f"Best Val Acc: {best_val:.2%}\n"
-            f"Test Acc: {test_acc:.2%}\n"
+            f"Test Top1: {test_top1:.2%} Top5: {test_top5:.2%}\n"
             f"Run: {RUN_NAME}",
             CHAT_ID
         ))
@@ -1324,7 +1518,7 @@ def main():
         with open('dataset_split_enhanced.json', 'w') as f:
             json.dump({
                 'train': tr_idx, 'val': va_idx, 'test': te_idx,
-                'word_to_idx': full.word_to_idx
+                'word_to_idx': full_train.word_to_idx
             }, f, indent=2)
         mlflow.log_artifact('dataset_split_enhanced.json')
 

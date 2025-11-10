@@ -1368,7 +1368,7 @@ def main():
     DROPOUT = 0.3
     EPOCHS = 200
     LR = 5e-5  # FIXED: Increased from 1e-5
-    BATCH = 4
+    BATCH = 8
     WEIGHT_DECAY = 1e-4  # FIXED: Decreased from 2e-4
 
     # System

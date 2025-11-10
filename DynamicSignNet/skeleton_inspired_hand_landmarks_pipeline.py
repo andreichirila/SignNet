@@ -927,10 +927,11 @@ class StableBidirectionalGCN(nn.Module):
 # ===========================
 class StableTrainer:
     """Ultra-conservative trainer for gradient stability."""
-    def __init__(self, model, device='cuda', lr=5e-5, wd=1e-4, epochs=100):  # FIXED: LR up to 5e-5, wd down
+    def __init__(self, model, shutdown_handler = None, device='cuda', lr=5e-5, wd=1e-4, epochs=100):  # FIXED: LR up to 5e-5, wd down
         self.model = model.to(device)
         self.device = device
         self.epochs = epochs
+        self.shutdown_handler = shutdown_handler
 
         # FIXED: Use AdamW for decoupled decay
         self.optim = torch.optim.AdamW(
@@ -995,8 +996,8 @@ class StableTrainer:
                 max_grad = max(max_grad, p.grad.data.abs().max().item())
         total_norm = total_norm ** 0.5
 
-        # Higher threshold (50.0), log but DON'T skip; always clip
-        if total_norm > 50.0:
+        # Higher threshold (500.0), log but DON'T skip; always clip
+        if total_norm > 500.0:
             print(f"⚠️  Large gradients: norm={total_norm:.2f}, max={max_grad:.2f}")
             print(f"   Clipping (LR={self.optim.param_groups[0]['lr']:.2e})")
 
@@ -1042,6 +1043,9 @@ class StableTrainer:
             correct += (logits.argmax(1) == y).sum().item()
             total += y.size(0)
 
+            if self.shutdown_handler.is_interrupted()
+                break
+
         return tot_loss / max(len(loader), 1), correct / max(total, 1)
 
     def train(self, train_loader, val_loader, mlflow_log=True):
@@ -1060,6 +1064,11 @@ class StableTrainer:
                 tot_loss += loss
                 correct += c
                 total += n
+                if self.shutdown_handler.is_interrupted()
+                    break
+
+            if self.shutdown_handler.is_interrupted()
+                break
 
             tr_loss = tot_loss / len(train_loader)
             tr_acc = correct / total
@@ -1093,8 +1102,28 @@ class StableTrainer:
                     'learning_rate': self.optim.param_groups[0]['lr']
                 }, step=ep)
 
+
         return best_val
 
+class GracefulShutdown:
+    """
+    Handles graceful shutdown on keyboard interrupt (Ctrl+C).
+    Saves model, metrics, and completes MLflow logging before exiting.
+    """
+    def __init__(self):
+        self.interrupted = False
+        signal.signal(signal.SIGINT, self._handle_signal)
+        signal.signal(signal.SIGTERM, self._handle_signal)
+
+    def _handle_signal(self, sig, frame):
+        print("\n" + "="*80)
+        print("[GRACEFUL SHUTDOWN] Keyboard interrupt detected (Ctrl+C)")
+        print("="*80)
+        self.interrupted = True
+
+    def is_interrupted(self):
+        """Check if shutdown has been requested."""
+        return self.interrupted
 
 # ===========================
 # Main
@@ -1131,6 +1160,8 @@ def main():
     mlflow.set_tracking_uri(os.getenv('MLFLOW_TRACKING_URI', 'https://mlflow.schlaepfer.me'))
     mlflow.set_experiment('SignNetWord')
     run = mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME)
+
+    shutdown_handler = GracefulShutdown()
 
     try:
         mlflow.log_params({
@@ -1207,7 +1238,7 @@ def main():
 
         # Train
         trainer = StableTrainer(
-            model, device=DEVICE, lr=LR, wd=WEIGHT_DECAY,
+            model, shutdown_handler, device=DEVICE, lr=LR, wd=WEIGHT_DECAY,
             epochs=EPOCHS
         )
 

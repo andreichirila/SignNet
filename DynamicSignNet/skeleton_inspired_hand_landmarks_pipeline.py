@@ -1323,8 +1323,8 @@ class StableTrainer:
                 mlflow.log_metrics({
                     'train_loss': tr_loss,
                     'val_loss': va_loss,
-                    'train_top1_accuracy': tr_top1,
-                    'val_top1_accuracy': va_top1,
+                    'train_accuracy': tr_top1,
+                    'val_accuracy': va_top1,
                     'train_top5_accuracy': tr_top5,
                     'val_top5_accuracy': va_top5,
                     'learning_rate': self.optim.param_groups[0]['lr']

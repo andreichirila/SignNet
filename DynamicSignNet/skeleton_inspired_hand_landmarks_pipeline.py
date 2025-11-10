@@ -1361,7 +1361,7 @@ def main():
     DATA_DIR = './word_landmarks_extracted'
 
     # REVISED HYPERPARAMETERS for 150 classes with stability
-    TOP_K = 150
+    TOP_K = 20
     NUM_BLOCKS = 5
     HIDDEN = 256
     TEMPORAL_KERNEL = 5
@@ -1420,7 +1420,7 @@ def main():
         )
 
         # Build dataset with augmentation for training
-        fe_train = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=train_augmentation)
+        fe_train = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=None)
         fe_val = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=None)  # No augmentation for val/test
 
         fe_clean = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=None)

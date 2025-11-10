@@ -1367,7 +1367,7 @@ def main():
     TEMPORAL_KERNEL = 5
     DROPOUT = 0.3
     EPOCHS = 200
-    LR = 5e-5  # FIXED: Increased from 1e-5
+    LR = 3e-5  # FIXED: Increased from 1e-5
     BATCH = 8
     WEIGHT_DECAY = 1e-4  # FIXED: Decreased from 2e-4
 
@@ -1412,11 +1412,11 @@ def main():
             })
 
         train_augmentation = SkeletonAugmentation(
-            mirror_prob=0.5,
-            rotation_range=(-10, 10),
-            scale_range=(0.9, 1.1),
-            shift_range=(-0.1, 0.1),
-            apply_prob=0.8  # Apply augmentation to 80% of training samples
+            mirror_prob=0.2,        # Reduce - hand dominance matters
+            rotation_range=(-3, 3), # Much smaller
+            scale_range=(0.97, 1.03), # Much smaller
+            shift_range=(-0.03, 0.03), # Much smaller
+            apply_prob=0.4          # Lower probability
         )
 
         # Build dataset with augmentation for training

@@ -225,7 +225,13 @@ class EnhancedLandmarkFeatures:
         ]
 
         if include_accel:
-            features_list.insert(2, accel_flat)
+            accel_lengths = np.linalg.norm(acceleration, axis=2, keepdims=True)
+            accel_lengths = np.maximum(accel_lengths, 1e-6)
+            unit_accel = acceleration / accel_lengths  # Unit direction for accel
+            accel_mean = unit_accel.mean(axis=0, keepdims=True)
+            accel_std = unit_accel.std(axis=0, keepdims=True) + 1e-6
+            normalized_accel = (unit_accel - accel_mean) / accel_std
+            features_list.insert(2, normalized_accel.reshape(T, -1))  # Append normalized
 
         if include_bones:
             bones = EnhancedLandmarkFeatures.compute_bones(landmarks_3d)              # (T, E, 3)
@@ -1100,7 +1106,7 @@ def main():
     NUM_EPOCHS = 200
     BATCH_SIZE = 32
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 96  # Reduced from 128
+    HIDDEN_SIZE = 80  # Reduced from 128
     NUM_LSTM_LAYERS = 1
     DROPOUT_RATE = 0.45  # Increased from 0.35
     LSTM_DROPOUT = 0.35  # Increased from 0.25

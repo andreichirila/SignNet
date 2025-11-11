@@ -1756,7 +1756,6 @@ def main():
                     "val_top3_accuracy": val_topk_accs[3],
                     "val_top4_accuracy": val_topk_accs[4],
                     "val_top5_accuracy": val_topk_accs[5],
-                    "train_hand_accuracy": train_hand_acc,
                     "learning_rate": lr,
                 }, step=epoch)
 

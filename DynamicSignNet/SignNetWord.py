@@ -168,14 +168,33 @@ class EnhancedLandmarkFeatures:
     def compute_bones(landmarks_3d):
         """
         Compute bone vectors for each frame given edges: v = joint_child - joint_parent.
-        Returns: (T, num_edges, 3)
+        Returns normalized bones: unit direction + z-scored across time.
         """
-        T, L, _ = landmarks_3d.shape
-        edges = EnhancedLandmarkFeatures._default_edges(L)
+        T, num_landmarks, _ = landmarks_3d.shape
+        edges = EnhancedLandmarkFeatures._default_edges(num_landmarks)
+
+        if not edges:
+            # Fallback if no edges defined
+            return np.zeros((T, 0, 3))
+
         parent = np.array([p for p, c in edges], dtype=np.int64)
-        child  = np.array([c for p, c in edges], dtype=np.int64)
+        child = np.array([c for p, c in edges], dtype=np.int64)
+
+        # Raw bone vectors: child - parent (T, E, 3)
         bones = landmarks_3d[:, child, :] - landmarks_3d[:, parent, :]
-        return bones
+
+        # FIX 1: Unit normalize each bone vector (direction only, ||v||=1)
+        lengths = np.linalg.norm(bones, axis=2, keepdims=True)  # (T, E, 1)
+        lengths = np.maximum(lengths, 1e-6)  # Avoid div-by-zero for zero-length bones
+        unit_bones = bones / lengths  # Now scale-invariant directions
+
+        # FIX 1: Z-score across time per bone (temporal normalization, mean=0/std=1)
+        # This stabilizes varying sign lengths/poses, matching joint/velocity scale
+        bone_mean = unit_bones.mean(axis=0, keepdims=True)  # (1, E, 3)
+        bone_std = unit_bones.std(axis=0, keepdims=True) + 1e-6  # Avoid div-by-zero
+        normalized_bones = (unit_bones - bone_mean) / bone_std
+
+        return normalized_bones  # (T, num_edges, 3) - ready for flattening
 
     @staticmethod
     def extract_all_features(landmarks_flat, fps=25, include_accel=True,
@@ -213,8 +232,15 @@ class EnhancedLandmarkFeatures:
             bones_flat = bones.reshape(T, -1)
             features_list.append(bones_flat)
             if include_bone_velocity:
-                bone_vel = EnhancedLandmarkFeatures.compute_velocity(bones, fps)     # (T, E, 3)
-                features_list.append(bone_vel.reshape(T, -1))
+                bone_vel = EnhancedLandmarkFeatures.compute_velocity(bones, fps)  # Raw vel on raw bones
+                # NEW: Same normalization as bones (unit + z-score) for consistency
+                vel_lengths = np.linalg.norm(bone_vel, axis=2, keepdims=True)
+                vel_lengths = np.maximum(vel_lengths, 1e-6)
+                unit_vel = bone_vel / vel_lengths
+                vel_mean = unit_vel.mean(axis=0, keepdims=True)
+                vel_std = unit_vel.std(axis=0, keepdims=True) + 1e-6
+                normalized_vel = (unit_vel - vel_mean) / vel_std
+                features_list.append(normalized_vel.reshape(T, -1))
 
         enhanced_features = np.concatenate(features_list, axis=1)
         return enhanced_features.astype(np.float32)

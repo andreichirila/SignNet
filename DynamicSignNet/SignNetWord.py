@@ -1022,15 +1022,18 @@ class GracefulShutdown:
 
 
 def train_epoch_interruptible(model, train_loader, optimizer, criterion, device, epoch):
-    """Training with multi-task learning and handedness metrics."""
+    """Training with multi-task learning and top-k accuracy metrics."""
     model.train()
 
     total_loss = 0.0
     total_sign_loss = 0.0
     total_hand_loss = 0.0
-    sign_acc = 0.0
+
+    # Track top-k accuracies
+    topk_correct = {k: 0.0 for k in [1, 2, 3, 4, 5]}
     hand_acc = 0.0
     num_batches = 0
+    total_samples = 0
 
     pbar = tqdm(train_loader, desc=f"[Epoch {epoch+1}] Train", leave=False)
 
@@ -1055,15 +1058,18 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        # Track metrics
+        # Track losses
+        batch_size = sign_labels.size(0)
         total_loss += total_loss_batch.item()
         total_sign_loss += loss_sign.item()
         total_hand_loss += loss_hand.item()
 
-        # Sign accuracy
-        sign_preds = torch.argmax(sign_logits, dim=1)
-        sign_batch_acc = (sign_preds == sign_labels).float().mean().item()
-        sign_acc += sign_batch_acc
+        # Compute top-k accuracies
+        topk_batch_accs = compute_topk_accuracy(sign_logits, sign_labels, k_values=[1, 2, 3, 4, 5])
+        for k, acc in topk_batch_accs.items():
+            topk_correct[k] += acc * batch_size
+
+        total_samples += batch_size
 
         # Handedness accuracy
         hand_preds = torch.argmax(handedness_logits, dim=1)
@@ -1074,17 +1080,21 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
 
         pbar.set_postfix({
             'Loss': f'{total_loss/num_batches:.4f}',
-            'SignAcc': f'{sign_acc/num_batches:.4f}',
-            'HandAcc': f'{hand_acc/num_batches:.4f}'
+            'Top1': f'{topk_correct[1]/total_samples:.4f}',
+            'Top5': f'{topk_correct[5]/total_samples:.4f}',
+            'Hand': f'{hand_acc/num_batches:.4f}'
         })
 
+    # Compute averages
     avg_loss = total_loss / num_batches
     avg_sign_loss = total_sign_loss / num_batches
     avg_hand_loss = total_hand_loss / num_batches
-    avg_sign_acc = sign_acc / num_batches
     avg_hand_acc = hand_acc / num_batches
 
-    return avg_loss, avg_sign_acc, avg_hand_acc, avg_sign_loss, avg_hand_loss
+    # Average top-k accuracies
+    avg_topk_accs = {k: correct / total_samples for k, correct in topk_correct.items()}
+
+    return avg_loss, avg_topk_accs, avg_hand_acc, avg_sign_loss, avg_hand_loss
 
 
 def evaluate_interruptible(model, val_loader, criterion, device, epoch,
@@ -1128,13 +1138,16 @@ def evaluate_interruptible(model, val_loader, criterion, device, epoch,
     return avg_loss, accuracy, False
 
 def validate_epoch(model, val_loader, criterion, device, idx_to_word):
-    """Validation with confusion matrix and per-class metrics."""
+    """Validation with top-k accuracy, confusion matrix and per-class metrics."""
     model.eval()
 
-    sign_acc = 0.0
-    hand_acc = 0.0
     total_loss = 0.0
+
+    # Track top-k accuracies
+    topk_correct = {k: 0.0 for k in [1, 2, 3, 4, 5]}
+    hand_acc = 0.0
     num_batches = 0
+    total_samples = 0
 
     handedness_distribution = {"LEFT": 0, "RIGHT": 0, "BOTH": 0, "NONE": 0}
 
@@ -1159,10 +1172,18 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
             )
             total_loss += total_loss_batch.item()
 
-            sign_preds = torch.argmax(sign_logits, dim=1)
-            sign_batch_acc = (sign_preds == sign_labels).float().mean().item()
-            sign_acc += sign_batch_acc
+            # Compute top-k accuracies
+            batch_size = sign_labels.size(0)
+            topk_batch_accs = compute_topk_accuracy(sign_logits, sign_labels, k_values=[1, 2, 3, 4, 5])
+            for k, acc in topk_batch_accs.items():
+                topk_correct[k] += acc * batch_size
 
+            total_samples += batch_size
+
+            # Top-1 predictions for confusion matrix
+            sign_preds = torch.argmax(sign_logits, dim=1)
+
+            # Handedness accuracy
             hand_preds = torch.argmax(handedness_logits, dim=1)
             hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
             hand_acc += hand_batch_acc
@@ -1176,11 +1197,16 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
             all_labels.extend(sign_labels.cpu().numpy())
 
             num_batches += 1
-            pbar.set_postfix({'SignAcc': f'{sign_acc/num_batches:.4f}'})
+            pbar.set_postfix({
+                'Top1': f'{topk_correct[1]/total_samples:.4f}',
+                'Top5': f'{topk_correct[5]/total_samples:.4f}'
+            })
 
     avg_loss = total_loss / num_batches
-    avg_sign_acc = sign_acc / num_batches
     avg_hand_acc = hand_acc / num_batches
+
+    # Average top-k accuracies
+    avg_topk_accs = {k: correct / total_samples for k, correct in topk_correct.items()}
 
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
@@ -1225,7 +1251,7 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
         'recall_macro': float(recall_macro)
     }
 
-    return avg_loss, avg_sign_acc, avg_hand_acc, handedness_distribution, \
+    return avg_loss, avg_topk_accs, avg_hand_acc, handedness_distribution, \
            confusion_mat, class_metrics, all_preds, all_labels
 
 def plot_confusion_matrix(confusion_mat, idx_to_word, save_path, top_n=50):
@@ -1271,6 +1297,48 @@ def plot_confusion_matrix(confusion_mat, idx_to_word, save_path, top_n=50):
     plt.close()
 
     return save_path
+
+def compute_topk_accuracy(logits, labels, k_values=[1, 2, 3, 4, 5]):
+    """
+    Compute top-k accuracy for multiple k values.
+
+    Args:
+        logits: (batch_size, num_classes) model predictions
+        labels: (batch_size,) ground truth labels
+        k_values: List of k values to compute accuracy for
+
+    Returns:
+        dict: {k: accuracy} for each k in k_values
+    """
+    batch_size = labels.size(0)
+    num_classes = logits.size(1)
+
+    # Get top-k predictions
+    max_k = max(k_values)
+    max_k = min(max_k, num_classes)  # Handle case where k > num_classes
+
+    # Get top-k predicted class indices
+    _, topk_pred = logits.topk(max_k, dim=1, largest=True, sorted=True)
+
+    # Expand labels to match topk_pred shape
+    labels_expanded = labels.view(-1, 1).expand_as(topk_pred)
+
+    # Check if correct label is in top-k predictions
+    correct = topk_pred.eq(labels_expanded)
+
+    # Compute accuracy for each k
+    topk_accs = {}
+    for k in k_values:
+        if k > num_classes:
+            k = num_classes
+
+        # Check if correct label is in top-k
+        correct_k = correct[:, :k].sum(dim=1).float()  # 1 if correct, 0 otherwise
+        topk_acc = correct_k.sum() / batch_size
+        topk_accs[k] = topk_acc.item()
+
+    return topk_accs
+
 
 def log_class_metrics_to_mlflow(class_metrics, epoch):
     """Log per-class metrics to MLflow."""
@@ -1636,14 +1704,14 @@ def main():
                 if shutdown_handler.is_interrupted():
                     break
 
-                train_loss, train_sign_acc, train_hand_acc, train_sign_loss, train_hand_loss = train_epoch_interruptible(
+                train_loss, train_topk_accs, train_hand_acc, train_sign_loss, train_hand_loss = train_epoch_interruptible(
                     model, train_loader, optimizer, criterion, DEVICE, epoch
                 )
 
                 if shutdown_handler.is_interrupted():
                     break
 
-                val_loss, val_sign_acc, val_hand_acc, handedness_dist, confusion_mat, class_metrics, all_preds, all_labels = validate_epoch(
+                val_loss, val_topk_accs, val_hand_acc, handedness_dist, confusion_mat, class_metrics, all_preds, all_labels = validate_epoch(
                     model, val_loader, criterion, DEVICE, base_dataset.idx_to_word
                 )
 
@@ -1653,32 +1721,47 @@ def main():
                 scheduler.step()
                 epochs_trained += 1
 
-                if val_sign_acc > best_val_acc:
-                    best_val_acc = val_sign_acc
+                # Update best model based on top-1 accuracy
+                if val_topk_accs[1] > best_val_acc:
+                    best_val_acc = val_topk_accs[1]
                     best_epoch = epoch
                     best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_balanced.pth")
                     torch.save(model.state_dict(), best_model_path)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
-                train_accs.append(train_sign_acc)
-                val_accs.append(val_sign_acc)
+                train_accs.append(train_topk_accs[1])  # Store top-1 for plotting
+                val_accs.append(val_topk_accs[1])
 
                 lr = optimizer.param_groups[0]['lr']
-                print(f"Epoch {epoch+1:4}/{NUM_EPOCHS} │ "
-                      f"Train Loss: {train_loss:.4f} │ Train Acc: {train_sign_acc:.2%} │ "
-                      f"Val Loss: {val_loss:.4f} │ Val Acc: {val_sign_acc:.2%} │ "
-                      f"LR: {lr:.2e}")
 
+                # Enhanced printing with top-k metrics
+                print(f"Epoch {epoch+1:4}/{NUM_EPOCHS} │ "
+                    f"Loss: {train_loss:.4f}/{val_loss:.4f} │ "
+                    f"Top1: {train_topk_accs[1]:.2%}/{val_topk_accs[1]:.2%} │ "
+                    f"Top5: {train_topk_accs[5]:.2%}/{val_topk_accs[5]:.2%} │ "
+                    f"LR: {lr:.2e}")
+
+                # Log all top-k metrics to MLflow
                 mlflow.log_metrics({
                     "train_loss": train_loss,
                     "val_loss": val_loss,
-                    "train_accuracy": train_sign_acc,
-                    "val_accuracy": val_sign_acc,
+                    "train_top1_accuracy": train_topk_accs[1],
+                    "train_top2_accuracy": train_topk_accs[2],
+                    "train_top3_accuracy": train_topk_accs[3],
+                    "train_top4_accuracy": train_topk_accs[4],
+                    "train_top5_accuracy": train_topk_accs[5],
+                    "val_top1_accuracy": val_topk_accs[1],
+                    "val_top2_accuracy": val_topk_accs[2],
+                    "val_top3_accuracy": val_topk_accs[3],
+                    "val_top4_accuracy": val_topk_accs[4],
+                    "val_top5_accuracy": val_topk_accs[5],
+                    "train_hand_accuracy": train_hand_acc,
+                    "val_hand_accuracy": val_hand_acc,
                     "learning_rate": lr,
                 }, step=epoch)
 
-                if early_stopping(val_sign_acc, epoch):
+                if early_stopping(val_topk_accs[1], epoch):
                     print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
                     break
 
@@ -1703,10 +1786,10 @@ def main():
                 mlflow.log_artifact(plot_path)
 
             asyncio.run(send_message(
-                f"Training complete (BALANCED):\\n"
-                f"Best Val Acc: {best_val_acc:.2%}\\n"
-                f"Classes: {num_classes}\\n"
-                f"Min samples: {MIN_SAMPLES_PER_CLASS}\\n"
+                f"Training complete (BALANCED):\n"
+                f"Best Val Acc: {best_val_acc:.2%}\n"
+                f"Classes: {num_classes}\n"
+                f"Min samples: {MIN_SAMPLES_PER_CLASS}\n"
                 f"Epochs: {epochs_trained}",
                 CHAT_ID
             ))

@@ -795,7 +795,7 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
     num_batches = 0
     total_samples = 0
 
-    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
+    scaler = amp.GradScaler(enabled=(device.type == "cuda"))
     pbar = tqdm(train_loader, desc=f"[Epoch {epoch+1}] Train", leave=False)
 
     for batch in pbar:

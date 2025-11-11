@@ -3,6 +3,7 @@ os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch import amp
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 import numpy as np
 from pathlib import Path
@@ -805,7 +806,7 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
         lengths = lengths.to(device)
 
         optimizer.zero_grad(set_to_none=True)
-        with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+        with amp.autocast(device_type='cuda', enabled=(device.type == "cuda")):
             sign_logits, handedness_logits = model(landmarks, lengths)
             total_loss_batch, loss_sign, loss_hand = criterion(
                 sign_logits, handedness_logits, sign_labels, handedness_labels

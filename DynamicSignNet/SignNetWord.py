@@ -1112,14 +1112,14 @@ def main():
 
     # FEATURE ENGINEERING SETTINGS (NEW)
     USE_ENHANCED_FEATURES = True  # Toggle feature engineering
-    INCLUDE_ACCELERATION = False  # Toggle acceleration features
+    INCLUDE_ACCELERATION = True  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True
     if USE_BALANCED_SOFTMAX:
         USE_WEIGHTED_SAMPLER = False
         USE_CLASS_WEIGHTS = False
     INCLUDE_BONES = True                 # NEW
-    INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
+    INCLUDE_BONE_VELOCITY = True        # NEW (turn on later if memory allows)
 
     number_of_classes = 150
 
@@ -1377,7 +1377,7 @@ def main():
             )
 
             early_stopping = EarlyStopping(
-                patience=15,
+                patience=35,
                 min_delta=0.0005,
                 metric="val_acc",
                 mode="max"

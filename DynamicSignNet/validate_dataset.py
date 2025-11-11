@@ -3,13 +3,7 @@
 Dataset Validation and Anomaly Detection Script
 For Sign Language Translation Dataset
 
-This script performs comprehensive validation checks on your preprocessed
-landmark dataset to ensure data quality and detect processing errors.
-
-Usage:
-    python validate_dataset.py --landmarks_dir ./landmarks_train \
-                               --vocab_file vocab.json \
-                               --output validation_report.json
+Enhanced with comprehensive distribution plotting.
 """
 
 import os
@@ -18,6 +12,8 @@ import numpy as np
 import json
 from collections import Counter, defaultdict
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 
 class DatasetValidator:
@@ -45,6 +41,8 @@ class DatasetValidator:
             'landmark_ranges': [],
             'gloss_distribution': Counter(),
             'sequence_gloss_ratio': [],
+            'gloss_frame_stats': defaultdict(list),
+            'frames_per_gloss_all': [],
         }
 
     def _load_vocab(self):
@@ -65,7 +63,6 @@ class DatasetValidator:
         print(f"Total samples: {len(self.samples)}")
         print("="*70)
 
-        # Run checks
         self._check_file_integrity()
         self._check_data_structure()
         self._check_landmark_validity()
@@ -74,7 +71,6 @@ class DatasetValidator:
         self._check_statistical_outliers()
         self._check_duplicate_sequences()
 
-        # Print summary
         self._print_summary()
 
         return self.anomalies, self.stats
@@ -87,7 +83,6 @@ class DatasetValidator:
         for sample_path in tqdm(self.samples, desc="Loading files"):
             try:
                 data = np.load(sample_path, allow_pickle=True)
-                # Check required keys
                 if 'landmarks' not in data or 'glosses' not in data:
                     self.anomalies['critical'].append({
                         'type': 'missing_keys',
@@ -111,7 +106,7 @@ class DatasetValidator:
         """Verify data structure consistency"""
         print("\n[2/7] Checking data structure...")
 
-        expected_feature_dim = 1659  # 553 landmarks * 3 coordinates
+        expected_feature_dim = 1659
 
         for sample_path in tqdm(self.samples, desc="Validating structure"):
             try:
@@ -119,7 +114,6 @@ class DatasetValidator:
                 landmarks = data['landmarks']
                 glosses = data['glosses']
 
-                # Check landmark dimensions
                 if landmarks.ndim != 2:
                     self.anomalies['critical'].append({
                         'type': 'invalid_landmark_dims',
@@ -129,7 +123,6 @@ class DatasetValidator:
                         'shape': landmarks.shape
                     })
 
-                # Check feature dimension
                 if landmarks.shape[1] != expected_feature_dim:
                     self.anomalies['warning'].append({
                         'type': 'unexpected_feature_dim',
@@ -138,7 +131,6 @@ class DatasetValidator:
                         'actual': landmarks.shape[1]
                     })
 
-                # Check gloss structure
                 if not isinstance(glosses, (list, np.ndarray)):
                     self.anomalies['critical'].append({
                         'type': 'invalid_gloss_type',
@@ -146,7 +138,6 @@ class DatasetValidator:
                         'type_found': type(glosses).__name__
                     })
 
-                # Store stats
                 self.stats['total_frames'] += landmarks.shape[0]
                 self.stats['total_glosses'] += len(glosses)
                 self.stats['sequence_lengths'].append(landmarks.shape[0])
@@ -174,7 +165,6 @@ class DatasetValidator:
                 data = np.load(sample_path, allow_pickle=True)
                 landmarks = data['landmarks'].astype(np.float32)
 
-                # Check for NaN
                 if np.isnan(landmarks).any():
                     nan_count = np.isnan(landmarks).sum()
                     self.anomalies['critical'].append({
@@ -185,7 +175,6 @@ class DatasetValidator:
                     })
                     invalid_count += 1
 
-                # Check for Inf
                 if np.isinf(landmarks).any():
                     inf_count = np.isinf(landmarks).sum()
                     self.anomalies['critical'].append({
@@ -196,7 +185,6 @@ class DatasetValidator:
                     })
                     invalid_count += 1
 
-                # Check for extreme values
                 min_val, max_val = landmarks.min(), landmarks.max()
                 self.stats['landmark_ranges'].append((min_val, max_val))
 
@@ -208,7 +196,6 @@ class DatasetValidator:
                         'max': float(max_val)
                     })
 
-                # Check for all-zero frames
                 zero_frames = np.all(landmarks == 0, axis=1)
                 if zero_frames.any():
                     zero_count = zero_frames.sum()
@@ -234,7 +221,7 @@ class DatasetValidator:
 
     def _check_gloss_sequence_alignment(self):
         """Check if glosses align properly with landmark sequences"""
-        print("\n[4/7] Checking gloss-sequence alignment...")
+        print("\n[4/7] Checking gloss-sequence alignment and collecting per-gloss stats...")
 
         misaligned_count = 0
 
@@ -247,11 +234,17 @@ class DatasetValidator:
                 num_frames = landmarks.shape[0]
                 num_glosses = len(glosses)
 
-                # Calculate ratio
                 ratio = num_frames / num_glosses if num_glosses > 0 else 0
                 self.stats['sequence_gloss_ratio'].append(ratio)
 
-                # Check for empty sequences
+                if num_glosses > 0:
+                    avg_frames_per_gloss = num_frames / num_glosses
+                    self.stats['frames_per_gloss_all'].append(avg_frames_per_gloss)
+
+                    for gloss in glosses:
+                        gloss_str = str(gloss)
+                        self.stats['gloss_frame_stats'][gloss_str].append(avg_frames_per_gloss)
+
                 if num_frames == 0:
                     self.anomalies['critical'].append({
                         'type': 'empty_landmark_sequence',
@@ -266,7 +259,6 @@ class DatasetValidator:
                     })
                     misaligned_count += 1
 
-                # Check for suspicious ratios
                 if ratio > 0:
                     if ratio < 5:
                         self.anomalies['warning'].append({
@@ -322,11 +314,8 @@ class DatasetValidator:
 
                 for gloss in glosses:
                     gloss_str = str(gloss)
-
-                    # Update distribution
                     self.stats['gloss_distribution'][gloss_str] += 1
 
-                    # Check if gloss exists in vocabulary
                     if gloss_str not in self.vocab:
                         unknown_glosses.add(gloss_str)
                         self.anomalies['warning'].append({
@@ -335,7 +324,6 @@ class DatasetValidator:
                             'gloss': gloss_str
                         })
                     else:
-                        # Check if gloss ID is within valid range
                         gloss_id = self.vocab[gloss_str]
                         if gloss_id < 0 or gloss_id >= vocab_size:
                             out_of_range_glosses.append((gloss_str, gloss_id))
@@ -379,7 +367,6 @@ class DatasetValidator:
         print(f"  Sequence lengths: mean={seq_mean:.1f}, std={seq_std:.1f}")
         print(f"  Gloss counts: mean={gloss_mean:.1f}, std={gloss_std:.1f}")
 
-        # Find outliers (> 3 std)
         seq_outliers = np.abs(seq_lengths - seq_mean) > 3 * seq_std
         gloss_outliers = np.abs(gloss_counts - gloss_mean) > 3 * gloss_std
 
@@ -434,8 +421,167 @@ class DatasetValidator:
         else:
             print("  ✓ No duplicates detected")
 
+    def plot_distributions(self, output_dir="./plots"):
+        """Generate comprehensive distribution plots"""
+        os.makedirs(output_dir, exist_ok=True)
+
+        print("\n" + "="*70)
+        print("GENERATING DISTRIBUTION PLOTS")
+        print("="*70)
+        print(f"Output directory: {output_dir}/\n")
+
+        # Set style
+        plt.style.use('seaborn-v0_8-darkgrid')
+        sns.set_palette("husl")
+
+        # 1. Top 30 gloss frequency bar chart
+        plt.figure(figsize=(16, 8))
+        top_glosses = dict(self.stats['gloss_distribution'].most_common(30))
+        bars = plt.bar(range(len(top_glosses)), list(top_glosses.values()),
+                       color='steelblue', edgecolor='black', linewidth=0.7)
+        plt.xticks(range(len(top_glosses)), list(top_glosses.keys()),
+                   rotation=45, ha='right', fontsize=10)
+        plt.xlabel('Gloss', fontsize=13, fontweight='bold')
+        plt.ylabel('Frequency', fontsize=13, fontweight='bold')
+        plt.title('Top 30 Most Frequent Glosses', fontsize=15, fontweight='bold', pad=20)
+        plt.grid(axis='y', alpha=0.3, linestyle='--')
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/gloss_frequency_top30.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Saved: gloss_frequency_top30.png")
+
+        # 2. Full gloss frequency (log scale)
+        plt.figure(figsize=(14, 7))
+        frequencies = sorted(self.stats['gloss_distribution'].values(), reverse=True)
+        plt.plot(range(len(frequencies)), frequencies, linewidth=2.5,
+                color='darkblue', marker='o', markersize=3, alpha=0.7)
+        plt.yscale('log')
+        plt.xlabel('Gloss Rank', fontsize=13, fontweight='bold')
+        plt.ylabel('Frequency (log scale)', fontsize=13, fontweight='bold')
+        plt.title('Gloss Frequency Distribution - Zipf\'s Law',
+                 fontsize=15, fontweight='bold', pad=20)
+        plt.grid(True, alpha=0.4, linestyle='--')
+        plt.tight_layout()
+        plt.savefig(f"{output_dir}/gloss_frequency_all_log.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        print("  ✓ Saved: gloss_frequency_all_log.png")
+
+        # 3. Frames per gloss histogram
+        if self.stats['frames_per_gloss_all']:
+            plt.figure(figsize=(14, 7))
+            fpg = np.array(self.stats['frames_per_gloss_all'])
+            n, bins, patches = plt.hist(fpg, bins=60, color='forestgreen',
+                                       alpha=0.75, edgecolor='black', linewidth=0.8)
+            plt.axvline(fpg.mean(), color='red', linestyle='--', linewidth=2.5,
+                       label=f'Mean: {fpg.mean():.2f}', alpha=0.8)
+            plt.axvline(np.median(fpg), color='orange', linestyle='--', linewidth=2.5,
+                       label=f'Median: {np.median(fpg):.2f}', alpha=0.8)
+            plt.xlabel('Frames per Gloss', fontsize=13, fontweight='bold')
+            plt.ylabel('Frequency', fontsize=13, fontweight='bold')
+            plt.title('Distribution of Frames per Gloss', fontsize=15, fontweight='bold', pad=20)
+            plt.legend(fontsize=12, loc='upper right')
+            plt.grid(axis='y', alpha=0.3, linestyle='--')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/frames_per_gloss_histogram.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            print("  ✓ Saved: frames_per_gloss_histogram.png")
+
+        # 4. Average frames per top 30 glosses
+        plt.figure(figsize=(16, 8))
+        top_glosses_list = [g for g, c in self.stats['gloss_distribution'].most_common(30)]
+        avg_frames = [np.mean(self.stats['gloss_frame_stats'][g])
+                     for g in top_glosses_list if g in self.stats['gloss_frame_stats']]
+
+        if avg_frames:
+            colors = plt.cm.viridis(np.linspace(0.2, 0.9, len(avg_frames)))
+            bars = plt.bar(range(len(avg_frames)), avg_frames, color=colors,
+                          edgecolor='black', linewidth=0.7)
+            plt.xticks(range(len(top_glosses_list[:len(avg_frames)])),
+                      top_glosses_list[:len(avg_frames)], rotation=45, ha='right', fontsize=10)
+            plt.xlabel('Gloss', fontsize=13, fontweight='bold')
+            plt.ylabel('Average Frames', fontsize=13, fontweight='bold')
+            plt.title('Average Frame Duration per Gloss (Top 30)',
+                     fontsize=15, fontweight='bold', pad=20)
+            plt.grid(axis='y', alpha=0.3, linestyle='--')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/avg_frames_per_gloss_top30.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            print("  ✓ Saved: avg_frames_per_gloss_top30.png")
+
+        # 5. Sequence length distribution
+        if self.stats['sequence_lengths']:
+            plt.figure(figsize=(14, 7))
+            n, bins, patches = plt.hist(self.stats['sequence_lengths'], bins=60,
+                                       color='coral', alpha=0.75, edgecolor='black', linewidth=0.8)
+            mean_len = np.mean(self.stats['sequence_lengths'])
+            median_len = np.median(self.stats['sequence_lengths'])
+            plt.axvline(mean_len, color='red', linestyle='--', linewidth=2.5,
+                       label=f'Mean: {mean_len:.1f}', alpha=0.8)
+            plt.axvline(median_len, color='orange', linestyle='--', linewidth=2.5,
+                       label=f'Median: {median_len:.1f}', alpha=0.8)
+            plt.xlabel('Sequence Length (frames)', fontsize=13, fontweight='bold')
+            plt.ylabel('Frequency', fontsize=13, fontweight='bold')
+            plt.title('Distribution of Sequence Lengths', fontsize=15, fontweight='bold', pad=20)
+            plt.legend(fontsize=12, loc='upper right')
+            plt.grid(axis='y', alpha=0.3, linestyle='--')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/sequence_length_distribution.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            print("  ✓ Saved: sequence_length_distribution.png")
+
+        # 6. Gloss count per sequence
+        if self.stats['gloss_counts']:
+            plt.figure(figsize=(14, 7))
+            n, bins, patches = plt.hist(self.stats['gloss_counts'], bins=40,
+                                       color='mediumpurple', alpha=0.75,
+                                       edgecolor='black', linewidth=0.8)
+            mean_gc = np.mean(self.stats['gloss_counts'])
+            median_gc = np.median(self.stats['gloss_counts'])
+            plt.axvline(mean_gc, color='red', linestyle='--', linewidth=2.5,
+                       label=f'Mean: {mean_gc:.1f}', alpha=0.8)
+            plt.axvline(median_gc, color='orange', linestyle='--', linewidth=2.5,
+                       label=f'Median: {median_gc:.1f}', alpha=0.8)
+            plt.xlabel('Glosses per Sequence', fontsize=13, fontweight='bold')
+            plt.ylabel('Frequency', fontsize=13, fontweight='bold')
+            plt.title('Distribution of Gloss Count per Sequence',
+                     fontsize=15, fontweight='bold', pad=20)
+            plt.legend(fontsize=12, loc='upper right')
+            plt.grid(axis='y', alpha=0.3, linestyle='--')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/gloss_count_distribution.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            print("  ✓ Saved: gloss_count_distribution.png")
+
+        # 7. Frequency vs Duration scatter
+        gloss_freq_vs_frames = []
+        for gloss in self.stats['gloss_frame_stats'].keys():
+            freq = self.stats['gloss_distribution'][gloss]
+            avg_frames = np.mean(self.stats['gloss_frame_stats'][gloss])
+            gloss_freq_vs_frames.append((freq, avg_frames))
+
+        if gloss_freq_vs_frames:
+            plt.figure(figsize=(14, 8))
+            freqs, avg_frames_list = zip(*gloss_freq_vs_frames)
+            scatter = plt.scatter(freqs, avg_frames_list, alpha=0.6, s=60,
+                                c=np.log1p(freqs), cmap='viridis',
+                                edgecolors='black', linewidth=0.5)
+            plt.colorbar(scatter, label='log(Frequency + 1)')
+            plt.xscale('log')
+            plt.xlabel('Gloss Frequency (log scale)', fontsize=13, fontweight='bold')
+            plt.ylabel('Average Frames per Gloss', fontsize=13, fontweight='bold')
+            plt.title('Gloss Frequency vs Average Duration',
+                     fontsize=15, fontweight='bold', pad=20)
+            plt.grid(True, alpha=0.3, linestyle='--')
+            plt.tight_layout()
+            plt.savefig(f"{output_dir}/frequency_vs_duration_scatter.png", dpi=300, bbox_inches='tight')
+            plt.close()
+            print("  ✓ Saved: frequency_vs_duration_scatter.png")
+
+        print(f"\n✓ All {7} plots saved to {output_dir}/")
+        print("="*70)
+
     def _print_summary(self):
-        """Print summary"""
+        """Print validation summary"""
         print("\n" + "="*70)
         print("VALIDATION SUMMARY")
         print("="*70)
@@ -469,19 +615,66 @@ class DatasetValidator:
             print(f"  Mean: {np.mean(self.stats['gloss_counts']):.1f}")
             print(f"  Median: {np.median(self.stats['gloss_counts']):.1f}")
 
-            if self.stats['sequence_gloss_ratio']:
-                avg = np.mean(self.stats['sequence_gloss_ratio'])
-                print(f"\nAvg frames per gloss: {avg:.2f}")
+            if self.stats['frames_per_gloss_all']:
+                fpg = np.array(self.stats['frames_per_gloss_all'])
+                print(f"\nFrames per gloss (global):")
+                print(f"  Min: {fpg.min():.2f}")
+                print(f"  Max: {fpg.max():.2f}")
+                print(f"  Mean: {fpg.mean():.2f}")
+                print(f"  Median: {np.median(fpg):.2f}")
+                print(f"  Std: {fpg.std():.2f}")
 
         if self.stats['gloss_distribution']:
-            print("\nTop 10 glosses:")
-            for i, (g, c) in enumerate(self.stats['gloss_distribution'].most_common(10), 1):
-                print(f"  {i:2d}. {g:<20} {c:>6,}")
+            print("\n" + "="*70)
+            print("GLOSS STATISTICS")
+            print("="*70)
+            print(f"Unique glosses: {len(self.stats['gloss_distribution'])}")
+
+            print("\nTop 10 most frequent glosses:")
+            print(f"{'Rank':<6} {'Gloss':<30} {'Count':<10} {'Avg Frames':<12}")
+            print("-" * 68)
+            for i, (gloss, count) in enumerate(self.stats['gloss_distribution'].most_common(10), 1):
+                if gloss in self.stats['gloss_frame_stats']:
+                    avg_frames = np.mean(self.stats['gloss_frame_stats'][gloss])
+                    print(f"{i:<6} {gloss:<30} {count:>6,}     {avg_frames:>8.2f}")
+                else:
+                    print(f"{i:<6} {gloss:<30} {count:>6,}     {'N/A':>8}")
+
+            print("\nGlosses with unusual average frame counts:")
+            gloss_avg_frames = {}
+            for gloss, frame_list in self.stats['gloss_frame_stats'].items():
+                if len(frame_list) >= 3:
+                    gloss_avg_frames[gloss] = np.mean(frame_list)
+
+            if gloss_avg_frames:
+                sorted_by_frames = sorted(gloss_avg_frames.items(), key=lambda x: x[1])
+
+                print("\n  Shortest duration (top 5):")
+                for gloss, avg_frames in sorted_by_frames[:5]:
+                    count = self.stats['gloss_distribution'][gloss]
+                    print(f"    {gloss:<30} {avg_frames:>8.2f} frames (n={count})")
+
+                print("\n  Longest duration (top 5):")
+                for gloss, avg_frames in sorted_by_frames[-5:]:
+                    count = self.stats['gloss_distribution'][gloss]
+                    print(f"    {gloss:<30} {avg_frames:>8.2f} frames (n={count})")
 
         print("\n" + "="*70)
 
     def save_report(self, output_file="validation_report.json"):
-        """Save report to JSON"""
+        """Save validation report to JSON"""
+
+        gloss_stats = {}
+        for gloss, frame_list in self.stats['gloss_frame_stats'].items():
+            if frame_list:
+                gloss_stats[gloss] = {
+                    'count': self.stats['gloss_distribution'][gloss],
+                    'avg_frames': float(np.mean(frame_list)),
+                    'min_frames': float(np.min(frame_list)),
+                    'max_frames': float(np.max(frame_list)),
+                    'std_frames': float(np.std(frame_list))
+                }
+
         report = {
             'anomalies': self.anomalies,
             'statistics': {
@@ -500,7 +693,16 @@ class DatasetValidator:
                     'mean': float(np.mean(self.stats['gloss_counts'])) if self.stats['gloss_counts'] else 0,
                     'median': float(np.median(self.stats['gloss_counts'])) if self.stats['gloss_counts'] else 0,
                 },
-                'top_glosses': dict(self.stats['gloss_distribution'].most_common(50))
+                'frames_per_gloss_stats': {
+                    'min': float(np.min(self.stats['frames_per_gloss_all'])) if self.stats['frames_per_gloss_all'] else 0,
+                    'max': float(np.max(self.stats['frames_per_gloss_all'])) if self.stats['frames_per_gloss_all'] else 0,
+                    'mean': float(np.mean(self.stats['frames_per_gloss_all'])) if self.stats['frames_per_gloss_all'] else 0,
+                    'median': float(np.median(self.stats['frames_per_gloss_all'])) if self.stats['frames_per_gloss_all'] else 0,
+                    'std': float(np.std(self.stats['frames_per_gloss_all'])) if self.stats['frames_per_gloss_all'] else 0,
+                },
+                'unique_glosses': len(self.stats['gloss_distribution']),
+                'top_glosses': dict(self.stats['gloss_distribution'].most_common(50)),
+                'per_gloss_stats': gloss_stats
             }
         }
 
@@ -513,16 +715,22 @@ class DatasetValidator:
 def main():
     import argparse
 
-    parser = argparse.ArgumentParser(description='Validate dataset')
+    parser = argparse.ArgumentParser(description='Validate dataset and generate plots')
     parser.add_argument('--landmarks_dir', required=True, help='Landmarks directory')
     parser.add_argument('--vocab_file', default=None, help='Vocabulary file')
-    parser.add_argument('--output', default='validation_report.json', help='Output file')
+    parser.add_argument('--output', default='validation_report.json', help='Output JSON file')
+    parser.add_argument('--plots', default='./plots', help='Output directory for plots')
+    parser.add_argument('--no-plots', action='store_true', help='Skip plot generation')
 
     args = parser.parse_args()
 
     validator = DatasetValidator(args.landmarks_dir, args.vocab_file)
     validator.validate_all()
     validator.save_report(args.output)
+
+    # Generate plots unless disabled
+    if not args.no_plots:
+        validator.plot_distributions(args.plots)
 
     if validator.anomalies['critical']:
         print("\n⚠️  CRITICAL ISSUES FOUND!")

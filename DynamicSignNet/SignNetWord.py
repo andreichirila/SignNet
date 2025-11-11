@@ -10,6 +10,7 @@ from collections import Counter
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, classification_report, f1_score, precision_score, recall_score
+from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
 import seaborn as sns
 import mlflow
 import mlflow.pytorch
@@ -106,6 +107,36 @@ class EnhancedLandmarkFeatures:
         return speed
 
     @staticmethod
+    def _default_edges(num_landmarks):
+        """
+        Return edge list for bone vectors.
+        For hands, use MediaPipe kinematic chains; for pose, a simple shoulder→elbow→wrist chain etc.
+        Fallback: connect consecutive indices if structure is unknown.
+        """
+        edges = []
+        # Example: simple chains (customize if you have exact index maps)
+        # Left hand (501..521): 0→1→2→3→4 across each finger, etc.
+        # Right hand (522..542): same idea.
+        # Pose (0..32): use a few major limbs to keep dimensionality modest.
+        # If unknown layout, connect (i -> i+1)
+        for i in range(num_landmarks - 1):
+            edges.append((i, i + 1))
+        return edges
+
+    @staticmethod
+    def compute_bones(landmarks_3d):
+        """
+        Compute bone vectors for each frame given edges: v = joint_child - joint_parent.
+        Returns: (T, num_edges, 3)
+        """
+        T, L, _ = landmarks_3d.shape
+        edges = EnhancedLandmarkFeatures._default_edges(L)
+        parent = np.array([p for p, c in edges], dtype=np.int64)
+        child  = np.array([c for p, c in edges], dtype=np.int64)
+        bones = landmarks_3d[:, child, :] - landmarks_3d[:, parent, :]
+        return bones
+
+    @staticmethod
     def extract_all_features(landmarks_flat, fps=25, include_accel=True):
         """Extract all engineered features"""
         landmarks_3d = EnhancedLandmarkFeatures.reshape_landmarks(landmarks_flat)
@@ -134,6 +165,14 @@ class EnhancedLandmarkFeatures:
 
         if include_accel:
             features_list.insert(2, accel_flat)
+
+        if include_bones:
+            bones = EnhancedLandmarkFeatures.compute_bones(landmarks_3d)              # (T, E, 3)
+            bones_flat = bones.reshape(T, -1)
+            features_list.append(bones_flat)
+            if include_bone_velocity:
+                bone_vel = EnhancedLandmarkFeatures.compute_velocity(bones, fps)     # (T, E, 3)
+                features_list.append(bone_vel.reshape(T, -1))
 
         enhanced_features = np.concatenate(features_list, axis=1)
         return enhanced_features.astype(np.float32)
@@ -286,7 +325,8 @@ class SignLanguageDataset(Dataset):
     NOW SUPPORTS ENHANCED FEATURES (NEW)
     """
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
-                 use_enhanced_features=False, include_accel=False):  # NEW PARAMETERS
+                 use_enhanced_features=False, include_accel=False,
+                 include_bones=True, include_bone_velocity=False):
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
@@ -294,6 +334,8 @@ class SignLanguageDataset(Dataset):
         self.augment = augment
         self.use_enhanced_features = use_enhanced_features  # NEW
         self.include_accel = include_accel  # NEW
+        self.include_bones = include_bones
+        self.include_bone_velocity = include_bone_velocity
 
         if augment:
             self.augmentation = TemporalAugmentation(prob=augment_prob)
@@ -364,14 +406,16 @@ class SignLanguageDataset(Dataset):
         # APPLY FEATURE ENGINEERING IF ENABLED (NEW)
         if self.use_enhanced_features:
             landmarks = EnhancedLandmarkFeatures.extract_all_features(
-                landmarks,
-                fps=25,
-                include_accel=self.include_accel
+                landmarks, fps=25,
+                include_accel=self.include_accel,
+                include_bones=self.include_bones,
+                include_bone_velocity=self.include_bone_velocity
             )
 
         # Apply augmentation AFTER feature engineering
         if self.augment:
             landmarks = self.augmentation(landmarks)
+
 
         # Load gloss and get label
         gloss = data["glosses"][0] if len(data["glosses"]) > 0 else "UNKNOWN"
@@ -552,25 +596,38 @@ class FocalLoss(nn.Module):
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
         return focal_loss.mean()
 
+class BalancedSoftmaxLoss(nn.Module):
+    """
+    Balanced Softmax for long-tailed classification:
+    p(y=c|x) ∝ exp(z_c + log n_c), where n_c = class frequency.
+    """
+    def __init__(self, class_counts: torch.Tensor):
+        super().__init__()
+        # class_counts is 1D tensor of size [C]
+        priors = class_counts.float().clamp_min(1.0)
+        self.log_priors = torch.log(priors / priors.sum())
+
+    def forward(self, logits, targets):
+        # Broadcast log_priors to batch; move to device
+        log_priors = self.log_priors.to(logits.device)
+        balanced_logits = logits + log_priors.unsqueeze(0)
+        return F.cross_entropy(balanced_logits, targets)
+
 
 class MultiTaskLoss(nn.Module):
     """
     Combines sign classification loss with handedness auxiliary loss.
-    NOW SUPPORTS FOCAL LOSS (NEW)
     """
-    def __init__(self, alpha=0.85, label_smoothing=0.0, use_focal=False, class_weights=None):  # NEW PARAMETERS
-        """
-        Args:
-            alpha: Weight for main task (sign classification)
-            label_smoothing: Label smoothing for cross-entropy
-            use_focal: Use Focal Loss instead of CrossEntropy (NEW)
-            class_weights: Class weights for imbalanced data (NEW)
-        """
+    def __init__(self, alpha=0.85, label_smoothing=0.0,
+                 use_focal=False, class_weights=None,
+                 use_balanced_softmax=False,  # NEW
+                 balanced_class_counts: torch.Tensor=None):  # NEW
         super().__init__()
         self.alpha = alpha
 
-        # USE FOCAL LOSS OR CROSSENTROPY (NEW)
-        if use_focal:
+        if use_balanced_softmax and balanced_class_counts is not None:
+            self.sign_loss = BalancedSoftmaxLoss(balanced_class_counts)
+        elif use_focal:
             self.sign_loss = FocalLoss(alpha=0.25, gamma=2.0, weight=class_weights)
         else:
             self.sign_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing, weight=class_weights)
@@ -998,6 +1055,9 @@ def main():
     USE_ENHANCED_FEATURES = True  # Toggle feature engineering
     INCLUDE_ACCELERATION = False  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
+    USE_BALANCED_SOFTMAX = True
+    INCLUDE_BONES = True                 # NEW
+    INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
     number_of_classes = 150
 
@@ -1043,7 +1103,9 @@ def main():
                 debug=True,
                 augment=False,
                 use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
-                include_accel=INCLUDE_ACCELERATION  # NEW
+                include_accel=INCLUDE_ACCELERATION,
+                include_bones=INCLUDE_BONES,
+                include_bone_velocity=INCLUDE_BONE_VELOCITY
             )
 
             # GET INPUT SIZE (will be larger if enhanced features enabled)
@@ -1069,7 +1131,9 @@ def main():
                 augment=AUGMENT,
                 augment_prob=AUGMENT_PROBABILITY,
                 use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
-                include_accel=INCLUDE_ACCELERATION  # NEW
+                include_accel=INCLUDE_ACCELERATION,
+                include_bones=INCLUDE_BONES,
+                include_bone_velocity=INCLUDE_BONE_VELOCITY
             )
             dataset_val = SignLanguageDataset(
                 NPZ_DIR,
@@ -1077,7 +1141,9 @@ def main():
                 debug=False,
                 augment=False,
                 use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
-                include_accel=INCLUDE_ACCELERATION  # NEW
+                include_accel=INCLUDE_ACCELERATION,
+                include_bones=INCLUDE_BONES,
+                include_bone_velocity=INCLUDE_BONE_VELOCITY
             )
 
             # STEP 2: Filter to top words
@@ -1200,7 +1266,7 @@ def main():
             # STEP 6: Build model WITH RESIDUAL ATTENTION
             print(f"\n[STEP 6] Building model with residual attention...")
 
-            model = LSTMSignClassifierWithHandedness(
+            model_raw = LSTMSignClassifierWithHandedness(
                 input_size=input_size,  # UPDATED - uses enhanced features size
                 hidden_size=HIDDEN_SIZE,
                 num_classes=num_classes,
@@ -1214,16 +1280,21 @@ def main():
 
             if hasattr(torch, 'compile'):
                 print("Compiling model with torch.compile...")
-                model = torch.compile(model, mode='max-autotune-no-cudagraphs')
+                model = torch.compile(model_raw, mode='max-autotune-no-cudagraphs')
 
             # STEP 7: Setup training WITH FOCAL LOSS
             print(f"\n[STEP 7] Setting up training...")
+            balanced_counts_vec = torch.zeros(len(top_k_words), dtype=torch.float32)
+            for cls_idx, cnt in train_class_counts.items():
+                balanced_counts_vec[cls_idx] = float(cnt)
 
             criterion = MultiTaskLoss(
                 alpha=0.85,
                 label_smoothing=0.0,
-                use_focal=USE_FOCAL_LOSS,  # NEW
-                class_weights=class_weights if USE_CLASS_WEIGHTS else None  # NEW
+                use_focal=(USE_FOCAL_LOSS and not USE_BALANCED_SOFTMAX),
+                class_weights=(class_weights if USE_CLASS_WEIGHTS and not USE_BALANCED_SOFTMAX else None),
+                use_balanced_softmax=USE_BALANCED_SOFTMAX,
+                balanced_class_counts=balanced_counts_vec.to(DEVICE)
             )
 
             optimizer = torch.optim.AdamW(
@@ -1245,6 +1316,15 @@ def main():
                 metric="val_acc",
                 mode="max"
             )
+
+            USE_SWA = True  # NEW
+            SWA_START_FRACTION = 0.7  # start SWA after 70% of epochs  # NEW
+            SWA_LR = LEARNING_RATE     # often same or slightly lower   # NEW
+
+            if USE_SWA:
+                swa_model = AveragedModel(model)
+                swa_start = max(20, int(SWA_START_FRACTION * NUM_EPOCHS))
+                swa_scheduler = SWALR(optimizer, swa_lr=SWA_LR)
 
             # STEP 8: Training loop
             print(f"\n[STEP 8] Starting training...")
@@ -1276,7 +1356,11 @@ def main():
                 if shutdown_handler.is_interrupted():
                     break
 
-                scheduler.step()
+                if USE_SWA and epoch >= swa_start:
+                    swa_model.update_parameters(model)
+                    swa_scheduler.step()
+                else:
+                    scheduler.step()
                 epochs_trained += 1
 
                 if val_topk_accs[1] > best_val_acc:
@@ -1327,11 +1411,29 @@ def main():
             print(f"  Input size: {input_size}")
             print("="*80)
 
+            if USE_SWA and epochs_trained > swa_start:
+                print("Updating BN statistics for SWA model...")
+                update_bn(train_loader, swa_model, device=DEVICE)
+                # Evaluate SWA model once
+                swa_model.eval()
+                swa_val_loss, swa_val_topk, swa_hand_acc, *_ = validate_epoch(
+                    swa_model, val_loader, criterion, DEVICE, base_dataset.idx_to_word
+                )
+                mlflow.log_metrics({
+                    "swa_val_loss": swa_val_loss,
+                    "swa_val_accuracy": swa_val_topk[1],
+                    "swa_val_top5": swa_val_topk[5]
+                }, step=epochs_trained)
+                # Save SWA model
+                swa_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_swa_enhanced.pth")
+                torch.save(swa_model.module.state_dict() if hasattr(swa_model, "module") else swa_model.state_dict(), swa_path)
+                mlflow.log_artifact(swa_path)
+
             final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final_enhanced.pth")
-            torch.save(model.state_dict(), final_model_path)
+            torch.save(model_raw.state_dict(), final_model_path)
 
             mlflow.log_artifact(final_model_path)
-            mlflow.pytorch.log_model(model, "model")
+            mlflow.pytorch.log_model(model_raw, "model")
 
             asyncio.run(send_message(
                 f"Training complete (ENHANCED):\n"

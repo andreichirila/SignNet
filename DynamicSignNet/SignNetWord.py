@@ -1746,18 +1746,17 @@ def main():
                 mlflow.log_metrics({
                     "train_loss": train_loss,
                     "val_loss": val_loss,
-                    "train_top1_accuracy": train_topk_accs[1],
+                    "train_accuracy": train_topk_accs[1],
                     "train_top2_accuracy": train_topk_accs[2],
                     "train_top3_accuracy": train_topk_accs[3],
                     "train_top4_accuracy": train_topk_accs[4],
                     "train_top5_accuracy": train_topk_accs[5],
-                    "val_top1_accuracy": val_topk_accs[1],
+                    "val_accuracy": val_topk_accs[1],
                     "val_top2_accuracy": val_topk_accs[2],
                     "val_top3_accuracy": val_topk_accs[3],
                     "val_top4_accuracy": val_topk_accs[4],
                     "val_top5_accuracy": val_topk_accs[5],
                     "train_hand_accuracy": train_hand_acc,
-                    "val_hand_accuracy": val_hand_acc,
                     "learning_rate": lr,
                 }, step=epoch)
 

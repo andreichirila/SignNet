@@ -10,6 +10,7 @@ Enhanced version with:
 """
 
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 import json
 from pathlib import Path
 from collections import Counter, defaultdict
@@ -55,7 +56,7 @@ def set_seed(seed: int = 42):
     torch.backends.cudnn.benchmark = False
 
 
-def build_topk_vocabulary(npz_files, K=50, debug=True):
+def build_topk_vocabulary(npz_files, K=50, min_samples=20, debug=True):
     """
     Scan all .npz files and return:
     - top_k_words: set of K most frequent glosses
@@ -73,8 +74,15 @@ def build_topk_vocabulary(npz_files, K=50, debug=True):
             skipped += 1
     if debug and skipped:
         print(f" [INFO] TopK builder skipped {skipped} unreadable files.")
-    most_common = counts.most_common(K)
+
+    filtered_counts = {w: c for w, c in counts.items() if c >= min_samples}
+    most_common = Counter(filtered_counts).most_common(K)
     top_k_words = {w for (w, _) in most_common}
+
+    if debug:
+        print(f"[INFO] Filtered {len(counts) - len(filtered_counts)} classes < {min_samples}")
+        print(f"[INFO] Selected {len(top_k_words)} classes for vocabulary")
+
     return top_k_words, dict(counts)
 
 
@@ -915,8 +923,9 @@ class DropGraph(nn.Module):
 
 
 class StableGCNBlock(nn.Module):
-    def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2):
+    def __init__(self, in_channels, out_channels, temporal_kernel=3, dropout=0.2, use_checkpoint=False):
         super().__init__()
+        self.use_checkpoint = use_checkpoint  # NEW: Add checkpoint flag
         self.graph_conv = nn.Linear(in_channels, out_channels, bias=False)
         self.ln_graph = nn.LayerNorm(out_channels)
         self.temporal_conv = nn.Conv2d(
@@ -924,7 +933,7 @@ class StableGCNBlock(nn.Module):
             kernel_size=(temporal_kernel, 1),
             padding=((temporal_kernel - 1) // 2, 0), bias=False)
         self.bn_temporal = nn.BatchNorm2d(out_channels)
-        self.ln_temporal = nn.LayerNorm([out_channels])  # FIXED: Explicit shape for LN on channels
+        self.ln_temporal = nn.LayerNorm([out_channels])
         self.attention = STCAttentionSimple(out_channels)
         self.dropout = nn.Dropout(dropout)
         self.relu = nn.ReLU(inplace=True)
@@ -932,7 +941,7 @@ class StableGCNBlock(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        # Unchanged from previous fix
+        # Keep your existing initialization
         for m in self.modules():
             if isinstance(m, nn.Linear):
                 nn.init.xavier_uniform_(m.weight)
@@ -946,60 +955,82 @@ class StableGCNBlock(nn.Module):
                 nn.init.constant_(m.weight, 1)
                 nn.init.constant_(m.bias, 0)
 
-    def forward(self, x, A, lengths=None):  # FIXED: Added lengths=None param
+    def _forward_impl(self, x, A, lengths):
+        """Internal forward implementation for checkpointing."""
         B, T, V, C_in = x.shape
         x_flat = x.view(B * T * V, C_in)
         x_feat = self.graph_conv(x_flat)
-        x_feat = x_feat.view(B * T, V, -1)  # (B*T, V, C_out)
-        x_gcn = torch.matmul(A, x_feat)  # (B*T, V, C_out)
+        x_feat = x_feat.view(B * T, V, -1)
+        x_gcn = torch.matmul(A, x_feat)
         x_gcn = self.ln_graph(x_gcn)
         x_gcn = self.relu(x_gcn)
         x_gcn = self.dropout(x_gcn)
-        x_gcn = x_gcn.view(B, T, V, -1)  # (B, T, V, C_out)
+        x_gcn = x_gcn.view(B, T, V, -1)
 
-        # Temporal conv on (B, C, V, T)
-        x_temp = x_gcn.permute(0, 3, 2, 1)  # (B, C_out, V, T)
-        x_temp = self.temporal_conv(x_temp)  # (B, C_out, V, T)
+        # Temporal conv
+        x_temp = x_gcn.permute(0, 3, 2, 1)
+        x_temp = self.temporal_conv(x_temp)
         x_temp = self.bn_temporal(x_temp)
-
-        # Permute back to (B, T, V, C_out) before LN
-        x_temp = x_temp.permute(0, 3, 2, 1).contiguous()  # (B, T, V, C_out)
-        assert x_temp.shape == (B, T, V, self.ln_temporal.normalized_shape[0]), f"LN shape mismatch: {x_temp.shape}"
-        x_temp = self.ln_temporal(x_temp)  # Norm over C_out dim
+        x_temp = x_temp.permute(0, 3, 2, 1).contiguous()
+        x_temp = self.ln_temporal(x_temp)
         x_temp = self.relu(x_temp)
 
-        # Permute to (B, C_out, T, V) for attention
-        x_att_input = x_temp.permute(0, 3, 1, 2)  # (B, C_out, T, V)
-        assert x_att_input.shape[1] == self.attention.spatial_conv.in_channels, f"Attention input channels: {x_att_input.shape[1]} expected {self.attention.spatial_conv.in_channels}"
-        x_att = self.attention(x_att_input, lengths=lengths)  # FIXED: Pass lengths to attention
+        # Attention
+        x_att_input = x_temp.permute(0, 3, 1, 2)
+        x_att = self.attention(x_att_input, lengths=lengths)
 
-        # Permute attention output back (B, C, T, V) -> (B, T, V, C)
         if x_att.dim() == 4 and x_att.shape[1] == x_temp.shape[-1]:
             x_att = x_att.permute(0, 2, 3, 1).contiguous()
         x_att = self.dropout(x_att)
 
-        # Residual (unchanged)
+        # Residual
         if isinstance(self.residual, nn.Identity):
             x_res = x
             if x.shape[-1] != x_att.shape[-1]:
                 x_res = self.residual(x.view(-1, C_in)).view(B, T, V, -1)
         else:
             x_res = self.residual(x.view(-1, C_in)).view(B, T, V, -1)
+
         out = 0.98 * x_res + 0.02 * x_att
         return out
+
+    def forward(self, x, A, lengths=None):
+        """Forward with optional gradient checkpointing."""
+        if self.use_checkpoint and self.training:
+            # Use gradient checkpointing during training
+            return torch.utils.checkpoint.checkpoint(
+                self._forward_impl,
+                x, A, lengths,
+                use_reentrant=False  # Recommended for newer PyTorch
+            )
+        else:
+            # Normal forward pass (eval mode or checkpoint disabled)
+            return self._forward_impl(x, A, lengths)
+
 
 
 
 
 class StableStreamProcessor(nn.Module):
-    def __init__(self, in_feat=3, hidden=64, num_blocks=3, temporal_kernel=3, dropout=0.2):
+    def __init__(self, in_feat=3, hidden=64, num_blocks=3, temporal_kernel=3,
+                 dropout=0.2, use_checkpoint=False):  # NEW: Add checkpoint param
         super().__init__()
-        self.blocks = nn.ModuleList([StableGCNBlock(in_feat if i == 0 else hidden, hidden, temporal_kernel, dropout) for i in range(num_blocks)])
+        self.blocks = nn.ModuleList([
+            StableGCNBlock(
+                in_feat if i == 0 else hidden,
+                hidden,
+                temporal_kernel,
+                dropout,
+                use_checkpoint=use_checkpoint  # NEW: Pass to blocks
+            )
+            for i in range(num_blocks)
+        ])
 
     def forward(self, seq, A, node_mask, lengths):
         x = seq
         for block in self.blocks:
-            x = block(x, A, lengths=lengths)  # NEW: Pass lengths
+            x = block(x, A, lengths=lengths)
+
         # Masked mean pooling
         w = node_mask.unsqueeze(-1)
         x_masked = (x * w).sum(dim=2) / (w.sum(dim=2) + 1e-6)
@@ -1008,43 +1039,37 @@ class StableStreamProcessor(nn.Module):
 
 
 
+
 # ===========================
 # NEW: Enhanced Bidirectional GCN Model
 # ===========================
 class StableBidirectionalGCN(nn.Module):
-    def __init__(self, num_classes, hidden=256, num_blocks=3, temporal_kernel=3, dropout=0.3):
+    def __init__(self, num_classes, hidden=256, num_blocks=3, temporal_kernel=3,
+                 dropout=0.3, use_checkpoint=False):  # NEW: Add param
         super().__init__()
 
-        # All 7 streams for full paper implementation
         streams = [
-            'keypoint_coords',
-            'edge_distance',
-            'bone_vectors',
-            'keypoint_velocity',
-            'bone_velocity',
-            'keypoint_accel',
-            'bone_accel'
+            'keypoint_coords', 'edge_distance', 'bone_vectors',
+            'keypoint_velocity', 'bone_velocity', 'keypoint_accel', 'bone_accel'
         ]
         self.streams = streams
 
         self.forward_streams = nn.ModuleDict({
-            s: StableStreamProcessor(3, hidden, num_blocks, temporal_kernel, dropout)
+            s: StableStreamProcessor(3, hidden, num_blocks, temporal_kernel,
+                                    dropout, use_checkpoint=use_checkpoint)  # NEW
             for s in streams
         })
         self.backward_streams = nn.ModuleDict({
-            s: StableStreamProcessor(3, hidden, num_blocks, temporal_kernel, dropout)
+            s: StableStreamProcessor(3, hidden, num_blocks, temporal_kernel,
+                                    dropout, use_checkpoint=use_checkpoint)  # NEW
             for s in streams
         })
 
-        # NEW: LayerNorm for fused outputs
         self.ln_fused = nn.LayerNorm(hidden)
-
-        # Fusion weights
         self.w_fwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
         self.w_bwd = nn.Parameter(torch.ones(len(streams)) / len(streams))
         self.w_dir = nn.Parameter(torch.tensor([0.5, 0.5]))
 
-        # Classifier
         self.classifier = nn.Sequential(
             nn.Linear(hidden, hidden // 2),
             nn.ReLU(),
@@ -1112,11 +1137,12 @@ class StableBidirectionalGCN(nn.Module):
 # ===========================
 class StableTrainer:
     """Ultra-conservative trainer for gradient stability."""
-    def __init__(self, model, shutdown_handler = None, device='cuda', lr=5e-5, wd=1e-4, epochs=100):  # FIXED: LR up to 5e-5, wd down
+    def __init__(self, model, shutdown_handler=None, device='cuda', lr=5e-5, wd=1e-4, epochs=100, accumulation_steps=1):
         self.model = model.to(device)
         self.device = device
         self.epochs = epochs
         self.shutdown_handler = shutdown_handler
+        self.accumulation_steps = accumulation_steps
 
         # FIXED: Use AdamW for decoupled decay
         self.optim = torch.optim.AdamW(
@@ -1132,7 +1158,7 @@ class StableTrainer:
             self.optim, T_max=epochs, eta_min=1e-6
         )
 
-        self.crit = nn.CrossEntropyLoss()
+        self.crit = nn.CrossEntropyLoss(label_smoothing=0.1)
         self.scaler = torch.amp.GradScaler('cuda', enabled=torch.cuda.is_available())
         self.hist = {
             'train_loss': [], 'val_loss': [],
@@ -1140,12 +1166,19 @@ class StableTrainer:
             'train_top5': [], 'val_top5': []
         }
 
-    def step(self, batch):
-        fwd = {k: v.to(self.device) for k, v in batch['features_forward'].items()}
-        bwd = {k: v.to(self.device) for k, v in batch['features_backward'].items()}
-        lengths = batch['lengths'].to(self.device)
-        node_mask = batch['node_mask'].to(self.device)
-        y = batch['labels'].to(self.device)
+    def step(self, batch, accumulate=False):
+        """
+        Training step with gradient accumulation support.
+
+        Args:
+            batch: Input batch
+            accumulate: If True, don't zero gradients (for accumulation)
+        """
+        fwd = {k: v.to(self.device, non_blocking=True) for k, v in batch['features_forward'].items()}
+        bwd = {k: v.to(self.device, non_blocking=True) for k, v in batch['features_backward'].items()}
+        lengths = batch['lengths'].to(self.device, non_blocking=True)
+        node_mask = batch['node_mask'].to(self.device, non_blocking=True)
+        y = batch['labels'].to(self.device, non_blocking=True)
 
         # Input validation
         for k, v in fwd.items():
@@ -1156,7 +1189,7 @@ class StableTrainer:
                 bwd[k] = torch.clamp(bwd[k], -10, 10)
             if torch.isnan(v).any() or torch.isinf(v).any():
                 print(f'[NaN/Inf in input {k}], skipping batch')
-                return 0.0, 0, 0, y.size(0)  # Return zeros for metrics
+                return 0.0, 0, 0, y.size(0)
 
         # Forward pass
         with torch.amp.autocast('cuda', enabled=torch.cuda.is_available()):
@@ -1168,59 +1201,138 @@ class StableTrainer:
 
             loss = self.crit(logits, y)
 
+            # NEW: Scale loss by accumulation steps
+            loss = loss / self.accumulation_steps
+
             if torch.isnan(loss) or torch.isinf(loss):
                 print('[NaN/Inf loss], skipping batch')
                 return 0.0, 0, 0, y.size(0)
 
         # Backward pass
-        self.optim.zero_grad(set_to_none=True)
+        # NEW: Only zero gradients if not accumulating
+        if not accumulate:
+            self.optim.zero_grad(set_to_none=True)
+
         self.scaler.scale(loss).backward()
 
-        # Gradient checks
-        total_norm = 0
-        max_grad = 0
-        for p in self.model.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.data.norm(2)
-                total_norm += param_norm.item() ** 2
-                max_grad = max(max_grad, p.grad.data.abs().max().item())
-        total_norm = total_norm ** 0.5
-
-        if total_norm > 500.0:
-            print(f'[Large gradients] norm={total_norm:.2f}, max={max_grad:.2f}')
-            print(f'[Clipping] LR={self.optim.param_groups[0]["lr"]:.2e}')
-
-        # Gradient clipping
-        self.scaler.unscale_(self.optim)
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
-        torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
-
-        # Check for NaN/Inf in parameters after clipping
-        has_invalid = False
-        for p in self.model.parameters():
-            if torch.isnan(p).any() or torch.isinf(p).any():
-                has_invalid = True
-                break
-
-        if has_invalid:
-            print('[NaN/Inf in parameters after clipping], skipping step')
-            self.optim.zero_grad(set_to_none=True)
-            return 0.0, 0, 0, y.size(0)
-
-        # Optimizer step
-        self.scaler.step(self.optim)
-        self.scaler.update()
-
-        # Calculate metrics
+        # Calculate metrics (use unscaled loss for logging)
         top1_correct = (logits.argmax(1) == y).sum().item()
-
-        # Top-5 calculation (FIXED - was missing)
         num_classes = logits.size(1)
         k = min(5, num_classes)
         _, topk_preds = logits.topk(k, dim=1)
         top5_correct = (topk_preds == y.unsqueeze(1)).any(dim=1).sum().item()
 
-        return loss.item(), top1_correct, top5_correct, y.size(0)
+        # Return scaled loss for proper averaging
+        return loss.item() * self.accumulation_steps, top1_correct, top5_correct, y.size(0)
+
+    def train(self, train_loader, val_loader, mlflow_log=True):
+        best_val = 0
+        patience = 10
+        patience_counter = 0
+
+        for ep in range(self.epochs):
+            # Training phase
+            self.model.train()
+            tot_loss = 0
+            top1_correct = 0
+            top5_correct = 0
+            total = 0
+
+            for batch_idx, batch in enumerate(tqdm(train_loader, desc=f'Epoch {ep+1}/{self.epochs}')):
+                # NEW: Determine if we're accumulating
+                accumulate = (batch_idx + 1) % self.accumulation_steps != 0
+
+                loss, c1, c5, n = self.step(batch, accumulate=accumulate)
+                tot_loss += loss * n
+                top1_correct += c1
+                top5_correct += c5
+                total += n
+
+                # NEW: Only update weights every accumulation_steps
+                if not accumulate or (batch_idx + 1) == len(train_loader):
+                    # Gradient checks
+                    total_norm = 0
+                    max_grad = 0
+                    for p in self.model.parameters():
+                        if p.grad is not None:
+                            param_norm = p.grad.data.norm(2)
+                            total_norm += param_norm.item() ** 2
+                            max_grad = max(max_grad, p.grad.data.abs().max().item())
+                    total_norm = total_norm ** 0.5
+
+                    if total_norm > 500.0:
+                        print(f'[Large gradients] norm={total_norm:.2f}, max={max_grad:.2f}')
+
+                    # Gradient clipping
+                    self.scaler.unscale_(self.optim)
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=10.0)
+                    torch.nn.utils.clip_grad_value_(self.model.parameters(), clip_value=1.0)
+
+                    # Check for NaN/Inf in parameters
+                    has_invalid = False
+                    for p in self.model.parameters():
+                        if torch.isnan(p).any() or torch.isinf(p).any():
+                            has_invalid = True
+                            break
+
+                    if has_invalid:
+                        print('[NaN/Inf in parameters], skipping step')
+                        self.optim.zero_grad(set_to_none=True)
+                    else:
+                        # Optimizer step
+                        self.scaler.step(self.optim)
+                        self.scaler.update()
+
+                if self.shutdown_handler.is_interrupted():
+                    break
+
+            if self.shutdown_handler.is_interrupted():
+                break
+
+            tr_loss = tot_loss / max(total, 1)
+            tr_top1 = top1_correct / max(total, 1)
+            tr_top5 = top5_correct / max(total, 1)
+
+            # Validation phase
+            va_loss, va_top1, va_top5 = self.eval_loop(val_loader)
+
+            # Early stopping
+            if va_top1 > best_val:
+                best_val = va_top1
+                patience_counter = 0
+                torch.save(self.model.state_dict(), 'best_stable_model.pt')
+            else:
+                patience_counter += 1
+                if patience_counter >= patience:
+                    print(f"Early stopping at epoch {ep+1}")
+                    break
+
+            # History logging
+            self.hist['train_loss'].append(tr_loss)
+            self.hist['val_loss'].append(va_loss)
+            self.hist['train_acc'].append(tr_top1)
+            self.hist['val_acc'].append(va_top1)
+            self.hist['train_top5'].append(tr_top5)
+            self.hist['val_top5'].append(va_top5)
+
+            print(f"Epoch {ep+1}: Train Loss={tr_loss:.4f} Top1={tr_top1:.2%} Top5={tr_top5:.2%} | "
+                f"Val Loss={va_loss:.4f} Top1={va_top1:.2%} Top5={va_top5:.2%} | "
+                f"LR={self.optim.param_groups[0]['lr']:.6f}")
+
+            self.sched.step()
+
+            if mlflow_log:
+                mlflow.log_metrics({
+                    'train_loss': tr_loss,
+                    'val_loss': va_loss,
+                    'train_accuracy': tr_top1,
+                    'val_accuracy': va_top1,
+                    'train_top5_accuracy': tr_top5,
+                    'val_top5_accuracy': va_top5,
+                    'learning_rate': self.optim.param_groups[0]['lr']
+                }, step=ep)
+
+        return best_val
 
 
     @torch.no_grad()
@@ -1262,75 +1374,6 @@ class StableTrainer:
 
         return avg_loss, top1_acc, top5_acc  # FIXED: Return all three metrics
 
-    def train(self, train_loader, val_loader, mlflow_log=True):
-        best_val = 0
-        patience = 20
-        patience_counter = 0
-
-        for ep in range(self.epochs):
-            # Training phase
-            self.model.train()
-            tot_loss = 0
-            top1_correct = 0
-            top5_correct = 0
-            total = 0
-
-            for batch in tqdm(train_loader, desc=f'Epoch {ep+1}/{self.epochs}'):
-                loss, c1, c5, n = self.step(batch)
-                tot_loss += loss * n  # Weight by batch size
-                top1_correct += c1
-                top5_correct += c5
-                total += n
-                if self.shutdown_handler.is_interrupted():
-                    break
-
-            if self.shutdown_handler.is_interrupted():
-                break
-
-            tr_loss = tot_loss / max(total, 1)
-            tr_top1 = top1_correct / max(total, 1)
-            tr_top5 = top5_correct / max(total, 1)
-
-            # Validation phase - FIXED: Add actual evaluation
-            va_loss, va_top1, va_top5 = self.eval_loop(val_loader)
-
-            # Early stopping
-            if va_top1 > best_val:  # FIXED: Use va_top1 instead of undefined va_acc
-                best_val = va_top1
-                patience_counter = 0
-                torch.save(self.model.state_dict(), 'best_stable_model.pt')
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    print(f"Early stopping at epoch {ep+1}")
-                    break
-
-            # History logging
-            self.hist['train_loss'].append(tr_loss)
-            self.hist['val_loss'].append(va_loss)
-            self.hist['train_acc'].append(tr_top1)
-            self.hist['val_acc'].append(va_top1)
-            self.hist['train_top5'].append(tr_top5)
-            self.hist['val_top5'].append(va_top5)
-
-            print(f"Epoch {ep+1}: Train Loss={tr_loss:.4f} Top1={tr_top1:.2%} Top5={tr_top5:.2%} | "
-                f"Val Loss={va_loss:.4f} Top1={va_top1:.2%} Top5={va_top5:.2%} | "
-                f"LR={self.optim.param_groups[0]['lr']:.6f}")
-
-            self.sched.step()
-
-            if mlflow_log:
-                mlflow.log_metrics({
-                    'train_loss': tr_loss,
-                    'val_loss': va_loss,
-                    'train_accuracy': tr_top1,
-                    'val_accuracy': va_top1,
-                    'train_top5_accuracy': tr_top5,
-                    'val_top5_accuracy': va_top5,
-                    'learning_rate': self.optim.param_groups[0]['lr']
-                }, step=ep)
-
-        return best_val
 
 class GracefulShutdown:
     """
@@ -1356,24 +1399,32 @@ class GracefulShutdown:
 # Main
 # ===========================
 def main():
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.deterministic = False  # Remove if reproducibility critical
+
     set_seed(42)
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     DATA_DIR = './word_landmarks_extracted'
 
     # REVISED HYPERPARAMETERS for 150 classes with stability
-    TOP_K = 20
+    TOP_K = 300
+    MIN_SAMPLES = 15
     NUM_BLOCKS = 5
     HIDDEN = 256
     TEMPORAL_KERNEL = 5
     DROPOUT = 0.3
     EPOCHS = 200
     LR = 3e-5  # FIXED: Increased from 1e-5
-    BATCH = 8
+    BATCH = 16
+    ACCUMULATION_STEPS = 2
     WEIGHT_DECAY = 1e-4  # FIXED: Decreased from 2e-4
 
     # System
+    available_cpus = os.cpu_count() or 4
+    NUM_WORKERS = max(4, min(available_cpus - 2, 12))  # Use 4-12 workers
+    print(f"Using {NUM_WORKERS} DataLoader workers (CPU cores: {available_cpus})")
     PREFETCH_FACTOR = 4
-    NUM_WORKERS = 6
+    USE_GRADIENT_CHECKPOINTING = False
 
     RUN_NAME = f'Top{TOP_K} ALL-STREAMS: 7 Streams × 5 Blocks × 256 Hidden'
 
@@ -1404,6 +1455,8 @@ def main():
             'cpu_count': os.cpu_count(),
             'total_ram_gb': round(psutil.virtual_memory().total / (1024**3), 2)
         })
+        mlflow.log_param('accumulation_steps', ACCUMULATION_STEPS)
+        mlflow.log_param('effective_batch_size', BATCH * ACCUMULATION_STEPS)
         if torch.cuda.is_available():
             mlflow.log_params({
                 'gpu_name': torch.cuda.get_device_name(0),
@@ -1412,12 +1465,13 @@ def main():
             })
 
         train_augmentation = SkeletonAugmentation(
-            mirror_prob=0.2,        # Reduce - hand dominance matters
-            rotation_range=(-3, 3), # Much smaller
-            scale_range=(0.97, 1.03), # Much smaller
-            shift_range=(-0.03, 0.03), # Much smaller
-            apply_prob=0.4          # Lower probability
+            mirror_prob=0.3,
+            rotation_range=(-5, 5),
+            scale_range=(0.95, 1.05),
+            shift_range=(-0.05, 0.05),
+            apply_prob=0.6
         )
+
 
         # Build dataset with augmentation for training
         fe_train = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=None)
@@ -1425,7 +1479,7 @@ def main():
 
         fe_clean = Skeleton27FeatureExtractor(conf_valid_thresh=0.5, augmentation=None)
         full_base = TrueSkeletonDataset(DATA_DIR, fe_clean, debug=True, is_training=False)  # Clean for vocab
-        top_k_words, _ = build_topk_vocabulary(full_base.files, K=TOP_K, debug=True)
+        top_k_words, _ = build_topk_vocabulary(full_base.files, K=TOP_K, min_samples=MIN_SAMPLES, debug=True)
 
         # Create datasets with appropriate augmentation settings
         full_train = TopKTrueSkeletonDataset(full_base, top_k_words, feature_extractor=fe_train,
@@ -1443,23 +1497,35 @@ def main():
 
         collate = TrueSkeletonCollator(conf_valid_thresh=full_train.fe.conf_valid_thresh)
 
+        # Common DataLoader kwargs
+        dataloader_kwargs = {
+            'num_workers': NUM_WORKERS,
+            'pin_memory': True if DEVICE == 'cuda' else False,
+            'collate_fn': collate,
+            'prefetch_factor': PREFETCH_FACTOR,
+            'persistent_workers': True if NUM_WORKERS > 0 else False,
+        }
+        if DEVICE == 'cuda':
+            dataloader_kwargs['pin_memory_device'] = 'cuda'
+            print("Using pin_memory_device='cuda' for faster transfers")
+
         train_loader = DataLoader(
-            train_ds, batch_size=BATCH, shuffle=True,
-            num_workers=4, pin_memory=True,
-            collate_fn=collate, prefetch_factor=PREFETCH_FACTOR,
-            persistent_workers=True
+            train_ds,
+            batch_size=BATCH,
+            shuffle=True,
+            **dataloader_kwargs
         )
         val_loader = DataLoader(
-            val_ds, batch_size=BATCH, shuffle=False,
-            num_workers=4, pin_memory=True,
-            collate_fn=collate, prefetch_factor=PREFETCH_FACTOR,
-            persistent_workers=True
+            val_ds,
+            batch_size=BATCH,
+            shuffle=False,
+            **dataloader_kwargs
         )
         test_loader = DataLoader(
-            test_ds, batch_size=BATCH, shuffle=False,
-            num_workers=4, pin_memory=True,
-            collate_fn=collate, prefetch_factor=PREFETCH_FACTOR,
-            persistent_workers=True
+            test_ds,
+            batch_size=BATCH,
+            shuffle=False,
+            **dataloader_kwargs
         )
 
         # Model
@@ -1471,8 +1537,16 @@ def main():
             hidden=HIDDEN,
             num_blocks=NUM_BLOCKS,
             temporal_kernel=TEMPORAL_KERNEL,
-            dropout=DROPOUT
+            dropout=DROPOUT,
+            use_checkpoint=USE_GRADIENT_CHECKPOINTING  # NEW
         )
+
+        # Compile model for faster GPU execution
+        if hasattr(torch, 'compile'):
+            print("Compiling model with torch.compile...")
+            model = torch.compile(model, mode='max-autotune-no-cudagraphs')
+
+        mlflow.log_param('gradient_checkpointing', USE_GRADIENT_CHECKPOINTING)
 
         mlflow.log_param('top_k', TOP_K)
         with open('topk_words.txt', 'w') as f:
@@ -1483,7 +1557,7 @@ def main():
         # Train
         trainer = StableTrainer(
             model, shutdown_handler, device=DEVICE, lr=LR, wd=WEIGHT_DECAY,
-            epochs=EPOCHS
+            epochs=EPOCHS, accumulation_steps=ACCUMULATION_STEPS
         )
 
 
@@ -1514,6 +1588,9 @@ def main():
         best_val = trainer.train(train_loader, val_loader)
         print(f"Best Val Acc: {best_val:.2%}")
 
+        checkpoint = torch.load('best_stable_model.pt')
+        model.load_state_dict(checkpoint)
+
         # Test
         test_loss, test_top1, test_top5 = trainer.eval_loop(test_loader)
         print(f"Test: Loss={test_loss:.4f} Top1={test_top1:.2%} Top5={test_top5:.2%}")
@@ -1523,13 +1600,71 @@ def main():
             'test_top5_accuracy': test_top5
         })
 
+        print("\n[SAVING MODELS]")
+
+        # 1. Save PyTorch model to MLflow
+        mlflow.pytorch.log_model(
+            model,
+            "model",
+            registered_model_name=f"SignNetWord_Top{TOP_K}",
+            code_paths=[__file__]  # Include your training script
+        )
+        print("✓ Logged PyTorch model to MLflow")
+
+        # 2. Save state dict separately (smaller file)
+        final_state_path = f'final_model_top{TOP_K}.pt'
+        torch.save(model.state_dict(), final_state_path)
+        mlflow.log_artifact(final_state_path)
+        print(f"✓ Saved state dict: {final_state_path}")
+
+        # 3. Save vocabulary mapping
+        vocab_path = 'vocabulary_mapping.json'
+        with open(vocab_path, 'w') as f:
+            json.dump({
+                'word_to_idx': full_train.word_to_idx,
+                'idx_to_word': full_train.idx_to_word,
+                'num_classes': len(full_train.word_to_idx),
+                'top_k': TOP_K
+            }, f, indent=2)
+        mlflow.log_artifact(vocab_path)
+        print(f"✓ Saved vocabulary: {vocab_path}")
+
+        # 4. Save model architecture info
+        arch_path = 'model_architecture.txt'
+        with open(arch_path, 'w') as f:
+            f.write(f"Model: StableBidirectionalGCN\n")
+            f.write(f"Num Classes: {len(full_train.word_to_idx)}\n")
+            f.write(f"Hidden Size: {HIDDEN}\n")
+            f.write(f"Num Blocks: {NUM_BLOCKS}\n")
+            f.write(f"Temporal Kernel: {TEMPORAL_KERNEL}\n")
+            f.write(f"Dropout: {DROPOUT}\n")
+            f.write(f"Total Parameters: {sum(p.numel() for p in model.parameters()):,}\n")
+            f.write(f"Trainable Parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,}\n")
+            f.write(f"\n=== Model Architecture ===\n")
+            f.write(str(model))
+        mlflow.log_artifact(arch_path)
+        print(f"✓ Saved architecture info: {arch_path}")
+
+        # 5. Save training history
+        history_path = 'training_history.json'
+        with open(history_path, 'w') as f:
+            json.dump(trainer.hist, f, indent=2)
+        mlflow.log_artifact(history_path)
+        print(f"✓ Saved training history: {history_path}")
+
+        # NEW: Telegram notification with model info
         asyncio.run(send_message(
-            f"Training complete!\n"
+            f"✅ Training complete!\n"
+            f"Model: Top{TOP_K} classes\n"
             f"Best Val Acc: {best_val:.2%}\n"
             f"Test Top1: {test_top1:.2%} Top5: {test_top5:.2%}\n"
+            f"Params: {sum(p.numel() for p in model.parameters()):,}\n"
+            f"Saved to MLflow: {mlflow.active_run().info.run_id}\n"
             f"Run: {RUN_NAME}",
             CHAT_ID
         ))
+
+        print("\n✓ All artifacts saved successfully!")
 
         # Save split
         with open('dataset_split_enhanced.json', 'w') as f:

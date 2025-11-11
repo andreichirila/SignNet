@@ -23,6 +23,122 @@ import asyncio
 import signal
 
 
+# ==================== FEATURE ENGINEERING MODULE (NEW) ====================
+class EnhancedLandmarkFeatures:
+    """
+    Extract velocity, acceleration, and spatial features from MediaPipe landmarks
+    State-of-the-art feature engineering for sign language recognition
+    """
+
+    @staticmethod
+    def reshape_landmarks(landmarks_flat):
+        """Reshape flat landmarks (T, 1659) to (T, num_landmarks, 3)"""
+        T = landmarks_flat.shape[0]
+        if landmarks_flat.shape[1] % 3 != 0:
+            pad_size = 3 - (landmarks_flat.shape[1] % 3)
+            landmarks_flat = np.pad(landmarks_flat, ((0, 0), (0, pad_size)), mode='constant')
+
+        num_landmarks = landmarks_flat.shape[1] // 3
+        landmarks_3d = landmarks_flat.reshape(T, num_landmarks, 3)
+        return landmarks_3d
+
+    @staticmethod
+    def compute_velocity(landmarks, fps=25):
+        """Compute first-order velocity"""
+        velocity = np.zeros_like(landmarks)
+        if landmarks.shape[0] > 1:
+            velocity[1:] = (landmarks[1:] - landmarks[:-1]) * fps
+            velocity[0] = velocity[1]
+        return velocity
+
+    @staticmethod
+    def compute_acceleration(velocity, fps=25):
+        """Compute second-order acceleration"""
+        acceleration = np.zeros_like(velocity)
+        if velocity.shape[0] > 1:
+            acceleration[1:] = (velocity[1:] - velocity[:-1]) * fps
+            acceleration[0] = acceleration[1]
+        return acceleration
+
+    @staticmethod
+    def compute_hand_distances(landmarks_3d):
+        """Compute inter-hand distance"""
+        left_hand_start = 501
+        left_hand_end = 522
+        right_hand_start = 522
+        right_hand_end = 543
+
+        if landmarks_3d.shape[1] < right_hand_end:
+            return np.zeros((landmarks_3d.shape[0], 1))
+
+        left_center = landmarks_3d[:, left_hand_start:left_hand_end, :].mean(axis=1)
+        right_center = landmarks_3d[:, right_hand_start:right_hand_end, :].mean(axis=1)
+
+        distances = np.linalg.norm(left_center - right_center, axis=1, keepdims=True)
+        return distances
+
+    @staticmethod
+    def compute_hand_to_face_distances(landmarks_3d):
+        """Distance from hands to face"""
+        face_start = 33
+        face_end = 100
+        left_hand_start = 501
+        left_hand_end = 522
+        right_hand_start = 522
+        right_hand_end = 543
+
+        if landmarks_3d.shape[1] < right_hand_end:
+            return np.zeros((landmarks_3d.shape[0], 1)), np.zeros((landmarks_3d.shape[0], 1))
+
+        face_center = landmarks_3d[:, face_start:face_end, :].mean(axis=1)
+        left_center = landmarks_3d[:, left_hand_start:left_hand_end, :].mean(axis=1)
+        right_center = landmarks_3d[:, right_hand_start:right_hand_end, :].mean(axis=1)
+
+        left_to_face = np.linalg.norm(left_center - face_center, axis=1, keepdims=True)
+        right_to_face = np.linalg.norm(right_center - face_center, axis=1, keepdims=True)
+
+        return left_to_face, right_to_face
+
+    @staticmethod
+    def compute_velocity_magnitude(velocity):
+        """Compute speed"""
+        speed = np.linalg.norm(velocity, axis=2)
+        return speed
+
+    @staticmethod
+    def extract_all_features(landmarks_flat, fps=25, include_accel=True):
+        """Extract all engineered features"""
+        landmarks_3d = EnhancedLandmarkFeatures.reshape_landmarks(landmarks_flat)
+        T, num_landmarks, _ = landmarks_3d.shape
+
+        original = landmarks_flat
+        velocity = EnhancedLandmarkFeatures.compute_velocity(landmarks_3d, fps)
+        velocity_flat = velocity.reshape(T, -1)
+
+        if include_accel:
+            acceleration = EnhancedLandmarkFeatures.compute_acceleration(velocity, fps)
+            accel_flat = acceleration.reshape(T, -1)
+
+        hand_dist = EnhancedLandmarkFeatures.compute_hand_distances(landmarks_3d)
+        left_to_face, right_to_face = EnhancedLandmarkFeatures.compute_hand_to_face_distances(landmarks_3d)
+        velocity_magnitude = EnhancedLandmarkFeatures.compute_velocity_magnitude(velocity)
+
+        features_list = [
+            original,
+            velocity_flat,
+            hand_dist,
+            left_to_face,
+            right_to_face,
+            velocity_magnitude
+        ]
+
+        if include_accel:
+            features_list.insert(2, accel_flat)
+
+        enhanced_features = np.concatenate(features_list, axis=1)
+        return enhanced_features.astype(np.float32)
+
+
 class EarlyStopping:
     """
     Early stopping to prevent overfitting.
@@ -84,7 +200,6 @@ class EarlyStopping:
                 return True
 
         return False
-
 
 
 class TemporalAugmentation:
@@ -165,18 +280,21 @@ class TemporalAugmentation:
         return augmented.astype(np.float32)
 
 
-
 class SignLanguageDataset(Dataset):
     """
     Load preprocessed landmarks from NPZ files with per-frame handedness.
-    Aggregates handedness data to sample-level (dominant hand).
+    NOW SUPPORTS ENHANCED FEATURES (NEW)
     """
-    def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7):
+    def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
+                 use_enhanced_features=False, include_accel=False):  # NEW PARAMETERS
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
 
         self.augment = augment
+        self.use_enhanced_features = use_enhanced_features  # NEW
+        self.include_accel = include_accel  # NEW
+
         if augment:
             self.augmentation = TemporalAugmentation(prob=augment_prob)
 
@@ -184,6 +302,8 @@ class SignLanguageDataset(Dataset):
             print(f"\n[DEBUG] SignLanguageDataset.__init__")
             print(f"  NPZ directory: {self.npz_dir}")
             print(f"  Total NPZ files found: {len(self.npz_files)}")
+            print(f"  Enhanced features: {use_enhanced_features}")  # NEW
+            print(f"  Include acceleration: {include_accel}")  # NEW
 
         if word_to_idx is None:
             self.word_to_idx = {}
@@ -208,36 +328,23 @@ class SignLanguageDataset(Dataset):
         return len(self.npz_files)
 
     def _get_dominant_handedness(self, handedness_data):
-        """
-        Aggregate per-frame handedness to sample-level (dominant hand).
-
-        Args:
-            handedness_data: (num_frames, 2) array of ["LEFT"/"RIGHT"/"NONE", "LEFT"/"RIGHT"/"NONE"]
-
-        Returns:
-            0 = LEFT, 1 = RIGHT, 2 = BOTH, 3 = NONE
-        """
-        # Count occurrences across all frames
+        """Aggregate per-frame handedness to sample-level"""
         left_count = 0
         right_count = 0
 
         for frame_hands in handedness_data:
-            # frame_hands is like ["LEFT", "NONE"] or ["RIGHT", "LEFT"]
             if isinstance(frame_hands, str):
-                # Single handedness string (not a list)
                 if frame_hands == "LEFT":
                     left_count += 1
                 elif frame_hands == "RIGHT":
                     right_count += 1
             else:
-                # List of handedness for each hand
                 for hand in frame_hands:
                     if hand == "LEFT":
                         left_count += 1
                     elif hand == "RIGHT":
                         right_count += 1
 
-        # Determine dominant hand
         if left_count > 0 and right_count == 0:
             return 0  # LEFT only
         elif right_count > 0 and left_count == 0:
@@ -253,6 +360,16 @@ class SignLanguageDataset(Dataset):
 
         # Load landmarks
         landmarks = data["landmarks"].astype(np.float32)
+
+        # APPLY FEATURE ENGINEERING IF ENABLED (NEW)
+        if self.use_enhanced_features:
+            landmarks = EnhancedLandmarkFeatures.extract_all_features(
+                landmarks,
+                fps=25,
+                include_accel=self.include_accel
+            )
+
+        # Apply augmentation AFTER feature engineering
         if self.augment:
             landmarks = self.augmentation(landmarks)
 
@@ -265,7 +382,6 @@ class SignLanguageDataset(Dataset):
             handedness_data = data["handedness"]
             handedness = self._get_dominant_handedness(handedness_data)
         else:
-            # Default to NONE if not available
             handedness = 3
 
         # Convert to tensors
@@ -276,9 +392,6 @@ class SignLanguageDataset(Dataset):
         return landmarks_tensor, label_tensor, handedness_tensor
 
 
-
-
-# You need to verify your RemappedDataset looks like this:
 class RemappedDataset(Dataset):
     """Remaps old class labels to new class labels for filtered dataset."""
 
@@ -291,11 +404,9 @@ class RemappedDataset(Dataset):
         return len(self.indices)
 
     def __getitem__(self, idx):
-        # Get from base dataset
         base_idx = self.indices[idx]
         landmarks, old_label, handedness = self.base_dataset[base_idx]
 
-        # REMAP the label
         old_label_val = old_label.item()
 
         if old_label_val not in self.old_to_new_idx:
@@ -306,298 +417,18 @@ class RemappedDataset(Dataset):
         return landmarks, torch.tensor(new_label, dtype=torch.long), handedness
 
 
-
-
-class TemporalConvolutionBlock(nn.Module):
-    """
-    Temporal convolution block for extracting local features from landmark sequences.
-    Applies multiple 1D convolutions with different kernel sizes for multi-scale feature extraction.
-    Uses same-padding to preserve sequence length.
-    """
-    def __init__(self, input_size=1659, output_size=512, num_layers=2, dropout_rate=0.1):
-        super().__init__()
-        self.input_size = input_size
-        self.output_size = output_size
-        
-        # Multi-scale temporal convolutions
-        kernel_sizes = [3, 5, 7]
-        num_kernels = len(kernel_sizes)
-        
-        # First layer: reduce from input_size to output_size
-        self.initial_projection = nn.Linear(input_size, output_size)
-        
-        # Temporal convolutions on the reduced features
-        # Use depthwise convolution to avoid sequence length reduction
-        conv_layers = []
-        for i in range(num_layers):
-            layer_convs = nn.ModuleList()
-            for kernel_size in kernel_sizes:
-                padding = (kernel_size - 1) // 2
-                # Use groups=output_size for depthwise convolution
-                # This applies each filter to one channel independently
-                layer_convs.append(
-                    nn.Sequential(
-                        nn.Conv1d(
-                            in_channels=output_size,
-                            out_channels=output_size,
-                            kernel_size=kernel_size,
-                            padding=padding,
-                            groups=1,  # Standard convolution
-                            bias=False
-                        ),
-                        nn.BatchNorm1d(output_size),
-                        nn.ReLU(inplace=True),
-                        nn.Dropout(dropout_rate)
-                    )
-                )
-            conv_layers.append(layer_convs)
-        
-        self.conv_layers = nn.ModuleList(conv_layers)
-        self.dropout = nn.Dropout(dropout_rate)
-        
-    def forward(self, x):
-        """
-        Args:
-            x: (batch_size, seq_len, input_size)
-        Returns:
-            out: (batch_size, seq_len, output_size)
-        """
-        # x shape: (batch_size, seq_len, input_size)
-        batch_size, seq_len, input_size = x.shape
-        
-        # Project from input_size to output_size
-        x_proj = self.initial_projection(x)  # (batch_size, seq_len, output_size)
-        
-        # Reshape for convolution: (batch_size, output_size, seq_len)
-        x_conv = x_proj.transpose(1, 2)  # (batch_size, output_size, seq_len)
-        
-        # Apply convolutions layer by layer with residual connections
-        for layer_convs in self.conv_layers:
-            conv_outputs = []
-            for conv in layer_convs:
-                conv_out = conv(x_conv)  # (batch_size, output_size, seq_len)
-                conv_outputs.append(conv_out)
-            
-            # Average the multi-scale outputs instead of concatenating
-            x_conv = torch.stack(conv_outputs, dim=0).mean(dim=0)  # (batch_size, output_size, seq_len)
-            # Add residual connection
-            x_conv = x_conv + x_proj.transpose(1, 2)
-        
-        # Transpose back to (batch_size, seq_len, output_size)
-        out = x_conv.transpose(1, 2)
-        out = self.dropout(out)
-        
-        return out
-
-
-
-class CrossAttentionLayer(nn.Module):
-    """
-    Cross-attention mechanism that allows frames to attend to each other
-    for capturing relationships between different body parts over time.
-    """
-    def __init__(self, hidden_size, num_heads=8, dropout=0.1):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        
-        # Multi-head attention for cross-frame relationships
-        self.self_attention = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=num_heads,
-            batch_first=True,
-            dropout=dropout
-        )
-        
-        # Feed-forward network
-        self.ffn = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size * 4),
-            nn.ReLU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_size * 4, hidden_size)
-        )
-        
-        self.norm1 = nn.LayerNorm(hidden_size)
-        self.norm2 = nn.LayerNorm(hidden_size)
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        """
-        Args:
-            x: (batch_size, seq_len, hidden_size)
-        Returns:
-            out: (batch_size, seq_len, hidden_size)
-        """
-        # Self-attention with residual
-        attn_out, _ = self.self_attention(x, x, x)
-        x = self.norm1(x + self.dropout(attn_out))
-        
-        # Feed-forward with residual
-        ffn_out = self.ffn(x)
-        x = self.norm2(x + self.dropout(ffn_out))
-        
-        return x
-
-
-class ResidualLSTMBlock(nn.Module):
-    """
-    LSTM block with residual connection for improved gradient flow.
-    Handles both first layer (input_size=hidden_size) and subsequent layers (input_size=hidden_size*2).
-    """
-    def __init__(self, input_size, hidden_size, num_layers=1, dropout_rate=0.1):
-        super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.lstm_output_size = hidden_size * 2  # bidirectional
-        
-        # LSTM takes input_size and outputs hidden_size*2 (bidirectional)
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=dropout_rate if num_layers > 1 else 0.0
-        )
-        
-        # Projection to match LSTM output for residual connection
-        if input_size != self.lstm_output_size:
-            self.input_projection = nn.Linear(input_size, self.lstm_output_size)
-        else:
-            self.input_projection = None
-        
-        self.dropout = nn.Dropout(dropout_rate)
-        self.norm = nn.LayerNorm(self.lstm_output_size)
-        
-    def forward(self, x):
-        """
-        Args:
-            x: (batch_size, seq_len, input_size)
-        Returns:
-            out: (batch_size, seq_len, hidden_size*2)
-        """
-        lstm_out, (h_n, c_n) = self.lstm(x)  # (batch_size, seq_len, hidden_size*2)
-        
-        # Project input for residual connection if dimensions don't match
-        if self.input_projection is not None:
-            x_proj = self.input_projection(x)  # (batch_size, seq_len, hidden_size*2)
-        else:
-            x_proj = x
-        
-        # Residual connection + normalization
-        out = self.norm(lstm_out + self.dropout(x_proj))
-        
-        return out, (h_n, c_n)
-
-
-
-
-class LSTMSignClassifierSimplified(nn.Module):
-    """
-    Simplified enhanced model: LSTM + Attention (no temporal conv, no residual complexity)
-    This is more stable while still improving on the baseline.
-    """
-    def __init__(self, input_size=1659, hidden_size=256, num_classes=10,
-                 num_lstm_layers=2, dropout_rate=0.25, lstm_dropout=0.1,
-                 num_attention_heads=8, debug=True):
-        super().__init__()
-        self.input_size = input_size
-        self.hidden_size = hidden_size
-        self.num_classes = num_classes
-
-        # Simple input projection (instead of temporal conv)
-        self.input_projection = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.LayerNorm(hidden_size),
-            nn.ReLU(),
-            nn.Dropout(lstm_dropout)
-        )
-
-        # Standard LSTM (no residual complexity)
-        self.lstm = nn.LSTM(
-            input_size=hidden_size,
-            hidden_size=hidden_size,
-            num_layers=num_lstm_layers,
-            batch_first=True,
-            bidirectional=True,
-            dropout=lstm_dropout if num_lstm_layers > 1 else 0.0
-        )
-
-        lstm_output_size = hidden_size * 2
-
-        # Single attention layer (post-LSTM)
-        self.attention = nn.MultiheadAttention(
-            embed_dim=lstm_output_size,
-            num_heads=num_attention_heads,
-            batch_first=True,
-            dropout=lstm_dropout
-        )
-        self.attention_norm = nn.LayerNorm(lstm_output_size)
-
-        # Classification head
-        self.classifier = nn.Sequential(
-            nn.Linear(lstm_output_size, 512),
-            nn.BatchNorm1d(512),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-
-            nn.Linear(512, 256),
-            nn.BatchNorm1d(256),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate),
-
-            nn.Linear(256, 128),
-            nn.BatchNorm1d(128),
-            nn.ReLU(),
-            nn.Dropout(dropout_rate * 0.7),
-
-            nn.Linear(128, num_classes)
-        )
-
-        if debug:
-            print(f"\n[SIMPLIFIED ENHANCED MODEL]")
-            print(f"  Input projection: {input_size} → {hidden_size}")
-            print(f"  LSTM: {hidden_size} → {lstm_output_size} (bidirectional)")
-            print(f"  Attention: {num_attention_heads} heads")
-            print(f"  Classifier: {lstm_output_size} → {num_classes}")
-            print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
-
-    def forward(self, x):
-        """
-        Args:
-            x: (batch_size, seq_len, input_size)
-        Returns:
-            logits: (batch_size, num_classes)
-        """
-        # Input projection
-        x = self.input_projection(x)  # (batch_size, seq_len, hidden_size)
-
-        # LSTM
-        lstm_out, (h_n, c_n) = self.lstm(x)  # (batch_size, seq_len, hidden_size*2)
-
-        # Attention with residual
-        attn_out, _ = self.attention(lstm_out, lstm_out, lstm_out)
-        lstm_out = self.attention_norm(lstm_out + attn_out)
-
-        # Extract last hidden state
-        last_hidden = lstm_out[:, -1, :]  # (batch_size, hidden_size*2)
-
-        # Classification
-        logits = self.classifier(last_hidden)
-
-        return logits
-
 class LSTMSignClassifierWithHandedness(nn.Module):
     """
-    LSTM model with multi-task learning and residual attention
-    - Task 1: Sign language classification (main)
-    - Task 2: Handedness prediction (auxiliary)
-    - Residual connections around attention layer for improved gradient flow
+    LSTM model with:
+    - Multi-task learning (sign + handedness)
+    - RESIDUAL ATTENTION CONNECTIONS (NEW)
+    - LAYER NORMALIZATION (NEW)
     """
     def __init__(self, input_size=1659, hidden_size=128, num_classes=70,
                  num_lstm_layers=1, dropout_rate=0.35, lstm_dropout=0.25,
-                 num_attention_heads=4, attention_dropout=0.25, debug=False):
+                 num_attention_heads=4, attention_dropout=0.25, debug=False):  # NEW PARAMETER
         super().__init__()
+
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_classes = num_classes
@@ -613,20 +444,20 @@ class LSTMSignClassifierWithHandedness(nn.Module):
             bidirectional=False
         )
 
-        # Attention mechanism with dropout
+        # Attention mechanism
         self.attention = nn.MultiheadAttention(
             embed_dim=hidden_size,
             num_heads=num_attention_heads,
             batch_first=True,
-            dropout=attention_dropout
+            dropout=attention_dropout  # UPDATED
         )
 
-        # Layer normalization for residual connection (ADD THIS)
+        # LAYER NORMALIZATION FOR RESIDUAL CONNECTION (NEW)
         self.attention_norm = nn.LayerNorm(hidden_size)
 
-        # Dropout layers (ADD THIS)
+        # DROPOUT LAYERS (NEW)
         self.dropout = nn.Dropout(dropout_rate)
-        self.attention_dropout = nn.Dropout(attention_dropout)
+        self.attention_dropout_layer = nn.Dropout(attention_dropout)
 
         # Task 1: Sign classification head
         self.fc_sign = nn.Linear(hidden_size, num_classes)
@@ -635,54 +466,46 @@ class LSTMSignClassifierWithHandedness(nn.Module):
         self.fc_handedness = nn.Linear(hidden_size, 4)
 
         if debug:
-            print(f"DEBUG: LSTMSignClassifierWithHandedness initialized with residual attention")
+            print(f"[DEBUG] LSTMSignClassifierWithHandedness initialized WITH RESIDUAL ATTENTION:")
             print(f"  Input size: {input_size}")
             print(f"  Hidden size: {hidden_size}")
             print(f"  Num classes (sign): {num_classes}")
             print(f"  Num classes (handedness): 4 (LEFT, RIGHT, BOTH, NONE)")
             print(f"  Attention heads: {num_attention_heads}")
-            print(f"  Attention dropout: {attention_dropout}")
+            print(f"  Attention dropout: {attention_dropout}")  # NEW
 
     def forward(self, landmarks):
         """
-        Args:
-            landmarks: (batch_size, seq_len, 1659)
-        Returns:
-            sign_logits: (batch_size, num_classes)
-            handedness_logits: (batch_size, 4)
+        UPDATED WITH RESIDUAL ATTENTION
         """
         # LSTM forward pass
-        lstm_out, (hn, cn) = self.lstm(landmarks)  # lstm_out: (batch, seq_len, hidden)
+        lstm_out, (h_n, c_n) = self.lstm(landmarks)  # lstm_out: (batch, seq_len, hidden)
 
         # Get last hidden state for query
-        last_hidden = hn[-1].unsqueeze(1)  # (batch, 1, hidden)
+        last_hidden = h_n[-1].unsqueeze(1)  # (batch, 1, hidden)
 
-        # Apply attention mechanism with residual connection
-        # MODIFIED: Store lstm_out for residual connection
-        residual = last_hidden  # Store input to attention layer
+        # STORE FOR RESIDUAL CONNECTION (NEW)
+        residual = last_hidden
 
-        # Attention: query=last_hidden, key=lstm_out, value=lstm_out
+        # Apply attention
         attn_out, _ = self.attention(
             last_hidden,  # Query: (batch, 1, hidden)
-            lstm_out,     # Key: (batch, seq_len, hidden)
-            lstm_out      # Value: (batch, seq_len, hidden)
-        )  # Output: (batch, 1, hidden)
+            lstm_out,     # Key/Value: (batch, seq_len, hidden)
+            lstm_out
+        )
 
-        # Apply dropout to attention output
-        attn_out = self.attention_dropout(attn_out)
+        # APPLY DROPOUT TO ATTENTION OUTPUT (NEW)
+        attn_out = self.attention_dropout_layer(attn_out)
 
-        # ADD RESIDUAL CONNECTION: element-wise addition + layer normalization
-        # This is the key improvement - add input to attention output
-        context = self.attention_norm(residual + attn_out)  # (batch, 1, hidden)
+        # RESIDUAL CONNECTION + LAYER NORMALIZATION (NEW)
+        context = self.attention_norm(residual + attn_out)
 
-        # Squeeze to (batch, hidden)
-        context = context.squeeze(1)
-
-        # Apply final dropout
+        # Remove the middle dimension
+        context = context.squeeze(1)  # (batch, hidden)
         context = self.dropout(context)
 
         # Two classification heads
-        sign_logits = self.fc_sign(context)  # (batch, num_classes)
+        sign_logits = self.fc_sign(context)           # (batch, num_classes)
         handedness_logits = self.fc_handedness(context)  # (batch, 4)
 
         return sign_logits, handedness_logits
@@ -701,29 +524,30 @@ class PadCollate:
         padded_landmarks = []
         for lm in landmarks_list:
             if lm.shape[0] < max_seq_len:
-                # Pad with zeros: (seq_len, 1659) → (max_seq_len, 1659)
                 pad_size = max_seq_len - lm.shape[0]
                 lm_padded = torch.nn.functional.pad(lm, (0, 0, 0, pad_size), mode='constant', value=0.0)
             else:
                 lm_padded = lm
             padded_landmarks.append(lm_padded)
 
-        # Stack padded sequences (now all same size)
-        landmarks_tensor = torch.stack(padded_landmarks)  # (batch_size, max_seq_len, 1659)
+        landmarks_tensor = torch.stack(padded_landmarks)
         labels = torch.tensor(labels_list, dtype=torch.long)
         handedness = torch.tensor(handedness_list, dtype=torch.long)
 
         return landmarks_tensor, labels, handedness
 
 
+# ==================== FOCAL LOSS (NEW) ====================
 class FocalLoss(nn.Module):
-    def __init__(self, alpha=1, gamma=2):
+    """Focal Loss for handling class imbalance"""
+    def __init__(self, alpha=0.25, gamma=2.0, weight=None):
         super().__init__()
         self.alpha = alpha
         self.gamma = gamma
+        self.weight = weight
 
     def forward(self, inputs, targets):
-        ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+        ce_loss = F.cross_entropy(inputs, targets, reduction='none', weight=self.weight)
         pt = torch.exp(-ce_loss)
         focal_loss = self.alpha * (1 - pt) ** self.gamma * ce_loss
         return focal_loss.mean()
@@ -732,73 +556,52 @@ class FocalLoss(nn.Module):
 class MultiTaskLoss(nn.Module):
     """
     Combines sign classification loss with handedness auxiliary loss.
+    NOW SUPPORTS FOCAL LOSS (NEW)
     """
-    def __init__(self, alpha=0.85, label_smoothing=0.0):
+    def __init__(self, alpha=0.85, label_smoothing=0.0, use_focal=False, class_weights=None):  # NEW PARAMETERS
         """
         Args:
             alpha: Weight for main task (sign classification)
-                   1-alpha weight for auxiliary task (handedness)
             label_smoothing: Label smoothing for cross-entropy
+            use_focal: Use Focal Loss instead of CrossEntropy (NEW)
+            class_weights: Class weights for imbalanced data (NEW)
         """
         super().__init__()
         self.alpha = alpha
-        self.sign_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+
+        # USE FOCAL LOSS OR CROSSENTROPY (NEW)
+        if use_focal:
+            self.sign_loss = FocalLoss(alpha=0.25, gamma=2.0, weight=class_weights)
+        else:
+            self.sign_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing, weight=class_weights)
+
         self.handedness_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
     def forward(self, sign_logits, handedness_logits, sign_labels, handedness_labels):
-        """
-        Args:
-            sign_logits: (batch_size, num_classes)
-            handedness_logits: (batch_size, 3)
-            sign_labels: (batch_size,)
-            handedness_labels: (batch_size,)
-        Returns:
-            total_loss: Weighted combination
-            loss_sign: Sign classification loss
-            loss_handedness: Handedness prediction loss
-        """
         loss_sign = self.sign_loss(sign_logits, sign_labels)
         loss_handedness = self.handedness_loss(handedness_logits, handedness_labels)
 
-        # Weighted combination: 85% sign, 15% handedness
         total_loss = self.alpha * loss_sign + (1 - self.alpha) * loss_handedness
 
         return total_loss, loss_sign, loss_handedness
 
 
 def compute_effective_number_weights(class_counts, beta=0.9999):
-    """
-    Compute class weights using effective number method.
-    Better for extreme imbalance than simple inverse frequency.
-
-    Args:
-        class_counts: Counter or dict of {class_idx: count}
-        beta: Smoothing parameter (0.9999 for extreme imbalance)
-    """
+    """Compute class weights using effective number method."""
     num_classes = len(class_counts)
     weights = torch.zeros(num_classes)
 
     for cls, count in class_counts.items():
-        # Effective number prevents infinite weight for rare classes
         effective_num = (1 - beta**count) / (1 - beta)
         weights[cls] = 1.0 / effective_num
 
-    # Normalize weights
     weights = weights / weights.sum() * num_classes
 
     return weights
 
 
 def build_topk_vocabulary(npz_files, K=150, min_samples=50, debug=True):
-    """
-    Build vocabulary with minimum sample filtering.
-
-    Args:
-        npz_files: List of NPZ file paths
-        K: Target number of classes
-        min_samples: Minimum samples required per class
-        debug: Print diagnostics
-    """
+    """Build vocabulary with minimum sample filtering."""
     counts = Counter()
     skipped = 0
 
@@ -813,7 +616,6 @@ def build_topk_vocabulary(npz_files, K=150, min_samples=50, debug=True):
     if debug and skipped:
         print(f"[INFO] TopK builder skipped {skipped} unreadable files.")
 
-    # Filter classes with insufficient samples BEFORE selecting top-K
     filtered_counts = {w: c for w, c in counts.items() if c >= min_samples}
 
     if debug:
@@ -821,7 +623,6 @@ def build_topk_vocabulary(npz_files, K=150, min_samples=50, debug=True):
         print(f"[INFO] Filtered {removed} classes with < {min_samples} samples")
         print(f"[INFO] Remaining vocabulary: {len(filtered_counts)} classes")
 
-    # Select top-K from filtered classes
     most_common = Counter(filtered_counts).most_common(K)
     top_k_words = {w for (w, _) in most_common}
 
@@ -835,171 +636,35 @@ def build_topk_vocabulary(npz_files, K=150, min_samples=50, debug=True):
     return top_k_words, dict(counts)
 
 
-def train_epoch(model, train_loader, criterion, optimizer, device, epoch, debug=True):
-    """Train for one epoch."""
-    model.train()
-    total_loss = 0
-    correct = 0
-    total = 0
+def compute_topk_accuracy(logits, labels, k_values=[1, 2, 3, 4, 5]):
+    """Compute top-k accuracy for multiple k values."""
+    batch_size = labels.size(0)
+    num_classes = logits.size(1)
 
-    pbar = tqdm(train_loader, desc=f"Epoch {epoch+1} [Train]")
+    max_k = max(k_values)
+    max_k = min(max_k, num_classes)
 
-    for batch_idx, (landmarks, labels, seq_lengths) in enumerate(pbar):
-        landmarks = landmarks.to(device)
-        labels = labels.to(device)
+    _, topk_pred = logits.topk(max_k, dim=1, largest=True, sorted=True)
 
-        logits = model(landmarks)
-        loss = criterion(logits, labels)
+    labels_expanded = labels.view(-1, 1).expand_as(topk_pred)
 
-        optimizer.zero_grad()
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+    correct = topk_pred.eq(labels_expanded)
 
-        total_loss += loss.item()
-        _, predicted = torch.max(logits, 1)
-        correct += (predicted == labels).sum().item()
-        total += labels.size(0)
+    topk_accs = {}
+    for k in k_values:
+        if k > num_classes:
+            k = num_classes
 
-        if debug and batch_idx % 5 == 0:
-            batch_acc = (predicted == labels).sum().item() / labels.size(0)
-            pbar.set_postfix({
-                "loss": f"{loss.item():.4f}",
-                "batch_acc": f"{batch_acc:.2%}",
-                "avg_loss": f"{total_loss/(batch_idx+1):.4f}"
-            })
+        correct_k = correct[:, :k].sum(dim=1).float()
+        topk_acc = correct_k.sum() / batch_size
+        topk_accs[k] = topk_acc.item()
 
-    accuracy = correct / total
-    avg_loss = total_loss / len(train_loader)
-    return avg_loss, accuracy
-
-
-def evaluate(model, val_loader, criterion, device, epoch, debug=True):
-    """Evaluate on validation set."""
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
-
-    pbar = tqdm(val_loader, desc=f"Epoch {epoch+1} [Val]  ")
-
-    with torch.no_grad():
-        for batch_idx, (landmarks, labels, seq_lengths) in enumerate(pbar):
-            landmarks = landmarks.to(device)
-            labels = labels.to(device)
-
-            logits = model(landmarks)
-            loss = criterion(logits, labels)
-
-            total_loss += loss.item()
-            _, predicted = torch.max(logits, 1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
-
-            if debug and batch_idx % 5 == 0:
-                batch_acc = (predicted == labels).sum().item() / labels.size(0)
-                pbar.set_postfix({
-                    "loss": f"{loss.item():.4f}",
-                    "batch_acc": f"{batch_acc:.2%}",
-                    "avg_loss": f"{total_loss/(batch_idx+1):.4f}"
-                })
-
-    accuracy = correct / total
-    avg_loss = total_loss / len(val_loader)
-    return avg_loss, accuracy
-
-
-def plot_training_curves(train_losses, val_losses, train_accs, val_accs, save_dir="./plots"):
-    """Generate training visualization plots."""
-    os.makedirs(save_dir, exist_ok=True)
-
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
-    fig.suptitle('Sign Language Model Training Curves', fontsize=16, fontweight='bold')
-
-    axes[0, 0].plot(train_losses, label='Train Loss', marker='o', linewidth=2)
-    axes[0, 0].plot(val_losses, label='Val Loss', marker='s', linewidth=2)
-    axes[0, 0].set_xlabel('Epoch')
-    axes[0, 0].set_ylabel('Loss')
-    axes[0, 0].set_title('Training & Validation Loss')
-    axes[0, 0].legend()
-    axes[0, 0].grid(True, alpha=0.3)
-
-    axes[0, 1].plot(train_accs, label='Train Accuracy', marker='o', linewidth=2)
-    axes[0, 1].plot(val_accs, label='Val Accuracy', marker='s', linewidth=2)
-    axes[0, 1].set_xlabel('Epoch')
-    axes[0, 1].set_ylabel('Accuracy')
-    axes[0, 1].set_title('Training & Validation Accuracy')
-    axes[0, 1].legend()
-    axes[0, 1].grid(True, alpha=0.3)
-    axes[0, 1].set_ylim([0, 1.05])
-
-    loss_diff = [v - t for t, v in zip(train_losses, val_losses)]
-    axes[1, 0].bar(range(len(loss_diff)), loss_diff, alpha=0.7, color='orange')
-    axes[1, 0].axhline(y=0, color='r', linestyle='--', linewidth=2)
-    axes[1, 0].set_xlabel('Epoch')
-    axes[1, 0].set_ylabel('Val Loss - Train Loss')
-    axes[1, 0].set_title('Overfitting Indicator')
-    axes[1, 0].grid(True, alpha=0.3)
-
-    acc_gap = [v - t for t, v in zip(train_accs, val_accs)]
-    axes[1, 1].bar(range(len(acc_gap)), acc_gap, alpha=0.7, color='green')
-    axes[1, 1].axhline(y=0, color='r', linestyle='--', linewidth=2)
-    axes[1, 1].set_xlabel('Epoch')
-    axes[1, 1].set_ylabel('Val Acc - Train Acc')
-    axes[1, 1].set_title('Generalization Gap')
-    axes[1, 1].grid(True, alpha=0.3)
-
-    plt.tight_layout()
-    plot_path = os.path.join(save_dir, 'training_curves.png')
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    print(f"\n✓ Training curves saved to {plot_path}")
-    plt.close()
-
-    return plot_path
-
-
-def log_summary_metrics(train_losses, val_losses, train_accs, val_accs, top_n_words, best_epoch, best_val_acc):
-    """Log comprehensive summary metrics to MLflow."""
-    summary_stats = {
-        "best_epoch": best_epoch + 1,
-        "best_val_accuracy": float(best_val_acc),
-        "final_train_loss": float(train_losses[-1]),
-        "final_val_loss": float(val_losses[-1]),
-        "final_train_acc": float(train_accs[-1]),
-        "final_val_acc": float(val_accs[-1]),
-        "min_val_loss": float(min(val_losses)),
-        "max_train_acc": float(max(train_accs)),
-        "max_val_acc": float(max(val_accs)),
-        "avg_train_loss": float(np.mean(train_losses)),
-        "avg_val_loss": float(np.mean(val_losses)),
-        "avg_train_acc": float(np.mean(train_accs)),
-        "avg_val_acc": float(np.mean(val_accs)),
-    }
-
-    final_gap = val_accs[-1] - train_accs[-1]
-    max_gap = max(val_accs[i] - train_accs[i] for i in range(len(train_accs)))
-
-    summary_stats["final_accuracy_gap"] = float(final_gap)
-    summary_stats["max_accuracy_gap"] = float(max_gap)
-    summary_stats["loss_stability"] = float(np.std(val_losses[-5:]))
-
-    mlflow.log_metrics(summary_stats)
-
-    print(f"\n" + "="*80)
-    print("SUMMARY METRICS")
-    print("="*80)
-    for key, value in summary_stats.items():
-        if isinstance(value, float):
-            print(f"  {key:30} : {value:.4f}")
-        else:
-            print(f"  {key:30} : {value}")
-    print("="*80)
+    return topk_accs
 
 
 TELEGRAM_BOT_TOKEN = '8327173184:AAGLA5pcLiAz-vMSVBq4tVJCHo7TPH3Zu8g'
 CHAT_ID = '8541359800'
 
-#Define bot
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
 async def send_message(text, chat_id):
@@ -1032,7 +697,6 @@ class GracefulShutdown:
         return self.interrupted
 
 
-
 def train_epoch_interruptible(model, train_loader, optimizer, criterion, device, epoch):
     """Training with multi-task learning and top-k accuracy metrics."""
     model.train()
@@ -1041,7 +705,6 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
     total_sign_loss = 0.0
     total_hand_loss = 0.0
 
-    # Track top-k accuracies
     topk_correct = {k: 0.0 for k in [1, 2, 3, 4, 5]}
     hand_acc = 0.0
     num_batches = 0
@@ -1055,35 +718,29 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
         sign_labels = sign_labels.to(device)
         handedness_labels = handedness_labels.to(device)
 
-        # Forward pass
         sign_logits, handedness_logits = model(landmarks)
 
-        # Calculate multi-task loss
         total_loss_batch, loss_sign, loss_hand = criterion(
             sign_logits, handedness_logits,
             sign_labels, handedness_labels
         )
 
-        # Backward pass
         optimizer.zero_grad()
         total_loss_batch.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
-        # Track losses
         batch_size = sign_labels.size(0)
         total_loss += total_loss_batch.item()
         total_sign_loss += loss_sign.item()
         total_hand_loss += loss_hand.item()
 
-        # Compute top-k accuracies
         topk_batch_accs = compute_topk_accuracy(sign_logits, sign_labels, k_values=[1, 2, 3, 4, 5])
         for k, acc in topk_batch_accs.items():
             topk_correct[k] += acc * batch_size
 
         total_samples += batch_size
 
-        # Handedness accuracy
         hand_preds = torch.argmax(handedness_logits, dim=1)
         hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
         hand_acc += hand_batch_acc
@@ -1097,65 +754,22 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
             'Hand': f'{hand_acc/num_batches:.4f}'
         })
 
-    # Compute averages
     avg_loss = total_loss / num_batches
     avg_sign_loss = total_sign_loss / num_batches
     avg_hand_loss = total_hand_loss / num_batches
     avg_hand_acc = hand_acc / num_batches
 
-    # Average top-k accuracies
     avg_topk_accs = {k: correct / total_samples for k, correct in topk_correct.items()}
 
     return avg_loss, avg_topk_accs, avg_hand_acc, avg_sign_loss, avg_hand_loss
 
 
-def evaluate_interruptible(model, val_loader, criterion, device, epoch,
-                            interrupt_handler, debug=True):
-    """Evaluate on validation set with interrupt handling."""
-    model.eval()
-    total_loss = 0
-    correct = 0
-    total = 0
-
-    pbar = tqdm(val_loader, desc=f"Epoch {epoch+1} [Val]  ")
-
-    with torch.no_grad():
-        for batch_idx, (landmarks, labels, seq_lengths) in enumerate(pbar):
-            # Check for interrupt signal
-            if interrupt_handler.interrupted:
-                print(f"\n[INTERRUPT] Stopping validation at batch {batch_idx}/{len(val_loader)}")
-                return total_loss / (batch_idx + 1) if batch_idx > 0 else 0, correct / total if total > 0 else 0, True
-
-            landmarks = landmarks.to(device)
-            labels = labels.to(device)
-
-            logits = model(landmarks)
-            loss = criterion(logits, labels)
-
-            total_loss += loss.item()
-            _, predicted = torch.max(logits, 1)
-            correct += (predicted == labels).sum().item()
-            total += labels.size(0)
-
-            if debug and batch_idx % 5 == 0:
-                batch_acc = (predicted == labels).sum().item() / labels.size(0)
-                pbar.set_postfix({
-                    "loss": f"{loss.item():.4f}",
-                    "batch_acc": f"{batch_acc:.2%}",
-                    "avg_loss": f"{total_loss/(batch_idx+1):.4f}"
-                })
-
-    accuracy = correct / total
-    avg_loss = total_loss / len(val_loader)
-    return avg_loss, accuracy, False
-
 def validate_epoch(model, val_loader, criterion, device, idx_to_word):
-    """Validation with top-k accuracy, confusion matrix and per-class metrics."""
+    """Validation with top-k accuracy."""
     model.eval()
 
     total_loss = 0.0
 
-    # Track top-k accuracies
     topk_correct = {k: 0.0 for k in [1, 2, 3, 4, 5]}
     hand_acc = 0.0
     num_batches = 0
@@ -1163,7 +777,6 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
 
     handedness_distribution = {"LEFT": 0, "RIGHT": 0, "BOTH": 0, "NONE": 0}
 
-    # Collect all predictions and labels
     all_preds = []
     all_labels = []
 
@@ -1184,7 +797,6 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
             )
             total_loss += total_loss_batch.item()
 
-            # Compute top-k accuracies
             batch_size = sign_labels.size(0)
             topk_batch_accs = compute_topk_accuracy(sign_logits, sign_labels, k_values=[1, 2, 3, 4, 5])
             for k, acc in topk_batch_accs.items():
@@ -1192,10 +804,8 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
 
             total_samples += batch_size
 
-            # Top-1 predictions for confusion matrix
             sign_preds = torch.argmax(sign_logits, dim=1)
 
-            # Handedness accuracy
             hand_preds = torch.argmax(handedness_logits, dim=1)
             hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
             hand_acc += hand_batch_acc
@@ -1204,7 +814,6 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
             for hand_label in handedness_labels.cpu().numpy():
                 handedness_distribution[handedness_names[hand_label]] += 1
 
-            # Collect for confusion matrix
             all_preds.extend(sign_preds.cpu().numpy())
             all_labels.extend(sign_labels.cpu().numpy())
 
@@ -1217,17 +826,14 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
     avg_loss = total_loss / num_batches
     avg_hand_acc = hand_acc / num_batches
 
-    # Average top-k accuracies
     avg_topk_accs = {k: correct / total_samples for k, correct in topk_correct.items()}
 
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
 
-    # Compute confusion matrix
     num_classes = len(idx_to_word)
     confusion_mat = confusion_matrix(all_labels, all_preds, labels=range(num_classes))
 
-    # Compute per-class metrics
     class_metrics = {}
     for class_idx in range(num_classes):
         class_name = idx_to_word[class_idx]
@@ -1250,7 +856,6 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
                 'class_idx': class_idx
             }
 
-    # Overall metrics
     f1_macro = f1_score(all_labels, all_preds, average='macro', zero_division=0)
     f1_weighted = f1_score(all_labels, all_preds, average='weighted', zero_division=0)
     precision_macro = precision_score(all_labels, all_preds, average='macro', zero_division=0)
@@ -1265,6 +870,7 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
 
     return avg_loss, avg_topk_accs, avg_hand_acc, handedness_distribution, \
            confusion_mat, class_metrics, all_preds, all_labels
+
 
 def plot_confusion_matrix(confusion_mat, idx_to_word, save_path, top_n=50):
     """Plot and save confusion matrix."""
@@ -1283,7 +889,6 @@ def plot_confusion_matrix(confusion_mat, idx_to_word, save_path, top_n=50):
 
     plt.figure(figsize=(max(12, top_n * 0.4), max(10, top_n * 0.35)))
 
-    # Normalize row-wise
     confusion_mat_norm = confusion_mat_filtered.astype('float') / confusion_mat_filtered.sum(axis=1)[:, np.newaxis]
     confusion_mat_norm = np.nan_to_num(confusion_mat_norm)
 
@@ -1310,47 +915,6 @@ def plot_confusion_matrix(confusion_mat, idx_to_word, save_path, top_n=50):
 
     return save_path
 
-def compute_topk_accuracy(logits, labels, k_values=[1, 2, 3, 4, 5]):
-    """
-    Compute top-k accuracy for multiple k values.
-
-    Args:
-        logits: (batch_size, num_classes) model predictions
-        labels: (batch_size,) ground truth labels
-        k_values: List of k values to compute accuracy for
-
-    Returns:
-        dict: {k: accuracy} for each k in k_values
-    """
-    batch_size = labels.size(0)
-    num_classes = logits.size(1)
-
-    # Get top-k predictions
-    max_k = max(k_values)
-    max_k = min(max_k, num_classes)  # Handle case where k > num_classes
-
-    # Get top-k predicted class indices
-    _, topk_pred = logits.topk(max_k, dim=1, largest=True, sorted=True)
-
-    # Expand labels to match topk_pred shape
-    labels_expanded = labels.view(-1, 1).expand_as(topk_pred)
-
-    # Check if correct label is in top-k predictions
-    correct = topk_pred.eq(labels_expanded)
-
-    # Compute accuracy for each k
-    topk_accs = {}
-    for k in k_values:
-        if k > num_classes:
-            k = num_classes
-
-        # Check if correct label is in top-k
-        correct_k = correct[:, :k].sum(dim=1).float()  # 1 if correct, 0 otherwise
-        topk_acc = correct_k.sum() / batch_size
-        topk_accs[k] = topk_acc.item()
-
-    return topk_accs
-
 
 def log_class_metrics_to_mlflow(class_metrics, epoch):
     """Log per-class metrics to MLflow."""
@@ -1363,7 +927,6 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
             'val_recall_macro': overall['recall_macro']
         }, step=epoch)
 
-    # Log top 20 classes by support
     class_list = [(name, metrics) for name, metrics in class_metrics.items() if name != '_overall']
     class_list_sorted = sorted(class_list, key=lambda x: x[1]['support'], reverse=True)
 
@@ -1371,7 +934,6 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
         metric_name = f"val_class_acc/{name}"
         mlflow.log_metric(metric_name, metrics['accuracy'], step=epoch)
 
-    # Save detailed JSON
     class_metrics_table = []
     for name, metrics in class_list_sorted:
         class_metrics_table.append({
@@ -1392,49 +954,52 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
 
 def main():
     torch.backends.cudnn.benchmark = True
-    torch.backends.cudnn.deterministic = False  # Remove if reproducibility critical
+    torch.backends.cudnn.deterministic = False
     """Main training pipeline with class imbalance handling."""
     print("=" * 80)
-    print("SIGN LANGUAGE CLASSIFIER - WITH CLASS IMBALANCE HANDLING")
+    print("SIGN LANGUAGE CLASSIFIER - WITH ENHANCED FEATURES")
     print("=" * 80)
 
     shutdown_handler = GracefulShutdown()
 
-    # ============================================================================
-    # MLFLOW SETUP (unchanged)
-    # ============================================================================
+    # MLFLOW SETUP
     os.environ['MLFLOW_TRACKING_USERNAME'] = 'roman'
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top150-Balanced-WeightedLoss     - Residual connections around attention layer for improved gradient flow"  # Updated name
+    RUN_NAME = f"Top150-Enhanced-Features"  # UPDATED
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
-    # HYPERPARAMETERS
+    # HYPERPARAMETERS (UPDATED)
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    # CLASS IMBALANCE SETTINGS (NEW)
-    MIN_SAMPLES_PER_CLASS = 100  # Start conservative
-    USE_CLASS_WEIGHTS = True      # Enable weighted loss
-    USE_WEIGHTED_SAMPLER = True   # Enable oversampling
-    WEIGHT_BETA = 0.9999          # For effective number weighting
+    MIN_SAMPLES_PER_CLASS = 100
+    USE_CLASS_WEIGHTS = True
+    USE_WEIGHTED_SAMPLER = True
+    WEIGHT_BETA = 0.9999
 
     NUM_EPOCHS = 1000
     BATCH_SIZE = 32
-    LEARNING_RATE = 3e-4
-    HIDDEN_SIZE = 128
+    LEARNING_RATE = 1e-4  # Reduced from 3e-4
+    HIDDEN_SIZE = 96  # Reduced from 128
     NUM_LSTM_LAYERS = 1
-    DROPOUT_RATE = 0.35
-    LSTM_DROPOUT = 0.25
+    DROPOUT_RATE = 0.45  # Increased from 0.35
+    LSTM_DROPOUT = 0.35  # Increased from 0.25
     NUM_ATTENTION_HEADS = 4
-    WEIGHT_DECAY = 5e-4
+    ATTENTION_DROPOUT = 0.25  # NEW
+    WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.7
 
-    number_of_classes = 150  # Target, may get fewer after filtering
+    # FEATURE ENGINEERING SETTINGS (NEW)
+    USE_ENHANCED_FEATURES = True  # Toggle feature engineering
+    INCLUDE_ACCELERATION = False  # Toggle acceleration features
+    USE_FOCAL_LOSS = True  # Use Focal Loss
+
+    number_of_classes = 150
 
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_balanced"
@@ -1447,11 +1012,9 @@ def main():
         run = mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME)
 
         try:
-            # Log system info (unchanged)
             mlflow.log_param("python_version", platform.python_version())
             mlflow.log_param("pytorch_version", torch.__version__)
 
-            # Log class imbalance params (NEW)
             mlflow.log_params({
                 "min_samples_per_class": MIN_SAMPLES_PER_CLASS,
                 "use_class_weights": USE_CLASS_WEIGHTS,
@@ -1466,16 +1029,29 @@ def main():
                 "dropout_rate": DROPOUT_RATE,
                 "augmentation_enabled": AUGMENT,
                 "augmentation_probability": AUGMENT_PROBABILITY,
+                "use_enhanced_features": USE_ENHANCED_FEATURES,  # NEW
+                "include_acceleration": INCLUDE_ACCELERATION,  # NEW
+                "use_focal_loss": USE_FOCAL_LOSS,  # NEW
+                "attention_dropout": ATTENTION_DROPOUT,  # NEW
             })
 
-            # ================================================================
-            # STEP 1: Load dataset with filtered vocabulary (UPDATED)
-            # ================================================================
-            print(f"\n[STEP 1] Loading dataset with MIN_SAMPLES={MIN_SAMPLES_PER_CLASS}...")
+            # STEP 1: Load dataset WITH ENHANCED FEATURES
+            print(f"\n[STEP 1] Loading dataset with enhanced features={USE_ENHANCED_FEATURES}...")
 
-            base_dataset = SignLanguageDataset(NPZ_DIR, debug=True, augment=False)
+            base_dataset = SignLanguageDataset(
+                NPZ_DIR,
+                debug=True,
+                augment=False,
+                use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
+                include_accel=INCLUDE_ACCELERATION  # NEW
+            )
 
-            # Build filtered vocabulary
+            # GET INPUT SIZE (will be larger if enhanced features enabled)
+            sample_landmarks, _, _ = base_dataset[0]
+            input_size = sample_landmarks.shape[1]
+            print(f"\n>>> Input size: {input_size} (original: 1659)")
+            mlflow.log_param("input_size", input_size)
+
             npz_files = sorted(Path(NPZ_DIR).glob("*.npz"))
             top_k_words, all_counts = build_topk_vocabulary(
                 npz_files,
@@ -1486,24 +1062,25 @@ def main():
 
             print(f"\n[VOCABULARY] Using {len(top_k_words)} classes after filtering")
 
-            # Create augmented and validation datasets
             dataset_train = SignLanguageDataset(
                 NPZ_DIR,
                 word_to_idx=base_dataset.word_to_idx,
                 debug=False,
                 augment=AUGMENT,
-                augment_prob=AUGMENT_PROBABILITY
+                augment_prob=AUGMENT_PROBABILITY,
+                use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
+                include_accel=INCLUDE_ACCELERATION  # NEW
             )
             dataset_val = SignLanguageDataset(
                 NPZ_DIR,
                 word_to_idx=base_dataset.word_to_idx,
                 debug=False,
-                augment=False
+                augment=False,
+                use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
+                include_accel=INCLUDE_ACCELERATION  # NEW
             )
 
-            # ================================================================
-            # STEP 2: Filter to top words and remap (UPDATED)
-            # ================================================================
+            # STEP 2: Filter to top words
             print(f"\n[STEP 2] Filtering to vocabulary...")
 
             old_to_new_idx = {}
@@ -1523,9 +1100,7 @@ def main():
 
             print(f"  Filtered to {len(filtered_indices)} samples")
 
-            # ================================================================
-            # STEP 3: Stratified split (unchanged)
-            # ================================================================
+            # STEP 3: Split
             print(f"\n[STEP 3] Splitting dataset...")
 
             train_indices, val_indices = train_test_split(
@@ -1539,9 +1114,7 @@ def main():
             print(f"  Train: {len(train_indices)}, Val: {len(val_indices)}")
             print(f"  Classes: {num_classes}")
 
-            # ================================================================
-            # STEP 4: Compute class weights (NEW)
-            # ================================================================
+            # STEP 4: Compute class weights
             if USE_CLASS_WEIGHTS:
                 print(f"\n[STEP 4] Computing class weights...")
 
@@ -1557,58 +1130,41 @@ def main():
                 )
 
                 print(f"  Weight range: {class_weights.min():.2f} - {class_weights.max():.2f}")
-                print(f"  Weight std: {class_weights.std():.2f}")
+                class_weights = class_weights.to(DEVICE)
             else:
                 class_weights = None
 
-            # ================================================================
-            # STEP 5: Create weighted sampler (FIXED)
-            # ================================================================
+            # STEP 5: Create weighted sampler
             if USE_WEIGHTED_SAMPLER:
                 print(f"\n[STEP 5] Creating weighted sampler...")
 
-                # Count classes in TRAIN SET only
                 train_class_counts = Counter()
                 for idx in train_indices:
                     _, old_label, _ = base_dataset[idx]
                     new_label = old_to_new_idx[old_label.item()]
                     train_class_counts[new_label] += 1
 
-                print(f"  Train class distribution:")
-                sorted_counts = sorted(train_class_counts.items())
-                for cls, count in sorted_counts[:10]:
-                    print(f"    Class {cls}: {count} samples")
-                print(f"    ... ({len(train_class_counts)} classes)")
-                print(f"    Min: {min(train_class_counts.values())}, Max: {max(train_class_counts.values())}")
-
-                # Create weights for each TRAINING sample
                 sample_weights = []
                 for idx in train_indices:
                     _, old_label, _ = base_dataset[idx]
                     new_label = old_to_new_idx[old_label.item()]
                     count = train_class_counts[new_label]
-                    # Square-root weighting
                     weight = 1.0 / np.sqrt(count)
                     sample_weights.append(weight)
 
-                # Create sampler - it will sample from indices 0 to len(train_indices)-1
                 train_sampler = WeightedRandomSampler(
                     weights=sample_weights,
                     num_samples=len(sample_weights),
                     replacement=True
                 )
 
-                print(f"  Created sampler for {len(sample_weights)} training samples")
-
-                # Create remapped datasets
                 train_subset = RemappedDataset(dataset_train, train_indices, old_to_new_idx)
                 val_subset = RemappedDataset(dataset_val, val_indices, old_to_new_idx)
 
-                # DataLoader with sampler
                 train_loader = DataLoader(
                     train_subset,
                     batch_size=BATCH_SIZE,
-                    sampler=train_sampler,  # Sampler uses indices 0 to len(train_subset)-1
+                    sampler=train_sampler,
                     collate_fn=PadCollate(),
                     num_workers=4,
                     pin_memory=True,
@@ -1616,7 +1172,6 @@ def main():
                     persistent_workers=True
                 )
             else:
-                # No weighted sampling - standard approach
                 train_subset = RemappedDataset(dataset_train, train_indices, old_to_new_idx)
                 val_subset = RemappedDataset(dataset_val, val_indices, old_to_new_idx)
 
@@ -1631,7 +1186,6 @@ def main():
                     persistent_workers=True
                 )
 
-            # Validation loader (always the same)
             val_loader = DataLoader(
                 val_subset,
                 batch_size=BATCH_SIZE,
@@ -1643,19 +1197,18 @@ def main():
                 persistent_workers=True
             )
 
-            # ================================================================
-            # STEP 6: Build model (unchanged)
-            # ================================================================
-            print(f"\n[STEP 6] Building model...")
+            # STEP 6: Build model WITH RESIDUAL ATTENTION
+            print(f"\n[STEP 6] Building model with residual attention...")
 
             model = LSTMSignClassifierWithHandedness(
-                input_size=1659,
+                input_size=input_size,  # UPDATED - uses enhanced features size
                 hidden_size=HIDDEN_SIZE,
                 num_classes=num_classes,
                 num_lstm_layers=NUM_LSTM_LAYERS,
                 dropout_rate=DROPOUT_RATE,
                 lstm_dropout=LSTM_DROPOUT,
                 num_attention_heads=NUM_ATTENTION_HEADS,
+                attention_dropout=ATTENTION_DROPOUT,  # NEW
                 debug=True
             ).to(DEVICE)
 
@@ -1663,20 +1216,15 @@ def main():
                 print("Compiling model with torch.compile...")
                 model = torch.compile(model, mode='max-autotune-no-cudagraphs')
 
-            # ================================================================
-            # STEP 7: Setup training with weighted loss (UPDATED)
-            # ================================================================
+            # STEP 7: Setup training WITH FOCAL LOSS
             print(f"\n[STEP 7] Setting up training...")
 
-            if USE_CLASS_WEIGHTS and class_weights is not None:
-                criterion = MultiTaskLoss(alpha=0.85, label_smoothing=0.0)
-                # Note: MultiTaskLoss uses CrossEntropyLoss internally
-                # We need to modify it to accept weights
-                # For now, we'll use weighted CrossEntropyLoss for sign classification
-                print(f"  Using weighted multi-task loss")
-            else:
-                criterion = MultiTaskLoss(alpha=0.85, label_smoothing=0.0)
-                print(f"  Using standard multi-task loss")
+            criterion = MultiTaskLoss(
+                alpha=0.85,
+                label_smoothing=0.0,
+                use_focal=USE_FOCAL_LOSS,  # NEW
+                class_weights=class_weights if USE_CLASS_WEIGHTS else None  # NEW
+            )
 
             optimizer = torch.optim.AdamW(
                 model.parameters(),
@@ -1698,9 +1246,7 @@ def main():
                 mode="max"
             )
 
-            # ================================================================
-            # STEP 8: Training loop (unchanged - uses your existing functions)
-            # ================================================================
+            # STEP 8: Training loop
             print(f"\n[STEP 8] Starting training...")
             print("="*80)
 
@@ -1733,28 +1279,25 @@ def main():
                 scheduler.step()
                 epochs_trained += 1
 
-                # Update best model based on top-1 accuracy
                 if val_topk_accs[1] > best_val_acc:
                     best_val_acc = val_topk_accs[1]
                     best_epoch = epoch
-                    best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_balanced.pth")
+                    best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_enhanced.pth")
                     torch.save(model.state_dict(), best_model_path)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
-                train_accs.append(train_topk_accs[1])  # Store top-1 for plotting
+                train_accs.append(train_topk_accs[1])
                 val_accs.append(val_topk_accs[1])
 
                 lr = optimizer.param_groups[0]['lr']
 
-                # Enhanced printing with top-k metrics
                 print(f"Epoch {epoch+1:4}/{NUM_EPOCHS} │ "
                     f"Loss: {train_loss:.4f}/{val_loss:.4f} │ "
                     f"Top1: {train_topk_accs[1]:.2%}/{val_topk_accs[1]:.2%} │ "
                     f"Top5: {train_topk_accs[5]:.2%}/{val_topk_accs[5]:.2%} │ "
                     f"LR: {lr:.2e}")
 
-                # Log all top-k metrics to MLflow
                 mlflow.log_metrics({
                     "train_loss": train_loss,
                     "val_loss": val_loss,
@@ -1775,31 +1318,26 @@ def main():
                     print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
                     break
 
-            # ================================================================
-            # STEP 9: Save results (unchanged)
-            # ================================================================
+            # STEP 9: Save results
             print("\n" + "="*80)
             print(f"[TRAINING COMPLETE]")
             print(f"  Best Val Accuracy: {best_val_acc:.2%} at epoch {best_epoch+1}")
             print(f"  Total epochs: {epochs_trained}")
+            print(f"  Enhanced features: {USE_ENHANCED_FEATURES}")
+            print(f"  Input size: {input_size}")
             print("="*80)
 
-            # Save final model and generate plots (your existing code)
-            final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final_balanced.pth")
+            final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final_enhanced.pth")
             torch.save(model.state_dict(), final_model_path)
 
             mlflow.log_artifact(final_model_path)
             mlflow.pytorch.log_model(model, "model")
 
-            if len(train_losses) > 0:
-                plot_path = plot_training_curves(train_losses, val_losses, train_accs, val_accs, PLOTS_DIR)
-                mlflow.log_artifact(plot_path)
-
             asyncio.run(send_message(
-                f"Training complete (BALANCED):\n"
+                f"Training complete (ENHANCED):\n"
                 f"Best Val Acc: {best_val_acc:.2%}\n"
+                f"Input size: {input_size}\n"
                 f"Classes: {num_classes}\n"
-                f"Min samples: {MIN_SAMPLES_PER_CLASS}\n"
                 f"Epochs: {epochs_trained}",
                 CHAT_ID
             ))
@@ -1816,4 +1354,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

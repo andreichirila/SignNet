@@ -589,21 +589,15 @@ class LSTMSignClassifierSimplified(nn.Module):
 
 class LSTMSignClassifierWithHandedness(nn.Module):
     """
-    LSTM model with multi-task learning:
+    LSTM model with multi-task learning and residual attention
     - Task 1: Sign language classification (main)
     - Task 2: Handedness prediction (auxiliary)
-
-    Handedness classes:
-    0 = LEFT only
-    1 = RIGHT only
-    2 = BOTH hands
-    3 = NONE (no hands detected)
+    - Residual connections around attention layer for improved gradient flow
     """
     def __init__(self, input_size=1659, hidden_size=128, num_classes=70,
                  num_lstm_layers=1, dropout_rate=0.35, lstm_dropout=0.25,
-                 num_attention_heads=4, debug=False):
+                 num_attention_heads=4, attention_dropout=0.25, debug=False):
         super().__init__()
-
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_classes = num_classes
@@ -619,15 +613,20 @@ class LSTMSignClassifierWithHandedness(nn.Module):
             bidirectional=False
         )
 
-        # Attention mechanism
+        # Attention mechanism with dropout
         self.attention = nn.MultiheadAttention(
             embed_dim=hidden_size,
             num_heads=num_attention_heads,
             batch_first=True,
-            dropout=dropout_rate
+            dropout=attention_dropout
         )
 
+        # Layer normalization for residual connection (ADD THIS)
+        self.attention_norm = nn.LayerNorm(hidden_size)
+
+        # Dropout layers (ADD THIS)
         self.dropout = nn.Dropout(dropout_rate)
+        self.attention_dropout = nn.Dropout(attention_dropout)
 
         # Task 1: Sign classification head
         self.fc_sign = nn.Linear(hidden_size, num_classes)
@@ -636,11 +635,13 @@ class LSTMSignClassifierWithHandedness(nn.Module):
         self.fc_handedness = nn.Linear(hidden_size, 4)
 
         if debug:
-            print(f"[DEBUG] LSTMSignClassifierWithHandedness initialized:")
+            print(f"DEBUG: LSTMSignClassifierWithHandedness initialized with residual attention")
             print(f"  Input size: {input_size}")
             print(f"  Hidden size: {hidden_size}")
             print(f"  Num classes (sign): {num_classes}")
             print(f"  Num classes (handedness): 4 (LEFT, RIGHT, BOTH, NONE)")
+            print(f"  Attention heads: {num_attention_heads}")
+            print(f"  Attention dropout: {attention_dropout}")
 
     def forward(self, landmarks):
         """
@@ -651,26 +652,37 @@ class LSTMSignClassifierWithHandedness(nn.Module):
             handedness_logits: (batch_size, 4)
         """
         # LSTM forward pass
-        lstm_out, (h_n, c_n) = self.lstm(landmarks)  # lstm_out: (batch, seq_len, hidden)
+        lstm_out, (hn, cn) = self.lstm(landmarks)  # lstm_out: (batch, seq_len, hidden)
 
-        # Extract last hidden state properly for attention
-        # h_n shape: (num_layers, batch, hidden)
-        # We want: (batch, 1, hidden) for query
-        last_hidden = h_n[-1].unsqueeze(1)  # (batch, 1, hidden) - FIXED
+        # Get last hidden state for query
+        last_hidden = hn[-1].unsqueeze(1)  # (batch, 1, hidden)
 
-        # Apply attention
-        context, _ = self.attention(
-            last_hidden,      # Query: (batch, 1, hidden)
-            lstm_out,         # Key/Value: (batch, seq_len, hidden)
-            lstm_out
-        )
+        # Apply attention mechanism with residual connection
+        # MODIFIED: Store lstm_out for residual connection
+        residual = last_hidden  # Store input to attention layer
 
-        # Remove the middle dimension
-        context = context.squeeze(1)  # (batch, hidden)
+        # Attention: query=last_hidden, key=lstm_out, value=lstm_out
+        attn_out, _ = self.attention(
+            last_hidden,  # Query: (batch, 1, hidden)
+            lstm_out,     # Key: (batch, seq_len, hidden)
+            lstm_out      # Value: (batch, seq_len, hidden)
+        )  # Output: (batch, 1, hidden)
+
+        # Apply dropout to attention output
+        attn_out = self.attention_dropout(attn_out)
+
+        # ADD RESIDUAL CONNECTION: element-wise addition + layer normalization
+        # This is the key improvement - add input to attention output
+        context = self.attention_norm(residual + attn_out)  # (batch, 1, hidden)
+
+        # Squeeze to (batch, hidden)
+        context = context.squeeze(1)
+
+        # Apply final dropout
         context = self.dropout(context)
 
         # Two classification heads
-        sign_logits = self.fc_sign(context)           # (batch, num_classes)
+        sign_logits = self.fc_sign(context)  # (batch, num_classes)
         handedness_logits = self.fc_handedness(context)  # (batch, 4)
 
         return sign_logits, handedness_logits
@@ -1396,7 +1408,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top150-Balanced-WeightedLoss"  # Updated name
+    RUN_NAME = f"Top150-Balanced-WeightedLoss     - Residual connections around attention layer for improved gradient flow"  # Updated name
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================

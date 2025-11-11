@@ -63,41 +63,33 @@ class EnhancedLandmarkFeatures:
 
     @staticmethod
     def compute_hand_distances(landmarks_3d):
-        """Compute inter-hand distance"""
-        left_hand_start = 501
-        left_hand_end = 522
-        right_hand_start = 522
-        right_hand_end = 543
-
-        if landmarks_3d.shape[1] < right_hand_end:
-            return np.zeros((landmarks_3d.shape[0], 1))
-
-        left_center = landmarks_3d[:, left_hand_start:left_hand_end, :].mean(axis=1)
-        right_center = landmarks_3d[:, right_hand_start:right_hand_end, :].mean(axis=1)
-
+        """Compute inter-hand distance aligned with _default_edges mapping."""
+        T, L, _ = landmarks_3d.shape
+        EXPECTED_L = 553
+        if L != EXPECTED_L:
+            return np.zeros((T, 1))  # fallback-safe
+        LH_START, LH_END = 0, 21
+        RH_START, RH_END = 21, 42
+        left_center = landmarks_3d[:, LH_START:LH_END, :].mean(axis=1)
+        right_center = landmarks_3d[:, RH_START:RH_END, :].mean(axis=1)
         distances = np.linalg.norm(left_center - right_center, axis=1, keepdims=True)
         return distances
 
     @staticmethod
     def compute_hand_to_face_distances(landmarks_3d):
-        """Distance from hands to face"""
-        face_start = 33
-        face_end = 100
-        left_hand_start = 501
-        left_hand_end = 522
-        right_hand_start = 522
-        right_hand_end = 543
-
-        if landmarks_3d.shape[1] < right_hand_end:
-            return np.zeros((landmarks_3d.shape[0], 1)), np.zeros((landmarks_3d.shape[0], 1))
-
-        face_center = landmarks_3d[:, face_start:face_end, :].mean(axis=1)
-        left_center = landmarks_3d[:, left_hand_start:left_hand_end, :].mean(axis=1)
-        right_center = landmarks_3d[:, right_hand_start:right_hand_end, :].mean(axis=1)
-
+        """Distance from each hand center to face center aligned with _default_edges mapping."""
+        T, L, _ = landmarks_3d.shape
+        EXPECTED_L = 553
+        if L != EXPECTED_L:
+            return np.zeros((T, 1)), np.zeros((T, 1))  # fallback-safe
+        FACE_START, FACE_END = 42, 520
+        LH_START, LH_END = 0, 21
+        RH_START, RH_END = 21, 42
+        face_center = landmarks_3d[:, FACE_START:FACE_END, :].mean(axis=1)
+        left_center = landmarks_3d[:, LH_START:LH_END, :].mean(axis=1)
+        right_center = landmarks_3d[:, RH_START:RH_END, :].mean(axis=1)
         left_to_face = np.linalg.norm(left_center - face_center, axis=1, keepdims=True)
         right_to_face = np.linalg.norm(right_center - face_center, axis=1, keepdims=True)
-
         return left_to_face, right_to_face
 
     @staticmethod
@@ -567,40 +559,29 @@ class LSTMSignClassifierWithHandedness(nn.Module):
             print(f"  Attention heads: {num_attention_heads}")
             print(f"  Attention dropout: {attention_dropout}")  # NEW
 
-    def forward(self, landmarks):
-        """
-        UPDATED WITH RESIDUAL ATTENTION
-        """
-        # LSTM forward pass
-        lstm_out, (h_n, c_n) = self.lstm(landmarks)  # lstm_out: (batch, seq_len, hidden)
-
-        # Get last hidden state for query
-        last_hidden = h_n[-1].unsqueeze(1)  # (batch, 1, hidden)
-
-        # STORE FOR RESIDUAL CONNECTION (NEW)
-        residual = last_hidden
-
-        # Apply attention
-        attn_out, _ = self.attention(
-            last_hidden,  # Query: (batch, 1, hidden)
-            lstm_out,     # Key/Value: (batch, seq_len, hidden)
-            lstm_out
+    def forward(self, landmarks, lengths):
+        # landmarks: (B, T, D), lengths: (B,)
+        packed = nn.utils.rnn.pack_padded_sequence(
+            landmarks, lengths.cpu(), batch_first=True, enforce_sorted=False
         )
+        lstm_out_packed, (h_n, c_n) = self.lstm(packed)
+        lstm_out, _ = nn.utils.rnn.pad_packed_sequence(lstm_out_packed, batch_first=True)
 
-        # APPLY DROPOUT TO ATTENTION OUTPUT (NEW)
+        # Get last valid hidden state per sequence (use lengths)
+        idx = (lengths - 1).clamp(min=0).view(-1, 1, 1).expand(-1, 1, self.hidden_size)
+        last_hidden = lstm_out.gather(1, idx).contiguous()  # (B, 1, H)
+        max_T = lstm_out.size(1)
+        pad_mask = torch.arange(max_T, device=lengths.device).unsqueeze(0) >= lengths.unsqueeze(1)  # (B, T)
+
+
+        residual = last_hidden
+        attn_out, _ = self.attention(last_hidden, lstm_out, lstm_out, key_padding_mask=pad_mask)
         attn_out = self.attention_dropout_layer(attn_out)
-
-        # RESIDUAL CONNECTION + LAYER NORMALIZATION (NEW)
-        context = self.attention_norm(residual + attn_out)
-
-        # Remove the middle dimension
-        context = context.squeeze(1)  # (batch, hidden)
+        context = self.attention_norm(residual + attn_out).squeeze(1)
         context = self.dropout(context)
 
-        # Two classification heads
-        sign_logits = self.fc_sign(context)           # (batch, num_classes)
-        handedness_logits = self.fc_handedness(context)  # (batch, 4)
-
+        sign_logits = self.fc_sign(context)
+        handedness_logits = self.fc_handedness(context)
         return sign_logits, handedness_logits
 
 
@@ -610,24 +591,21 @@ class PadCollate:
         labels_list = [item[1] for item in batch]
         handedness_list = [item[2] for item in batch]
 
-        # Find max sequence length
-        max_seq_len = max([lm.shape[0] for lm in landmarks_list])
+        lengths = torch.tensor([lm.shape[0] for lm in landmarks_list], dtype=torch.long)
+        max_seq_len = int(lengths.max().item())
 
-        # Pad all sequences to max_seq_len
-        padded_landmarks = []
+        padded = []
         for lm in landmarks_list:
             if lm.shape[0] < max_seq_len:
                 pad_size = max_seq_len - lm.shape[0]
-                lm_padded = torch.nn.functional.pad(lm, (0, 0, 0, pad_size), mode='constant', value=0.0)
-            else:
-                lm_padded = lm
-            padded_landmarks.append(lm_padded)
+                lm = F.pad(lm, (0, 0, 0, pad_size), mode='constant', value=0.0)
+            padded.append(lm)
 
-        landmarks_tensor = torch.stack(padded_landmarks)
-        labels = torch.tensor(labels_list, dtype=torch.long)
-        handedness = torch.tensor(handedness_list, dtype=torch.long)
+        landmarks_tensor = torch.stack(padded, dim=0)            # (B, T, D)
+        labels = torch.stack(labels_list, dim=0).long().view(-1) # safe and fast
+        handedness = torch.stack(handedness_list, dim=0).long().view(-1)
 
-        return landmarks_tensor, labels, handedness
+        return landmarks_tensor, labels, handedness, lengths
 
 
 # ==================== FOCAL LOSS (NEW) ====================
@@ -816,25 +794,27 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
     num_batches = 0
     total_samples = 0
 
+    scaler = torch.cuda.amp.GradScaler(enabled=(device.type == "cuda"))
     pbar = tqdm(train_loader, desc=f"[Epoch {epoch+1}] Train", leave=False)
 
     for batch in pbar:
-        landmarks, sign_labels, handedness_labels = batch
+        landmarks, sign_labels, handedness_labels, lengths = batch
         landmarks = landmarks.to(device)
         sign_labels = sign_labels.to(device)
         handedness_labels = handedness_labels.to(device)
+        lengths = lengths.to(device)
 
-        sign_logits, handedness_logits = model(landmarks)
+        optimizer.zero_grad(set_to_none=True)
+        with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+            sign_logits, handedness_logits = model(landmarks, lengths)
+            total_loss_batch, loss_sign, loss_hand = criterion(
+                sign_logits, handedness_logits, sign_labels, handedness_labels
+            )
 
-        total_loss_batch, loss_sign, loss_hand = criterion(
-            sign_logits, handedness_logits,
-            sign_labels, handedness_labels
-        )
-
-        optimizer.zero_grad()
-        total_loss_batch.backward()
+        scaler.scale(total_loss_batch).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        scaler.step(optimizer)
+        scaler.update()
 
         batch_size = sign_labels.size(0)
         total_loss += total_loss_batch.item()
@@ -852,7 +832,6 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
         hand_acc += hand_batch_acc
 
         num_batches += 1
-
         pbar.set_postfix({
             'Loss': f'{total_loss/num_batches:.4f}',
             'Top1': f'{topk_correct[1]/total_samples:.4f}',
@@ -864,10 +843,9 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
     avg_sign_loss = total_sign_loss / num_batches
     avg_hand_loss = total_hand_loss / num_batches
     avg_hand_acc = hand_acc / num_batches
-
     avg_topk_accs = {k: correct / total_samples for k, correct in topk_correct.items()}
-
     return avg_loss, avg_topk_accs, avg_hand_acc, avg_sign_loss, avg_hand_loss
+
 
 
 def validate_epoch(model, val_loader, criterion, device, idx_to_word):
@@ -890,12 +868,14 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
         pbar = tqdm(val_loader, desc="[Val]", leave=False)
 
         for batch in pbar:
-            landmarks, sign_labels, handedness_labels = batch
+            landmarks, sign_labels, handedness_labels, lengths = batch
             landmarks = landmarks.to(device)
             sign_labels = sign_labels.to(device)
             handedness_labels = handedness_labels.to(device)
+            lengths = lengths.to(device)
 
-            sign_logits, handedness_logits = model(landmarks)
+            with torch.no_grad():
+                sign_logits, handedness_logits = model(landmarks, lengths)
 
             total_loss_batch, _, _ = criterion(
                 sign_logits, handedness_logits,
@@ -1061,6 +1041,9 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
 def main():
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
+
     """Main training pipeline with class imbalance handling."""
     print("=" * 80)
     print("SIGN LANGUAGE CLASSIFIER - WITH ENHANCED FEATURES")
@@ -1105,6 +1088,9 @@ def main():
     INCLUDE_ACCELERATION = False  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True
+    if USE_BALANCED_SOFTMAX:
+        USE_WEIGHTED_SAMPLER = False
+        USE_CLASS_WEIGHTS = False
     INCLUDE_BONES = True                 # NEW
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
@@ -1213,6 +1199,9 @@ def main():
                     word = base_dataset.idx_to_word[old_label]
                     filtered_labels.append(word)
 
+            new_idx_to_word = {new_idx: word for old_idx, new_idx in old_to_new_idx.items() for word in [base_dataset.idx_to_word[old_idx]]}
+
+
             print(f"  Filtered to {len(filtered_indices)} samples")
 
             # STEP 3: Split
@@ -1249,15 +1238,19 @@ def main():
             else:
                 class_weights = None
 
-            # STEP 5: Create weighted sampler
-            if USE_WEIGHTED_SAMPLER:
-                print(f"\n[STEP 5] Creating weighted sampler...")
-
                 train_class_counts = Counter()
                 for idx in train_indices:
                     _, old_label, _ = base_dataset[idx]
                     new_label = old_to_new_idx[old_label.item()]
                     train_class_counts[new_label] += 1
+
+                balanced_counts_vec = torch.zeros(num_classes, dtype=torch.float32)
+                for cls_idx, cnt in train_class_counts.items():
+                    balanced_counts_vec[cls_idx] = float(cnt)
+
+            # STEP 5: Create weighted sampler
+            if USE_WEIGHTED_SAMPLER:
+                print(f"\n[STEP 5] Creating weighted sampler...")
 
                 sample_weights = []
                 for idx in train_indices:
@@ -1333,9 +1326,6 @@ def main():
 
             # STEP 7: Setup training WITH FOCAL LOSS
             print(f"\n[STEP 7] Setting up training...")
-            balanced_counts_vec = torch.zeros(len(top_k_words), dtype=torch.float32)
-            for cls_idx, cnt in train_class_counts.items():
-                balanced_counts_vec[cls_idx] = float(cnt)
 
             criterion = MultiTaskLoss(
                 alpha=0.85,
@@ -1399,7 +1389,7 @@ def main():
                     break
 
                 val_loss, val_topk_accs, val_hand_acc, handedness_dist, confusion_mat, class_metrics, all_preds, all_labels = validate_epoch(
-                    model, val_loader, criterion, DEVICE, base_dataset.idx_to_word
+                    model, val_loader, criterion, DEVICE, new_idx_to_word
                 )
 
                 if shutdown_handler.is_interrupted():
@@ -1461,18 +1451,18 @@ def main():
             print("="*80)
 
             if USE_SWA and epochs_trained > swa_start:
-                print("Updating BN statistics for SWA model...")
-                update_bn(train_loader, swa_model, device=DEVICE)
-                # Evaluate SWA model once
+                # Skipping update_bn since the model has no BatchNorm layers and forward needs lengths
                 swa_model.eval()
                 swa_val_loss, swa_val_topk, swa_hand_acc, *_ = validate_epoch(
-                    swa_model, val_loader, criterion, DEVICE, base_dataset.idx_to_word
+                    swa_model, val_loader, criterion, DEVICE, new_idx_to_word
                 )
                 mlflow.log_metrics({
                     "swa_val_loss": swa_val_loss,
                     "swa_val_accuracy": swa_val_topk[1],
                     "swa_val_top5": swa_val_topk[5]
                 }, step=epochs_trained)
+
+
                 # Save SWA model
                 swa_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_swa_enhanced.pth")
                 torch.save(swa_model.module.state_dict() if hasattr(swa_model, "module") else swa_model.state_dict(), swa_path)

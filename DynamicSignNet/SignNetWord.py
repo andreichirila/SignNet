@@ -137,7 +137,8 @@ class EnhancedLandmarkFeatures:
         return bones
 
     @staticmethod
-    def extract_all_features(landmarks_flat, fps=25, include_accel=True):
+    def extract_all_features(landmarks_flat, fps=25, include_accel=True,
+                             include_bones=True, include_bone_velocity=False):
         """Extract all engineered features"""
         landmarks_3d = EnhancedLandmarkFeatures.reshape_landmarks(landmarks_flat)
         T, num_landmarks, _ = landmarks_3d.shape

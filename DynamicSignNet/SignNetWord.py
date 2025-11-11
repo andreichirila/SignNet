@@ -1097,7 +1097,7 @@ def main():
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999
 
-    NUM_EPOCHS = 1000
+    NUM_EPOCHS = 200
     BATCH_SIZE = 32
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = 96  # Reduced from 128
@@ -1384,7 +1384,7 @@ def main():
             )
 
             USE_SWA = True  # NEW
-            SWA_START_FRACTION = 0.7  # start SWA after 70% of epochs  # NEW
+            SWA_START_FRACTION = 0.5  # start SWA after 70% of epochs  # NEW
             SWA_LR = LEARNING_RATE     # often same or slightly lower   # NEW
 
             if USE_SWA:

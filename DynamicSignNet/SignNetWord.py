@@ -107,20 +107,68 @@ class EnhancedLandmarkFeatures:
         return speed
 
     @staticmethod
-    def _default_edges(num_landmarks):
+    def _default_edges(num_landmarks: int):
         """
-        Return edge list for bone vectors.
-        For hands, use MediaPipe kinematic chains; for pose, a simple shoulder→elbow→wrist chain etc.
-        Fallback: connect consecutive indices if structure is unknown.
+        Default bone edges for your NPZ layout:
+        - Left hand: 0..20  (MediaPipe Hands indices)
+        - Right hand: 21..41 (MediaPipe Hands indices)
+        - Face: 42..519 (MediaPipe Face Mesh)  -> no edges by default (too dense)
+        - Pose: 520..552 (MediaPipe Pose, 33 pts) -> compact upper-body graph
+        Falls back to consecutive edges if layout is unexpected.
         """
+        # Expected layout: (2*21) + 478 + 33 = 553 landmarks
+        EXPECTED_L = 553
+        if num_landmarks != EXPECTED_L:
+            # Fallback: connect consecutive landmarks to stay safe
+            print(f"\n[WARNING ] num_landmarks != EXPECTED_L {num_landmarks}")
+            return [(i, i + 1) for i in range(max(0, num_landmarks - 1))]
+
+        LH_START = 0
+        RH_START = 21
+        FACE_START, FACE_END = 42, 520   # 42..519 inclusive (478 points)
+        POSE_START = 520                 # 520..552 inclusive (33 points)
+
         edges = []
-        # Example: simple chains (customize if you have exact index maps)
-        # Left hand (501..521): 0→1→2→3→4 across each finger, etc.
-        # Right hand (522..542): same idea.
-        # Pose (0..32): use a few major limbs to keep dimensionality modest.
-        # If unknown layout, connect (i -> i+1)
-        for i in range(num_landmarks - 1):
-            edges.append((i, i + 1))
+
+        # MediaPipe Hands chains (relative indices inside a single hand block of 21 points)
+        # 0: wrist
+        hand_chains = [
+            [0, 1, 2, 3, 4],        # thumb: 0-1-2-3-4
+            [0, 5, 6, 7, 8],        # index: 0-5-6-7-8
+            [0, 9, 10, 11, 12],     # middle: 0-9-10-11-12
+            [0, 13, 14, 15, 16],    # ring: 0-13-14-15-16
+            [0, 17, 18, 19, 20],    # pinky: 0-17-18-19-20
+        ]
+
+        def add_hand_edges(base):
+            for chain in hand_chains:
+                for a, b in zip(chain[:-1], chain[1:]):
+                    edges.append((base + a, base + b))
+
+        # Left and Right hands
+        add_hand_edges(LH_START)
+        add_hand_edges(RH_START)
+
+        # Compact upper-body pose graph (MediaPipe Pose indices, relative to POSE_START):
+        # Key indices: 11 L_shoulder, 12 R_shoulder, 13 L_elbow, 14 R_elbow,
+        #              15 L_wrist,   16 R_wrist,   23 L_hip,   24 R_hip, 0 nose.
+        def P(i):
+            return POSE_START + i
+
+        pose_edges = [
+            (P(11), P(13)), (P(13), P(15)),     # left shoulder-elbow-wrist
+            (P(12), P(14)), (P(14), P(16)),     # right shoulder-elbow-wrist
+            (P(11), P(12)),                     # clavicle
+            (P(11), P(23)), (P(12), P(24)),     # shoulders to hips
+            (P(23), P(24)),                     # hip line
+            (P(0),  P(11)), (P(0),  P(12)),     # nose to shoulders (helps head-arm relation)
+        ]
+        edges.extend(pose_edges)
+
+        # Face mesh omitted by default (too dense); add sparse anchors only if needed.
+        # Example (optional): nose to a couple of face anchors if you map them.
+        # edges.append((P(0), FACE_START + some_face_idx))
+
         return edges
 
     @staticmethod

@@ -498,6 +498,8 @@ def main():
                         help="Filter landmarks to specific split (train/test/val) or None for all")
     parser.add_argument("--skip-extraction", action="store_true",
                         help="Skip frame extraction")
+    parser.add_argument("--skip-landmark-extraction", action="store_true",
+                        help="Skip landmark extraction")
 
     args = parser.parse_args()
 
@@ -516,14 +518,15 @@ def main():
     else:
         print("\nSkipping frame extraction")
 
-    print("STEP 2: Extracting landmarks...")
-    preprocess_and_save_mp(
-        root=args.output_root,
-        save_dir=args.landmarks_root,
-        split=args.split,
-        max_frames=args.max_frames,
-        n_workers=args.n_workers
-    )
+    if not args.skip_landmark_extraction:
+        print("STEP 2: Extracting landmarks...")
+        preprocess_and_save_mp(
+            root=args.output_root,
+            save_dir=args.landmarks_root,
+            split=args.split,
+            max_frames=args.max_frames,
+            n_workers=args.n_workers
+        )
 
     print("="*70)
     print("✓ PIPELINE COMPLETE!")

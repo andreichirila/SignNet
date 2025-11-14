@@ -535,47 +535,52 @@ class RemappedDataset(Dataset):
         return landmarks, torch.tensor(new_label, dtype=torch.long), handedness
 
 
-class LSTMSignClassifierWithHandedness(nn.Module):
+class TransformerSignClassifierWithHandedness(nn.Module):
     """
-    LSTM model with:
+    Transformer encoder model with:
     - Multi-task learning (sign + handedness)
-    - RESIDUAL ATTENTION CONNECTIONS (NEW)
-    - LAYER NORMALIZATION (NEW)
+    - Uses existing per-frame features (joints + bones + velocities + etc.)
+    Drop-in replacement for LSTMSignClassifierWithHandedness.
     """
-    def __init__(self, input_size=1659, hidden_size=128, num_classes=70,
-                 num_lstm_layers=1, dropout_rate=0.35, lstm_dropout=0.25,
-                 num_attention_heads=4, attention_dropout=0.25, debug=False):  # NEW PARAMETER
+    def __init__(
+        self,
+        input_size: int,
+        hidden_size: int,
+        num_classes: int,
+        num_layers: int = 2,
+        num_heads: int = 4,
+        dim_feedforward: int = 512,
+        dropout_rate: float = 0.3,
+        attention_dropout: float = 0.1,
+        debug: bool = False,
+    ):
         super().__init__()
-
         self.input_size = input_size
         self.hidden_size = hidden_size
         self.num_classes = num_classes
         self.debug = debug
 
-        # LSTM layer
-        self.lstm = nn.LSTM(
-            input_size=input_size,
-            hidden_size=hidden_size,
-            num_layers=num_lstm_layers,
+        # Project input features to model dimension (hidden_size)
+        self.input_proj = nn.Linear(input_size, hidden_size)
+
+        # Positional encoding (learned)
+        self.pos_embedding = nn.Parameter(torch.zeros(1, 2048, hidden_size))  # max_len=2048
+        nn.init.normal_(self.pos_embedding, std=0.02)
+
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_size,
+            nhead=num_heads,
+            dim_feedforward=dim_feedforward,
+            dropout=attention_dropout,
             batch_first=True,
-            dropout=lstm_dropout if num_lstm_layers > 1 else 0,
-            bidirectional=False
+            activation="gelu",
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
         )
 
-        # Attention mechanism
-        self.attention = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=num_attention_heads,
-            batch_first=True,
-            dropout=attention_dropout  # UPDATED
-        )
-
-        # LAYER NORMALIZATION FOR RESIDUAL CONNECTION (NEW)
-        self.attention_norm = nn.LayerNorm(hidden_size)
-
-        # DROPOUT LAYERS (NEW)
         self.dropout = nn.Dropout(dropout_rate)
-        self.attention_dropout_layer = nn.Dropout(attention_dropout)
 
         # Task 1: Sign classification head
         self.fc_sign = nn.Linear(hidden_size, num_classes)
@@ -584,38 +589,57 @@ class LSTMSignClassifierWithHandedness(nn.Module):
         self.fc_handedness = nn.Linear(hidden_size, 4)
 
         if debug:
-            print(f"[DEBUG] LSTMSignClassifierWithHandedness initialized WITH RESIDUAL ATTENTION:")
+            print(f"[DEBUG] TransformerSignClassifierWithHandedness initialized")
             print(f"  Input size: {input_size}")
             print(f"  Hidden size: {hidden_size}")
             print(f"  Num classes (sign): {num_classes}")
-            print(f"  Num classes (handedness): 4 (LEFT, RIGHT, BOTH, NONE)")
-            print(f"  Attention heads: {num_attention_heads}")
-            print(f"  Attention dropout: {attention_dropout}")  # NEW
+            print(f"  Num heads: {num_heads}")
+            print(f"  Num layers: {num_layers}")
+            print(f"  FFN dim: {dim_feedforward}")
+            print(f"  Dropout: {dropout_rate}, attn_dropout: {attention_dropout}")
+            print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
 
-    def forward(self, landmarks, lengths):
-        # landmarks: (B, T, D), lengths: (B,)
-        packed = nn.utils.rnn.pack_padded_sequence(
-            landmarks, lengths.cpu(), batch_first=True, enforce_sorted=False
-        )
-        lstm_out_packed, (h_n, c_n) = self.lstm(packed)
-        lstm_out, _ = nn.utils.rnn.pad_packed_sequence(lstm_out_packed, batch_first=True)
+    def forward(self, landmarks, src_key_padding_mask=None):
+        """
+        Args:
+            landmarks: (batch_size, seq_len, input_size)
+            src_key_padding_mask: optional (batch_size, seq_len) True=pad
+        Returns:
+            sign_logits: (batch_size, num_classes)
+            handedness_logits: (batch_size, 4)
+        """
+        B, T, D = landmarks.shape
 
-        # Get last valid hidden state per sequence (use lengths)
-        idx = (lengths - 1).clamp(min=0).view(-1, 1, 1).expand(-1, 1, self.hidden_size)
-        last_hidden = lstm_out.gather(1, idx).contiguous()  # (B, 1, H)
-        max_T = lstm_out.size(1)
-        pad_mask = torch.arange(max_T, device=lengths.device).unsqueeze(0) >= lengths.unsqueeze(1)  # (B, T)
+        # Project to hidden_size
+        x = self.input_proj(landmarks)  # (B, T, hidden)
 
+        # Add positional embeddings (crop to current length)
+        if T > self.pos_embedding.size(1):
+            raise ValueError(f"Sequence length {T} exceeds max positional length {self.pos_embedding.size(1)}")
+        pos_emb = self.pos_embedding[:, :T, :]  # (1, T, hidden)
+        x = x + pos_emb
 
-        residual = last_hidden
-        attn_out, _ = self.attention(last_hidden, lstm_out, lstm_out, key_padding_mask=pad_mask)
-        attn_out = self.attention_dropout_layer(attn_out)
-        context = self.attention_norm(residual + attn_out).squeeze(1)
-        context = self.dropout(context)
+        # Transformer encoder
+        # src_key_padding_mask: (B, T) with True at PAD positions
+        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, T, hidden)
 
-        sign_logits = self.fc_sign(context)
-        handedness_logits = self.fc_handedness(context)
+        # Global average pooling over time (mask-aware)
+        if src_key_padding_mask is not None:
+            # mask: True for PAD -> set to 0 weight
+            mask = (~src_key_padding_mask).float().unsqueeze(-1)  # (B, T, 1)
+            x_masked = x * mask
+            lengths = mask.sum(dim=1).clamp(min=1.0)  # (B, 1)
+            pooled = x_masked.sum(dim=1) / lengths    # (B, hidden)
+        else:
+            pooled = x.mean(dim=1)  # (B, hidden)
+
+        pooled = self.dropout(pooled)
+
+        sign_logits = self.fc_sign(pooled)
+        handedness_logits = self.fc_handedness(pooled)
+
         return sign_logits, handedness_logits
+
 
 
 class PadCollate:
@@ -624,21 +648,32 @@ class PadCollate:
         labels_list = [item[1] for item in batch]
         handedness_list = [item[2] for item in batch]
 
-        lengths = torch.tensor([lm.shape[0] for lm in landmarks_list], dtype=torch.long)
-        max_seq_len = int(lengths.max().item())
+        lengths = [lm.shape[0] for lm in landmarks_list]
+        max_seq_len = max(lengths)
+        feature_dim = landmarks_list[0].shape[1]
 
-        padded = []
+        padded_landmarks = []
         for lm in landmarks_list:
-            if lm.shape[0] < max_seq_len:
-                pad_size = max_seq_len - lm.shape[0]
-                lm = F.pad(lm, (0, 0, 0, pad_size), mode='constant', value=0.0)
-            padded.append(lm)
+            pad_size = max_seq_len - lm.shape[0]
+            if pad_size > 0:
+                lm_padded = F.pad(lm, (0, 0, 0, pad_size), value=0.0)
+            else:
+                lm_padded = lm
+            padded_landmarks.append(lm_padded)
 
-        landmarks_tensor = torch.stack(padded, dim=0)            # (B, T, D)
-        labels = torch.stack(labels_list, dim=0).long().view(-1) # safe and fast
-        handedness = torch.stack(handedness_list, dim=0).long().view(-1)
+        landmarks_tensor = torch.stack(padded_landmarks)  # (B, T, D)
+        labels = torch.tensor(labels_list, dtype=torch.long)
+        handedness = torch.tensor(handedness_list, dtype=torch.long)
 
-        return landmarks_tensor, labels, handedness, lengths
+        # src_key_padding_mask: True at PAD positions
+        # shape (B, T)
+        padding_mask = torch.zeros(len(batch), max_seq_len, dtype=torch.bool)
+        for i, l in enumerate(lengths):
+            if l < max_seq_len:
+                padding_mask[i, l:] = True
+
+        return landmarks_tensor, labels, handedness, padding_mask
+
 
 
 # ==================== FOCAL LOSS (NEW) ====================
@@ -831,15 +866,15 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
     pbar = tqdm(train_loader, desc=f"[Epoch {epoch+1}] Train", leave=False)
 
     for batch in pbar:
-        landmarks, sign_labels, handedness_labels, lengths = batch
+        landmarks, sign_labels, handedness_labels, padding_mask = batch
         landmarks = landmarks.to(device)
         sign_labels = sign_labels.to(device)
         handedness_labels = handedness_labels.to(device)
-        lengths = lengths.to(device)
+        padding_mask = padding_mask.to(device)
 
         optimizer.zero_grad(set_to_none=True)
         with amp.autocast(device_type='cuda', enabled=(device.type == "cuda")):
-            sign_logits, handedness_logits = model(landmarks, lengths)
+            sign_logits, handedness_logits = model(landmarks, src_key_padding_mask=padding_mask)
             total_loss_batch, loss_sign, loss_hand = criterion(
                 sign_logits, handedness_logits, sign_labels, handedness_labels
             )
@@ -901,14 +936,14 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
         pbar = tqdm(val_loader, desc="[Val]", leave=False)
 
         for batch in pbar:
-            landmarks, sign_labels, handedness_labels, lengths = batch
+            landmarks, sign_labels, handedness_labels, padding_mask = batch
             landmarks = landmarks.to(device)
             sign_labels = sign_labels.to(device)
             handedness_labels = handedness_labels.to(device)
-            lengths = lengths.to(device)
+            padding_mask = padding_mask.to(device)
 
             with torch.no_grad():
-                sign_logits, handedness_logits = model(landmarks, lengths)
+                sign_logits, handedness_logits = model(landmarks, src_key_padding_mask=padding_mask)
 
             total_loss_batch, _, _ = criterion(
                 sign_logits, handedness_logits,
@@ -1107,9 +1142,7 @@ def main():
     BATCH_SIZE = 32
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = 80  # Reduced from 128
-    NUM_LSTM_LAYERS = 1
     DROPOUT_RATE = 0.45  # Increased from 0.35
-    LSTM_DROPOUT = 0.35  # Increased from 0.25
     NUM_ATTENTION_HEADS = 4
     ATTENTION_DROPOUT = 0.25  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
@@ -1158,7 +1191,6 @@ def main():
                 "optimizer": "AdamW",
                 "num_epochs": NUM_EPOCHS,
                 "hidden_size": HIDDEN_SIZE,
-                "num_lstm_layers": NUM_LSTM_LAYERS,
                 "dropout_rate": DROPOUT_RATE,
                 "augmentation_enabled": AUGMENT,
                 "augmentation_probability": AUGMENT_PROBABILITY,
@@ -1346,15 +1378,16 @@ def main():
             # STEP 6: Build model WITH RESIDUAL ATTENTION
             print(f"\n[STEP 6] Building model with residual attention...")
 
-            model_raw = LSTMSignClassifierWithHandedness(
-                input_size=input_size,  # UPDATED - uses enhanced features size
-                hidden_size=HIDDEN_SIZE,
+
+            model_raw = TransformerSignClassifierWithHandedness(
+                input_size=input_size,
+                hidden_size=HIDDEN_SIZE,      # e.g. 96 or 128
                 num_classes=num_classes,
-                num_lstm_layers=NUM_LSTM_LAYERS,
+                num_layers=2,                 # 2–3 layers is a good start
+                num_heads=4,                  # keep consistent with hidden_size (must divide)
+                dim_feedforward=4 * HIDDEN_SIZE,
                 dropout_rate=DROPOUT_RATE,
-                lstm_dropout=LSTM_DROPOUT,
-                num_attention_heads=NUM_ATTENTION_HEADS,
-                attention_dropout=ATTENTION_DROPOUT,  # NEW
+                attention_dropout=ATTENTION_DROPOUT,
                 debug=True
             ).to(DEVICE)
 
@@ -1448,6 +1481,7 @@ def main():
                     model, val_loader, criterion, DEVICE, new_idx_to_word
                 )
 
+
                 if shutdown_handler.is_interrupted():
                     break
 
@@ -1466,6 +1500,7 @@ def main():
                     best_epoch = epoch
                     best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_enhanced.pth")
                     torch.save(model.state_dict(), best_model_path)
+                    log_class_metrics_to_mlflow(class_metrics, epoch)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)
@@ -1508,6 +1543,7 @@ def main():
             print(f"  Enhanced features: {USE_ENHANCED_FEATURES}")
             print(f"  Input size: {input_size}")
             print("="*80)
+
 
             if USE_SWA and epochs_trained > swa_start:
                 # Skipping update_bn since the model has no BatchNorm layers and forward needs lengths

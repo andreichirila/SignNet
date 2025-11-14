@@ -1139,11 +1139,12 @@ def main():
     WEIGHT_BETA = 0.9999
 
     NUM_EPOCHS = 200
-    BATCH_SIZE = 32
+    BATCH_SIZE = 128
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 80  # Reduced from 128
+    HIDDEN_SIZE = 128
     DROPOUT_RATE = 0.45  # Increased from 0.35
-    NUM_ATTENTION_HEADS = 4
+    NUM_HEADS = 4
+    NUM_LAYERS = 3
     ATTENTION_DROPOUT = 0.25  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
@@ -1383,8 +1384,8 @@ def main():
                 input_size=input_size,
                 hidden_size=HIDDEN_SIZE,      # e.g. 96 or 128
                 num_classes=num_classes,
-                num_layers=2,                 # 2–3 layers is a good start
-                num_heads=4,                  # keep consistent with hidden_size (must divide)
+                num_layers=NUM_LAYERS,                 # 2–3 layers is a good start
+                num_heads=NUM_HEADS,                  # keep consistent with hidden_size (must divide)
                 dim_feedforward=4 * HIDDEN_SIZE,
                 dropout_rate=DROPOUT_RATE,
                 attention_dropout=ATTENTION_DROPOUT,

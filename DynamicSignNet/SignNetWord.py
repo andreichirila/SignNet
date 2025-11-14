@@ -1125,7 +1125,7 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top150-Enhanced-Features"  # UPDATED
+    RUN_NAME = f"Top150 Transformer"  # UPDATED
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================

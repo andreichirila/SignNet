@@ -252,8 +252,8 @@ def preprocess_and_save_mp(root, save_dir, max_frames=None, n_workers=8):
 
 if __name__ == "__main__":
     # Your extracted dataset root (contains class folders)
-    root = "../../phoenix-2014/phoenix_words_raw_png"  # e.g., "./output_dir" from extractor
-    save_dir = "./word_landmarks_extracted"
+    root = "../../wlasl_frames_extracted/train"  # e.g., "./output_dir" from extractor
+    save_dir = "./word_wsasl_extracted/train"
 
     preprocess_and_save_mp(
         root=root,

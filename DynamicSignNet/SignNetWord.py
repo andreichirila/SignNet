@@ -197,9 +197,9 @@ class EnhancedLandmarkFeatures:
         return normalized_bones  # (T, num_edges, 3) - ready for flattening
 
     @staticmethod
-    def extract_all_features(landmarks_flat, fps=25, include_accel=True,
-                             include_bones=True, include_bone_velocity=False):
-        """Extract all engineered features"""
+    def extract_all_features(landmarks_flat, fps=25, is_train=False, include_accel=True,
+                            include_bones=True, include_bone_velocity=False):
+        """Extract all engineered features with optional bone scaling for training."""
         landmarks_3d = EnhancedLandmarkFeatures.reshape_landmarks(landmarks_flat)
         T, num_landmarks, _ = landmarks_3d.shape
 
@@ -227,19 +227,35 @@ class EnhancedLandmarkFeatures:
         if include_accel:
             accel_lengths = np.linalg.norm(acceleration, axis=2, keepdims=True)
             accel_lengths = np.maximum(accel_lengths, 1e-6)
-            unit_accel = acceleration / accel_lengths  # Unit direction for accel
+            unit_accel = acceleration / accel_lengths
             accel_mean = unit_accel.mean(axis=0, keepdims=True)
             accel_std = unit_accel.std(axis=0, keepdims=True) + 1e-6
             normalized_accel = (unit_accel - accel_mean) / accel_std
-            features_list.insert(2, normalized_accel.reshape(T, -1))  # Append normalized
+            features_list.insert(2, normalized_accel.reshape(T, -1))
 
         if include_bones:
-            bones = EnhancedLandmarkFeatures.compute_bones(landmarks_3d)              # (T, E, 3)
+            bones = EnhancedLandmarkFeatures.compute_bones(landmarks_3d)
+
+            # Add bone scaling for training data
+            if is_train and np.random.random() < 0.3:
+                # Randomly scale bone lengths to simulate signer variation
+                bone_lengths = np.linalg.norm(bones, axis=2, keepdims=True) + 1e-6
+                bone_dirs = bones / bone_lengths
+                scale_factor = np.random.uniform(0.9, 1.1, size=(1, bones.shape[1], 1))
+                bones = bone_dirs * bone_lengths * scale_factor
+
             bones_flat = bones.reshape(T, -1)
             features_list.append(bones_flat)
+
             if include_bone_velocity:
-                bone_vel = EnhancedLandmarkFeatures.compute_velocity(bones, fps)  # Raw vel on raw bones
-                # NEW: Same normalization as bones (unit + z-score) for consistency
+                bone_vel = EnhancedLandmarkFeatures.compute_velocity(bones, fps)
+                # Apply same scaling to bone velocities if bones were scaled
+                if is_train and np.random.random() < 0.3:
+                    vel_lengths = np.linalg.norm(bone_vel, axis=2, keepdims=True) + 1e-6
+                    vel_dirs = bone_vel / vel_lengths
+                    vel_scale = np.random.uniform(0.9, 1.1, size=(1, bone_vel.shape[1], 1))
+                    bone_vel = vel_dirs * vel_lengths * vel_scale
+
                 vel_lengths = np.linalg.norm(bone_vel, axis=2, keepdims=True)
                 vel_lengths = np.maximum(vel_lengths, 1e-6)
                 unit_vel = bone_vel / vel_lengths
@@ -316,21 +332,39 @@ class EarlyStopping:
 
 
 class TemporalAugmentation:
-    """Augmentation for variable-length landmark sequences."""
-    def __init__(self, prob=0.7):
+    """Augmentation for variable-length landmark sequences with class-aware probabilities."""
+
+    def __init__(self, class_counts=None, base_prob=0.5, strength=0.5, prob=0.7):
         self.prob = prob
+        self.base_prob = base_prob
+        self.strength = strength
+        self.class_prob_map = None
+        if class_counts:
+            self.class_prob_map = self._create_prob_map(class_counts, strength)
+
+    def _create_prob_map(self, counts, strength):
+        """Create class-specific augmentation probabilities based on inverse frequency."""
+        # Normalize counts -> frequencies
+        total_counts = sum(counts.values())
+        freqs = {cls: c / total_counts for cls, c in counts.items()}
+
+        # Inverse frequency mapping (less freq = higher prob)
+        # Low freq -> higher aug prob. Strength controls how much.
+        prob_map = {
+            cls: self.base_prob + (1 - f) * self.strength * self.base_prob
+            for cls, f in freqs.items()
+        }
+        return prob_map
 
     def time_warp(self, seq, warp_factor_min=0.8, warp_factor_max=1.25):
-        """Randomly speed up or slow down by resampling frames (time warp)."""
         if len(seq) <= 2:
             return seq
         factor = np.random.uniform(warp_factor_min, warp_factor_max)
-        new_length = max(1, int(len(seq) / factor))
+        new_length = max(2, int(len(seq) / factor))
         indices = np.linspace(0, len(seq) - 1, new_length)
         return seq[indices.astype(int)]
 
     def temporal_dropout(self, seq, keep_prob_min=0.85, keep_prob_max=0.98):
-        """Drop some frames while keeping sequence meaningful."""
         keep_prob = np.random.uniform(keep_prob_min, keep_prob_max)
         mask = np.random.rand(len(seq)) < keep_prob
         if mask.sum() <= 1:
@@ -342,55 +376,62 @@ class TemporalAugmentation:
         return seq + noise
 
     def scaling(self, seq, scale_min=0.9, scale_max=1.1):
-        """Small global scale changes per coordinate."""
         scale = np.random.uniform(scale_min, scale_max)
         return seq * scale
 
-    def channel_dropout(self, seq, drop_prob=0.02):
-        """Randomly zero-out a few coordinates to simulate missing joints."""
+    def structured_channel_dropout(self, seq, drop_prob=0.1):
+        """Drop entire feature blocks to force multi-stream robustness."""
         seq = seq.copy()
-        if np.random.rand() < 0.5:
-            n_coords = seq.shape[1]
-            mask = np.random.rand(n_coords) < drop_prob
-            if mask.any():
-                seq[:, mask] = 0.0
+        # Define feature block indices for your 5833-dim input
+        # These are approximate - adjust based on your exact feature layout
+        # Format: (start, end) for major blocks
+        feature_blocks = [
+            (0, 1659),      # Raw landmarks
+            (1659, 3318),    # Velocities
+            (3318, 4977),    # Bones (if included)
+            (4977, 5833),    # Other derived features (hand distances, etc.)
+        ]
+
+        # Randomly drop one major block with probability
+        if np.random.random() < drop_prob:
+            block_idx = np.random.randint(0, len(feature_blocks))
+            start, end = feature_blocks[block_idx]
+            seq[:, start:end] = 0.0
         return seq
 
-    def maybe_reverse(self, seq, p=0.05):
-        if np.random.rand() < p and len(seq) > 1:
-            return seq[::-1]
-        return seq
+    def __call__(self, landmarks, class_label=None):
+        # Use class-aware probability if available
+        aug_prob = self.base_prob
+        if self.class_prob_map and class_label is not None:
+            aug_prob = self.class_prob_map.get(class_label, self.base_prob)
 
-    def __call__(self, landmarks):
-        if np.random.random() > self.prob:
+        if np.random.random() > aug_prob:
             return landmarks
 
-        augmented = landmarks.copy()
+        augmented = landmarks.astype(np.float32).copy()
 
-        # 1) Time warp / speed variation
+        # 1) Time warp OR temporal dropout (at most one)
         if np.random.random() > 0.4:
-            augmented = self.time_warp(augmented, warp_factor_min=0.80, warp_factor_max=1.20)
+            if np.random.random() < 0.5:
+                augmented = self.time_warp(augmented, 0.80, 1.20)
+            else:
+                augmented = self.temporal_dropout(augmented, 0.90, 0.97)
 
         # 2) Small scaling
         if np.random.random() > 0.6:
-            augmented = self.scaling(augmented, scale_min=0.92, scale_max=1.08)
+            augmented = self.scaling(augmented, 0.92, 1.08)
 
         # 3) Noise
         if np.random.random() > 0.4:
             augmented = self.add_noise(augmented, sigma=0.008)
 
-        # 4) Temporal dropout (frame removal)
-        if np.random.random() > 0.65:
-            augmented = self.temporal_dropout(augmented, keep_prob_min=0.90, keep_prob_max=0.97)
-
-        # 5) Channel dropout (simulate missing coords)
+        # 4) Structured channel dropout
         if np.random.random() > 0.75:
-            augmented = self.channel_dropout(augmented, drop_prob=0.02)
+            augmented = self.structured_channel_dropout(augmented, drop_prob=0.1)
 
-        # 6) Occasional reversal (rare)
-        augmented = self.maybe_reverse(augmented, p=0.03)
+        return augmented
 
-        return augmented.astype(np.float32)
+
 
 
 class SignLanguageDataset(Dataset):
@@ -400,19 +441,25 @@ class SignLanguageDataset(Dataset):
     """
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
                  use_enhanced_features=False, include_accel=False,
-                 include_bones=True, include_bone_velocity=False):
+                 include_bones=True, include_bone_velocity=False, class_counts=None):
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
 
         self.augment = augment
-        self.use_enhanced_features = use_enhanced_features  # NEW
-        self.include_accel = include_accel  # NEW
+        self.use_enhanced_features = use_enhanced_features
+        self.include_accel = include_accel
         self.include_bones = include_bones
         self.include_bone_velocity = include_bone_velocity
+        self.class_counts = class_counts  # NEW: Store for class-aware augmentation
 
         if augment:
-            self.augmentation = TemporalAugmentation(prob=augment_prob)
+            self.augmentation = TemporalAugmentation(
+                class_counts=class_counts,  # NEW: Pass class counts
+                base_prob=0.5,
+                strength=0.5,
+                prob=augment_prob
+            )
 
         if debug:
             print(f"\n[DEBUG] SignLanguageDataset.__init__")
@@ -477,23 +524,33 @@ class SignLanguageDataset(Dataset):
         # Load landmarks
         landmarks = data["landmarks"].astype(np.float32)
 
-        # APPLY FEATURE ENGINEERING IF ENABLED (NEW)
+        # Load gloss and convert to string CORRECTLY
+        glosses = data["glosses"]
+        if len(glosses) > 0:
+            gloss_item = glosses[0]  # ← FIX: Extract first element
+            if isinstance(gloss_item, (np.ndarray, np.str_, bytes)):
+                gloss = str(gloss_item)
+            else:
+                gloss = gloss_item
+        else:
+            gloss = "UNKNOWN"
+
+        label = self.word_to_idx.get(gloss, 0)
+
+        # APPLY FEATURE ENGINEERING IF ENABLED (with is_train flag)
         if self.use_enhanced_features:
             landmarks = EnhancedLandmarkFeatures.extract_all_features(
-                landmarks, fps=25,
+                landmarks,
+                fps=25,
+                is_train=self.augment,  # ← CHANGED: Use self.augment instead of self.split
                 include_accel=self.include_accel,
                 include_bones=self.include_bones,
                 include_bone_velocity=self.include_bone_velocity
             )
 
-        # Apply augmentation AFTER feature engineering
+        # Apply augmentation AFTER feature engineering (class-aware)
         if self.augment:
-            landmarks = self.augmentation(landmarks)
-
-
-        # Load gloss and get label
-        gloss = data["glosses"][0] if len(data["glosses"]) > 0 else "UNKNOWN"
-        label = self.word_to_idx.get(gloss, 0)
+            landmarks = self.augmentation(landmarks, class_label=gloss)
 
         # Load and aggregate handedness
         if "handedness" in data:
@@ -503,7 +560,7 @@ class SignLanguageDataset(Dataset):
             handedness = 3
 
         # Convert to tensors
-        landmarks_tensor = torch.from_numpy(landmarks)
+        landmarks_tensor = torch.from_numpy(landmarks).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
         handedness_tensor = torch.tensor(handedness, dtype=torch.long)
 
@@ -661,7 +718,7 @@ class PadCollate:
                 lm_padded = lm
             padded_landmarks.append(lm_padded)
 
-        landmarks_tensor = torch.stack(padded_landmarks)  # (B, T, D)
+        landmarks_tensor = torch.stack(padded_landmarks).float()  # (B, T, D)
         labels = torch.tensor(labels_list, dtype=torch.long)
         handedness = torch.tensor(handedness_list, dtype=torch.long)
 
@@ -1208,11 +1265,12 @@ def main():
                 NPZ_DIR,
                 debug=True,
                 augment=False,
-                use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
+                use_enhanced_features=USE_ENHANCED_FEATURES,
                 include_accel=INCLUDE_ACCELERATION,
                 include_bones=INCLUDE_BONES,
                 include_bone_velocity=INCLUDE_BONE_VELOCITY
             )
+
 
             # GET INPUT SIZE (will be larger if enhanced features enabled)
             sample_landmarks, _, _ = base_dataset[0]
@@ -1230,26 +1288,41 @@ def main():
 
             print(f"\n[VOCABULARY] Using {len(top_k_words)} classes after filtering")
 
+
+            # Compute class counts for class-aware augmentation
+            train_class_counts = Counter()
+            npz_files = sorted(Path(NPZ_DIR).glob("*.npz"))
+            for npz_file in npz_files:
+                try:
+                    data = np.load(npz_file, allow_pickle=True)
+                    gloss = data["glosses"][0]
+                    if gloss in top_k_words:  # Only count classes in our vocabulary
+                        train_class_counts[gloss] += 1
+                except Exception:
+                    continue
+
             dataset_train = SignLanguageDataset(
                 NPZ_DIR,
                 word_to_idx=base_dataset.word_to_idx,
                 debug=False,
                 augment=AUGMENT,
                 augment_prob=AUGMENT_PROBABILITY,
-                use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
+                use_enhanced_features=USE_ENHANCED_FEATURES,
                 include_accel=INCLUDE_ACCELERATION,
                 include_bones=INCLUDE_BONES,
-                include_bone_velocity=INCLUDE_BONE_VELOCITY
+                include_bone_velocity=INCLUDE_BONE_VELOCITY,
+                class_counts=train_class_counts  # NEW: Pass class counts
             )
             dataset_val = SignLanguageDataset(
                 NPZ_DIR,
                 word_to_idx=base_dataset.word_to_idx,
                 debug=False,
                 augment=False,
-                use_enhanced_features=USE_ENHANCED_FEATURES,  # NEW
+                use_enhanced_features=USE_ENHANCED_FEATURES,
                 include_accel=INCLUDE_ACCELERATION,
                 include_bones=INCLUDE_BONES,
-                include_bone_velocity=INCLUDE_BONE_VELOCITY
+                include_bone_velocity=INCLUDE_BONE_VELOCITY,
+                class_counts=train_class_counts  # Even validation gets the mapping (though augment=False)
             )
 
             # STEP 2: Filter to top words

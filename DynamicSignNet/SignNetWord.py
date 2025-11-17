@@ -1215,7 +1215,7 @@ def main():
     if USE_BALANCED_SOFTMAX:
         USE_WEIGHTED_SAMPLER = False
         USE_CLASS_WEIGHTS = False
-    INCLUDE_BONES = False                 # NEW
+    INCLUDE_BONES = True                 # NEW
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
     WARMUP_EPOCHS = 10  # Short warmup for high-dim features

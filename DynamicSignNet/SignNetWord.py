@@ -1234,12 +1234,12 @@ def main():
     NUM_EPOCHS = 200
     BATCH_SIZE = 128
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 128
+    HIDDEN_SIZE = 192
     HIDDEN_SIZE_HAND = 48
     DROPOUT_RATE = 0.45  # Increased from 0.35
     NUM_HEADS = 4
     NUM_HEADS_HAND = 2
-    NUM_LAYERS = 3
+    NUM_LAYERS = 4
     NUM_LAYERS_HAND = 1
     ATTENTION_DROPOUT = 0.25  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4

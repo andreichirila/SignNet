@@ -1208,7 +1208,7 @@ def main():
     AUGMENT_PROBABILITY = 0.7
 
     # FEATURE ENGINEERING SETTINGS (NEW)
-    USE_ENHANCED_FEATURES = True  # Toggle feature engineering
+    USE_ENHANCED_FEATURES = False  # Toggle feature engineering
     INCLUDE_ACCELERATION = True  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True

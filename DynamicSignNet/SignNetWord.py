@@ -1216,7 +1216,7 @@ def main():
         USE_WEIGHTED_SAMPLER = False
         USE_CLASS_WEIGHTS = False
     INCLUDE_BONES = True                 # NEW
-    INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
+    INCLUDE_BONE_VELOCITY = True        # NEW (turn on later if memory allows)
 
     WARMUP_EPOCHS = 10  # Short warmup for high-dim features
     BASE_LR = 1e-4      # Your current LR

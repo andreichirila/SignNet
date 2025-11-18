@@ -1196,7 +1196,7 @@ def main():
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999
 
-    BATCH_SIZE = 128
+    BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = 128
     DROPOUT_RATE = 0.45  # Increased from 0.35
@@ -1220,10 +1220,10 @@ def main():
 
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 10
-    NUM_EPOCHS = 200
+    NUM_EPOCHS = 300
     BASE_LR = 1e-4
-    MIN_LR = 1e-6
-    T_0 = 20           # First restart cycle length
+    MIN_LR = 1e-5
+    T_0 = 30           # First restart cycle length
     T_MULT = 2         # Multiply cycle length after each restart
 
     number_of_classes = 150

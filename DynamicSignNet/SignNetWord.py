@@ -1198,11 +1198,11 @@ def main():
 
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 128
-    DROPOUT_RATE = 0.45  # Increased from 0.35
-    NUM_HEADS = 4
-    NUM_LAYERS = 3
-    ATTENTION_DROPOUT = 0.25  # NEW
+    HIDDEN_SIZE = 192
+    DROPOUT_RATE = 0.50  # Increased from 0.35
+    NUM_HEADS = 6
+    NUM_LAYERS = 4
+    ATTENTION_DROPOUT = 0.30  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.7
@@ -1220,7 +1220,7 @@ def main():
 
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 10
-    NUM_EPOCHS = 300
+    NUM_EPOCHS = 350
     BASE_LR = 1e-4
     MIN_LR = 1e-6
     T_0 = 20           # First restart cycle length
@@ -1519,8 +1519,8 @@ def main():
             )
 
             USE_SWA = True  # NEW
-            SWA_START_FRACTION = 0.5  # start SWA after 70% of epochs  # NEW
-            SWA_LR = LEARNING_RATE     # often same or slightly lower   # NEW
+            SWA_START_FRACTION = 0.85  # start SWA after 70% of epochs  # NEW
+            SWA_LR = 2e-5     # often same or slightly lower   # NEW
 
             if USE_SWA:
                 swa_model = AveragedModel(model)

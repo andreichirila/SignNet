@@ -1222,8 +1222,8 @@ def main():
     WARMUP_EPOCHS = 10
     NUM_EPOCHS = 300
     BASE_LR = 1e-4
-    MIN_LR = 1e-5
-    T_0 = 30           # First restart cycle length
+    MIN_LR = 1e-6
+    T_0 = 20           # First restart cycle length
     T_MULT = 2         # Multiply cycle length after each restart
 
     number_of_classes = 150

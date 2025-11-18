@@ -1198,32 +1198,32 @@ def main():
 
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 192
-    DROPOUT_RATE = 0.50  # Increased from 0.35
-    NUM_HEADS = 6
-    NUM_LAYERS = 4
+    HIDDEN_SIZE = 256
+    DROPOUT_RATE = 0.55  # Increased from 0.35
+    NUM_HEADS = 8
+    NUM_LAYERS = 5
     ATTENTION_DROPOUT = 0.30  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.7
 
     # FEATURE ENGINEERING SETTINGS (NEW)
-    USE_ENHANCED_FEATURES = True  # Toggle feature engineering
+    USE_ENHANCED_FEATURES = False  # Toggle feature engineering
     INCLUDE_ACCELERATION = True  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True
     if USE_BALANCED_SOFTMAX:
         USE_WEIGHTED_SAMPLER = False
         USE_CLASS_WEIGHTS = False
-    INCLUDE_BONES = True                 # NEW
+    INCLUDE_BONES = False                 # NEW
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 10
-    NUM_EPOCHS = 350
+    NUM_EPOCHS = 400
     BASE_LR = 1e-4
     MIN_LR = 1e-6
-    T_0 = 20           # First restart cycle length
+    T_0 = 25           # First restart cycle length
     T_MULT = 2         # Multiply cycle length after each restart
 
     number_of_classes = 150

@@ -12,6 +12,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, classification_report, f1_score, precision_score, recall_score
 from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
 import seaborn as sns
 import mlflow
 import mlflow.pytorch
@@ -1195,7 +1196,6 @@ def main():
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999
 
-    NUM_EPOCHS = 200
     BATCH_SIZE = 128
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = 128
@@ -1218,10 +1218,13 @@ def main():
     INCLUDE_BONES = True                 # NEW
     INCLUDE_BONE_VELOCITY = True        # NEW (turn on later if memory allows)
 
-    WARMUP_EPOCHS = 10  # Short warmup for high-dim features
-    BASE_LR = 1e-4      # Your current LR
-    MIN_LR = 5e-5       # Cosine floor
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
+    WARMUP_EPOCHS = 10
+    NUM_EPOCHS = 200
+    BASE_LR = 1e-4
+    MIN_LR = 1e-6
+    T_0 = 20           # First restart cycle length
+    T_MULT = 2         # Multiply cycle length after each restart
 
     number_of_classes = 150
 
@@ -1483,33 +1486,29 @@ def main():
 
             optimizer = torch.optim.AdamW(
                 model.parameters(),
-                lr=LEARNING_RATE,
+                lr=BASE_LR,
                 weight_decay=WEIGHT_DECAY,
                 betas=(0.9, 0.999)
             )
 
             warmup_scheduler = torch.optim.lr_scheduler.LinearLR(
-                optimizer, start_factor=0.1, total_iters=WARMUP_EPOCHS  # From 1e-5 to BASE_LR
+                optimizer,
+                start_factor=0.1,
+                total_iters=WARMUP_EPOCHS
             )
-            main_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-                optimizer, T_max=NUM_EPOCHS - WARMUP_EPOCHS, eta_min=MIN_LR
+
+            restart_scheduler = CosineAnnealingWarmRestarts(
+                optimizer,
+                T_0=T_0,              # First cycle: 20 epochs
+                T_mult=T_MULT,        # Next cycles: 40, 80, ... epochs
+                eta_min=MIN_LR        # Minimum LR at cycle end
             )
 
             from torch.optim.lr_scheduler import SequentialLR
             scheduler = SequentialLR(
                 optimizer,
-                schedulers=[warmup_scheduler, main_scheduler],
-                milestones=[WARMUP_EPOCHS]  # Switch after warmup
-            )
-
-            # Adaptive plateau reduction (wraps the main scheduler)
-            plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-                optimizer,
-                mode='max',  # Maximize val_acc
-                factor=0.5,  # Halve LR on plateau
-                patience=PLATEAU_PATIENCE,
-                min_lr=1e-6,
-                verbose=True  # Logs reductions
+                schedulers=[warmup_scheduler, restart_scheduler],
+                milestones=[WARMUP_EPOCHS]
             )
 
             early_stopping = EarlyStopping(
@@ -1559,14 +1558,13 @@ def main():
                 if shutdown_handler.is_interrupted():
                     break
 
+                scheduler.step()
 
                 if USE_SWA and epoch >= swa_start:
                     swa_model.update_parameters(model)
                     swa_scheduler.step()
-                else:
-                    scheduler.step()
 
-                plateau_scheduler.step(val_topk_accs[1])  # Adaptive on val_acc; update with actual val_acc
+
                 epochs_trained += 1
 
                 if val_topk_accs[1] > best_val_acc:

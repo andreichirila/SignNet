@@ -594,21 +594,18 @@ class RemappedDataset(Dataset):
 
 class TransformerSignClassifierWithHandedness(nn.Module):
     """
-    Dual-branch transformer:
-    - Main branch: full enhanced features (no bones, just velocity/accel/distances)
-    - Hand branch: extracted hand-only coords from main input
-    - Fusion before classification
+    Transformer encoder model with:
+    - Multi-task learning (sign + handedness)
+    - Uses existing per-frame features (joints + bones + velocities + etc.)
+    Drop-in replacement for LSTMSignClassifierWithHandedness.
     """
     def __init__(
         self,
-        input_size: int,  # e.g., 3318 (without bones)
-        hidden_size: int = 128,
-        hand_hidden_size: int = 48,  # Small hand branch
-        num_classes: int = 150,
-        num_layers: int = 3,
-        hand_num_layers: int = 1,
+        input_size: int,
+        hidden_size: int,
+        num_classes: int,
+        num_layers: int = 2,
         num_heads: int = 4,
-        hand_num_heads: int = 2,
         dim_feedforward: int = 512,
         dropout_rate: float = 0.3,
         attention_dropout: float = 0.1,
@@ -617,21 +614,17 @@ class TransformerSignClassifierWithHandedness(nn.Module):
         super().__init__()
         self.input_size = input_size
         self.hidden_size = hidden_size
-        self.hand_hidden_size = hand_hidden_size
         self.num_classes = num_classes
         self.debug = debug
 
-        # Compute hand slice indices
-        # Assuming your feature vector layout: [raw_landmarks, velocity, accel, distances, ...]
-        # Raw landmarks = 553 joints × 3 = 1659 dims, hands are first 42 joints × 3 = 126 dims
-        self.hand_slice = slice(0, 126)  # Adjust if your layout differs
+        # Project input features to model dimension (hidden_size)
+        self.input_proj = nn.Linear(input_size, hidden_size)
 
-        # === MAIN BRANCH (full features) ===
-        self.main_proj = nn.Linear(input_size, hidden_size)
-        self.main_pos_embedding = nn.Parameter(torch.zeros(1, 2048, hidden_size))
-        nn.init.normal_(self.main_pos_embedding, std=0.02)
+        # Positional encoding (learned)
+        self.pos_embedding = nn.Parameter(torch.zeros(1, 2048, hidden_size))  # max_len=2048
+        nn.init.normal_(self.pos_embedding, std=0.02)
 
-        main_encoder_layer = nn.TransformerEncoderLayer(
+        encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_size,
             nhead=num_heads,
             dim_feedforward=dim_feedforward,
@@ -639,99 +632,70 @@ class TransformerSignClassifierWithHandedness(nn.Module):
             batch_first=True,
             activation="gelu",
         )
-        self.main_transformer = nn.TransformerEncoder(
-            main_encoder_layer,
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
             num_layers=num_layers,
-        )
-
-        # === HAND BRANCH (hand coords only) ===
-        self.hand_proj = nn.Linear(126, hand_hidden_size)
-        self.hand_pos_embedding = nn.Parameter(torch.zeros(1, 2048, hand_hidden_size))
-        nn.init.normal_(self.hand_pos_embedding, std=0.02)
-
-        hand_encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hand_hidden_size,
-            nhead=hand_num_heads,
-            dim_feedforward=2 * hand_hidden_size,
-            dropout=attention_dropout,
-            batch_first=True,
-            activation="gelu",
-        )
-        self.hand_transformer = nn.TransformerEncoder(
-            hand_encoder_layer,
-            num_layers=hand_num_layers,
         )
 
         self.dropout = nn.Dropout(dropout_rate)
 
-        # === FUSION ===
-        fusion_size = hidden_size + hand_hidden_size
-        self.fusion = nn.Sequential(
-            nn.Linear(fusion_size, fusion_size // 2),
-            nn.GELU(),
-            nn.Dropout(dropout_rate)
-        )
+        # Task 1: Sign classification head
+        self.fc_sign = nn.Linear(hidden_size, num_classes)
 
-        self.fc_sign = nn.Linear(fusion_size // 2, num_classes)
-        self.fc_handedness = nn.Linear(fusion_size // 2, 4)
+        # Task 2: Handedness classification head (4 classes: LEFT, RIGHT, BOTH, NONE)
+        self.fc_handedness = nn.Linear(hidden_size, 4)
 
         if debug:
-            print(f"[DEBUG] DualBranchTransformerSignClassifier initialized")
-            print(f"  Main input: {input_size} → {hidden_size}")
-            print(f"  Hand input: 126 → {hand_hidden_size}")
-            print(f"  Fusion: {fusion_size} → {fusion_size//2}")
-            print(f"  Total params: {sum(p.numel() for p in self.parameters()):,}")
+            print(f"[DEBUG] TransformerSignClassifierWithHandedness initialized")
+            print(f"  Input size: {input_size}")
+            print(f"  Hidden size: {hidden_size}")
+            print(f"  Num classes (sign): {num_classes}")
+            print(f"  Num heads: {num_heads}")
+            print(f"  Num layers: {num_layers}")
+            print(f"  FFN dim: {dim_feedforward}")
+            print(f"  Dropout: {dropout_rate}, attn_dropout: {attention_dropout}")
+            print(f"  Total parameters: {sum(p.numel() for p in self.parameters()):,}")
 
-    def forward(self, features, src_key_padding_mask=None):
+    def forward(self, landmarks, src_key_padding_mask=None):
         """
         Args:
-            features: (B, T, input_size) - full enhanced features
-            src_key_padding_mask: (B, T) True=pad
+            landmarks: (batch_size, seq_len, input_size)
+            src_key_padding_mask: optional (batch_size, seq_len) True=pad
         Returns:
-            sign_logits, handedness_logits
+            sign_logits: (batch_size, num_classes)
+            handedness_logits: (batch_size, 4)
         """
-        B, T, D = features.shape
+        B, T, D = landmarks.shape
 
-        # Extract hand features from full feature vector
-        hand_features = features[:, :, self.hand_slice]  # (B, T, 126)
+        # Project to hidden_size
+        x = self.input_proj(landmarks)  # (B, T, hidden)
 
-        # === MAIN BRANCH ===
-        x_main = self.main_proj(features)  # (B, T, hidden)
-        x_main = x_main + self.main_pos_embedding[:, :T, :]
-        x_main = self.main_transformer(x_main, src_key_padding_mask=src_key_padding_mask)
+        # Add positional embeddings (crop to current length)
+        if T > self.pos_embedding.size(1):
+            raise ValueError(f"Sequence length {T} exceeds max positional length {self.pos_embedding.size(1)}")
+        pos_emb = self.pos_embedding[:, :T, :]  # (1, T, hidden)
+        x = x + pos_emb
 
-        # Mask-aware pooling
+        # Transformer encoder
+        # src_key_padding_mask: (B, T) with True at PAD positions
+        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, T, hidden)
+
+        # Global average pooling over time (mask-aware)
         if src_key_padding_mask is not None:
+            # mask: True for PAD -> set to 0 weight
             mask = (~src_key_padding_mask).float().unsqueeze(-1)  # (B, T, 1)
-            x_main_masked = x_main * mask
-            lengths = mask.sum(dim=1).clamp(min=1.0)
-            main_pooled = x_main_masked.sum(dim=1) / lengths
+            x_masked = x * mask
+            lengths = mask.sum(dim=1).clamp(min=1.0)  # (B, 1)
+            pooled = x_masked.sum(dim=1) / lengths    # (B, hidden)
         else:
-            main_pooled = x_main.mean(dim=1)
+            pooled = x.mean(dim=1)  # (B, hidden)
 
-        # === HAND BRANCH ===
-        x_hand = self.hand_proj(hand_features)  # (B, T, hand_hidden)
-        x_hand = x_hand + self.hand_pos_embedding[:, :T, :]
-        x_hand = self.hand_transformer(x_hand, src_key_padding_mask=src_key_padding_mask)
+        pooled = self.dropout(pooled)
 
-        # Mask-aware pooling
-        if src_key_padding_mask is not None:
-            x_hand_masked = x_hand * mask
-            hand_pooled = x_hand_masked.sum(dim=1) / lengths
-        else:
-            hand_pooled = x_hand.mean(dim=1)
-
-        # === FUSION ===
-        fused = torch.cat([main_pooled, hand_pooled], dim=1)  # (B, hidden + hand_hidden)
-        fused = self.fusion(fused)
-        fused = self.dropout(fused)
-
-        # === CLASSIFICATION ===
-        sign_logits = self.fc_sign(fused)
-        handedness_logits = self.fc_handedness(fused)
+        sign_logits = self.fc_sign(pooled)
+        handedness_logits = self.fc_handedness(pooled)
 
         return sign_logits, handedness_logits
-
 
 
 
@@ -1235,12 +1199,9 @@ def main():
     BATCH_SIZE = 128
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = 128
-    HIDDEN_SIZE_HAND = 48
     DROPOUT_RATE = 0.45  # Increased from 0.35
     NUM_HEADS = 4
-    NUM_HEADS_HAND = 2
     NUM_LAYERS = 3
-    NUM_LAYERS_HAND = 1
     ATTENTION_DROPOUT = 0.25  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
@@ -1495,12 +1456,9 @@ def main():
             model_raw = TransformerSignClassifierWithHandedness(
                 input_size=input_size,
                 hidden_size=HIDDEN_SIZE,      # e.g. 96 or 128
-                hand_hidden_size=HIDDEN_SIZE_HAND,
                 num_classes=num_classes,
                 num_layers=NUM_LAYERS,                 # 2–3 layers is a good start
-                hand_num_layers=NUM_LAYERS_HAND,
                 num_heads=NUM_HEADS,                  # keep consistent with hidden_size (must divide)
-                hand_num_heads=NUM_HEADS_HAND,
                 dim_feedforward=4 * HIDDEN_SIZE,
                 dropout_rate=DROPOUT_RATE,
                 attention_dropout=ATTENTION_DROPOUT,

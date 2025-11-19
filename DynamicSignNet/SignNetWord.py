@@ -592,6 +592,45 @@ class RemappedDataset(Dataset):
 
         return landmarks, torch.tensor(new_label, dtype=torch.long), handedness
 
+class OversampledDataset(RemappedDataset):
+    """Extends RemappedDataset to oversample specific classes"""
+
+    def __init__(self, base_dataset, indices, old_to_new_idx, oversample_config=None):
+        super().__init__(base_dataset, indices, old_to_new_idx)
+
+        if oversample_config:
+            self.oversampled_indices = self._create_oversampled_indices(oversample_config)
+        else:
+            self.oversampled_indices = list(range(len(self.indices)))
+
+    def _create_oversampled_indices(self, config):
+        """Create list of indices with oversampling applied"""
+        oversampled = []
+
+        for i, real_idx in enumerate(self.indices):
+            # Get original sample to check class
+            _, label, _ = self.base_dataset[real_idx]
+            class_name = self.base_dataset.idx_to_word[label.item()]
+
+            # Add original index
+            oversampled.append(i)
+
+            # Add duplicates if class is in config
+            if class_name in config:
+                repeat_count = config[class_name] - 1  # -1 because we already added original
+                for _ in range(repeat_count):
+                    oversampled.append(i)
+
+        return oversampled
+
+    def __len__(self):
+        return len(self.oversampled_indices)
+
+    def __getitem__(self, idx):
+        # Map oversampled index to original RemappedDataset index
+        original_idx = self.oversampled_indices[idx]
+        return super().__getitem__(original_idx)
+
 
 class TransformerSignClassifierWithHandedness(nn.Module):
     """
@@ -1218,10 +1257,10 @@ def main():
 
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 256
+    HIDDEN_SIZE = 320
     DROPOUT_RATE = 0.55  # Increased from 0.35
-    NUM_HEADS = 8
-    NUM_LAYERS = 5
+    NUM_HEADS = 10
+    NUM_LAYERS = 6
     ATTENTION_DROPOUT = 0.30  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
@@ -1245,6 +1284,18 @@ def main():
     MIN_LR = 1e-6
     T_0 = 25           # First restart cycle length
     T_MULT = 2         # Multiply cycle length after each restart
+
+    # ==================== OVERSAMPLING CONFIGURATION ====================
+    OVERSAMPLE_CONFIG = {
+        'ZWEI': 10,         # 10x oversampling (4.76% → target 40%+)
+        'loc-SUED': 8,      # 8x oversampling (10.53%)
+        'EINS': 5,          # 5x oversampling (32%)
+        'MEISTENS': 5,      # 5x oversampling (21%)
+        'UND': 4,           # 4x oversampling (25%)
+        'ABER': 4,          # 4x oversampling (27%)
+        'KOMMEN': 3,        # 3x oversampling (28%)
+    }
+
 
     number_of_classes = 300
 
@@ -1447,7 +1498,7 @@ def main():
                     persistent_workers=True
                 )
             else:
-                train_subset = RemappedDataset(dataset_train, train_indices, old_to_new_idx)
+                train_subset = OversampledDataset(dataset_train, train_indices, old_to_new_idx, oversample_config=OVERSAMPLE_CONFIG)
                 val_subset = RemappedDataset(dataset_val, val_indices, old_to_new_idx)
 
                 train_loader = DataLoader(

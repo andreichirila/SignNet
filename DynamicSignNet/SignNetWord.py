@@ -1211,7 +1211,7 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    MIN_SAMPLES_PER_CLASS = 100
+    MIN_SAMPLES_PER_CLASS = 70
     USE_CLASS_WEIGHTS = True
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999
@@ -1246,7 +1246,7 @@ def main():
     T_0 = 25           # First restart cycle length
     T_MULT = 2         # Multiply cycle length after each restart
 
-    number_of_classes = 150
+    number_of_classes = 300
 
     NPZ_DIR = "./word_landmarks_extracted"
     MODEL_SAVE_DIR = "./models_balanced"

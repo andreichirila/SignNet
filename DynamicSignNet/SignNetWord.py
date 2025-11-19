@@ -1287,10 +1287,10 @@ def main():
 
     # ==================== OVERSAMPLING CONFIGURATION ====================
     OVERSAMPLE_CONFIG = {
-        'ZWEI': 10,         # 10x oversampling (4.76% → target 40%+)
-        'loc-SUED': 8,      # 8x oversampling (10.53%)
-        'EINS': 5,          # 5x oversampling (32%)
-        'MEISTENS': 5,      # 5x oversampling (21%)
+        'ZWEI': 5,         # 10x oversampling (4.76% → target 40%+)
+        'loc-SUED': 4,      # 8x oversampling (10.53%)
+        'EINS': 3,          # 5x oversampling (32%)
+        'MEISTENS': 3,      # 5x oversampling (21%)
         'UND': 4,           # 4x oversampling (25%)
         'ABER': 4,          # 4x oversampling (27%)
         'KOMMEN': 3,        # 3x oversampling (28%)

@@ -1502,6 +1502,7 @@ def main():
                 use_balanced_softmax=USE_BALANCED_SOFTMAX,
                 balanced_class_counts=balanced_counts_vec.to(DEVICE)
             )
+            criterion = criterion.to(DEVICE)
 
             optimizer = torch.optim.AdamW(
                 model.parameters(),

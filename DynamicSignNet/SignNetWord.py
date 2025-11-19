@@ -769,31 +769,51 @@ class BalancedSoftmaxLoss(nn.Module):
 
 class MultiTaskLoss(nn.Module):
     """
-    Combines sign classification loss with handedness auxiliary loss.
+    Multi-task loss with uncertainty-based dynamic weighting.
+    Learns optimal task weights automatically during training.
     """
-    def __init__(self, alpha=0.85, label_smoothing=0.0,
-                 use_focal=False, class_weights=None,
-                 use_balanced_softmax=False,  # NEW
-                 balanced_class_counts: torch.Tensor=None):  # NEW
+    def __init__(self, label_smoothing=0.0, use_focal=False, class_weights=None,
+                 use_balanced_softmax=False, balanced_class_counts=None):
         super().__init__()
-        self.alpha = alpha
 
+        # Set up sign classification loss
         if use_balanced_softmax and balanced_class_counts is not None:
             self.sign_loss = BalancedSoftmaxLoss(balanced_class_counts)
         elif use_focal:
             self.sign_loss = FocalLoss(alpha=0.25, gamma=2.0, weight=class_weights)
         else:
-            self.sign_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing, weight=class_weights)
+            self.sign_loss = nn.CrossEntropyLoss(
+                label_smoothing=label_smoothing,
+                weight=class_weights
+            )
 
+        # Handedness loss
         self.handedness_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
 
+        # Learnable uncertainty parameters (log-variance)
+        # Initialize to 0 (variance = 1) for balanced start
+        self.log_var_sign = nn.Parameter(torch.zeros(1))
+        self.log_var_hand = nn.Parameter(torch.zeros(1))
+
     def forward(self, sign_logits, handedness_logits, sign_labels, handedness_labels):
+        # Calculate individual task losses
         loss_sign = self.sign_loss(sign_logits, sign_labels)
         loss_handedness = self.handedness_loss(handedness_logits, handedness_labels)
 
-        total_loss = self.alpha * loss_sign + (1 - self.alpha) * loss_handedness
+        # Uncertainty-based weighting
+        # precision = exp(-log_var) = 1 / variance
+        precision_sign = torch.exp(-self.log_var_sign)
+        precision_hand = torch.exp(-self.log_var_hand)
+
+        # Weighted losses with regularization term
+        weighted_sign = precision_sign * loss_sign + self.log_var_sign
+        weighted_hand = precision_hand * loss_handedness + self.log_var_hand
+
+        # Total loss
+        total_loss = weighted_sign + weighted_hand
 
         return total_loss, loss_sign, loss_handedness
+
 
 
 def compute_effective_number_weights(class_counts, beta=0.9999):
@@ -1476,8 +1496,7 @@ def main():
             print(f"\n[STEP 7] Setting up training...")
 
             criterion = MultiTaskLoss(
-                alpha=0.85,
-                label_smoothing=0.0,
+                label_smoothing=0.05,
                 use_focal=(USE_FOCAL_LOSS and not USE_BALANCED_SOFTMAX),
                 class_weights=(class_weights if USE_CLASS_WEIGHTS and not USE_BALANCED_SOFTMAX else None),
                 use_balanced_softmax=USE_BALANCED_SOFTMAX,

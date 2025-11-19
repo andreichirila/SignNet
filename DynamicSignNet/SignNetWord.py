@@ -1257,10 +1257,10 @@ def main():
 
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 320
+    HIDDEN_SIZE = 256
     DROPOUT_RATE = 0.55  # Increased from 0.35
-    NUM_HEADS = 10
-    NUM_LAYERS = 6
+    NUM_HEADS = 8
+    NUM_LAYERS = 5
     ATTENTION_DROPOUT = 0.30  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True

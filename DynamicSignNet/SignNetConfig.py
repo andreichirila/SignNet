@@ -28,7 +28,7 @@ HIERARCHY_CONFIG = {
 
     # PRIORITY 2: The Kommen Family (Solid gain potential)
     'kommen_expert': [
-        'KOMMEN', 'cl-KOMMEN', 'IN-KOMMEND', 'ANKOMMEN', 'HERKOMMEN'
+        'KOMMEN', 'cl-KOMMEN', 'IN-KOMMEND', 'ANKOMMEN'
     ],
 
     # PRIORITY 3: Precipitation Types (Fixing the "Heavy Rain" issue)

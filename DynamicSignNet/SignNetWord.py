@@ -1371,7 +1371,7 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    MIN_SAMPLES_PER_CLASS = 5
+    MIN_SAMPLES_PER_CLASS = 70
     USE_CLASS_WEIGHTS = True
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999

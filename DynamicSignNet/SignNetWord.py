@@ -46,6 +46,14 @@ def parse_args():
         help='Base directory containing dataset'
     )
 
+    parser.add_argument(
+        '--expert-name',
+        type=str,
+        default=None,
+        choices=['direction_expert', 'kommen_expert'],
+        help='If specified, trains a specialized expert model on a subset of classes.'
+    )
+
     return parser.parse_args()
 
 
@@ -1344,6 +1352,20 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
 def main():
     args = parse_args()
 
+    # Check if we are in expert training mode
+    if args.expert_name:
+        print(f"\n{'='*80}")
+        print(f"===== EXPERT TRAINING MODE: {args.expert_name} =====")
+        print(f"{'='*80}\n")
+
+        # Override hyperparameters for the smaller, focused model
+        global HIDDEN_SIZE, NUM_LAYERS, NUM_HEADS, BATCH_SIZE, LEARNING_RATE, run_name
+        HIDDEN_SIZE = 128
+        NUM_LAYERS = 3
+        NUM_HEADS = 4
+        BATCH_SIZE = 128
+        LEARNING_RATE = 2e-4
+
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -1419,6 +1441,22 @@ def main():
         'AUCH': 5,
         'cl-KOMMEN': 4,
     }
+
+    # ==================== HIERARCHICAL CLUSTERS (NEW) ====================
+    # Clusters of classes that are easily confused and need an expert model
+    HIERARCHY_CONFIG = {
+        'direction_expert': [
+            'NORD', 'SUED', 'WEST', 'OST',
+            'loc-NORD', 'loc-SUED', 'loc-WEST',
+            'loc-NORDWEST', 'loc-SUEDOST', 'loc-SUEDWEST', 'NORDOSTRAUM', # Assuming NORDOSTRAUM is a direction
+            'NORDRAUM', 'SUEDRAUM', 'SUEDWESTRAUM', 'NORDWESTRAUM', 'SUEDOSTRAUM'
+        ],
+        'kommen_expert': [
+            'KOMMEN', 'cl-KOMMEN', 'IN-KOMMEND', 'ANKOMMEN' # Assuming ANKOMMEN exists
+        ],
+        # You can add more experts here later
+    }
+
 
 
     number_of_classes = 300
@@ -1508,15 +1546,30 @@ def main():
             else:
                 print(f"  ERROR: No npz_files found!")
 
-            # Build vocabulary
-            top_k_words, all_counts = build_topk_vocabulary(
-                npz_files,
-                K=number_of_classes,
-                min_samples=MIN_SAMPLES_PER_CLASS,
-                debug=True
-            )
+            if args.expert_name:
+                print(f"[VOCABULARY] Using pre-defined expert vocabulary for '{args.expert_name}'")
+                top_k_words = HIERARCHY_CONFIG[args.expert_name]
+                print(f"  Training on {len(top_k_words)} specific classes.")
 
-            print(f"\n[VOCABULARY] Using {len(top_k_words)} classes after filtering")
+                # We don't have 'all_counts' in this mode, so create a dummy one
+                class_counts_analysis = Counter(word for f in npz_files for word in [Path(f).stem.split('_')[0]] if word in top_k_words)
+                all_counts = class_counts_analysis
+
+            else:
+                # This is your original code for training the main model
+                print("\n[VOCABULARY] Building vocabulary from dataset stats...")
+                top_k_words, all_counts = build_topk_vocabulary(
+                    npz_files,
+                    K=number_of_classes,
+                    min_samples=MIN_SAMPLES_PER_CLASS,
+                    debug=True
+                )
+
+            if not top_k_words:
+                print("[ERROR] Vocabulary is empty! Check MIN_SAMPLES_PER_CLASS or expert class names.")
+                sys.exit(1)
+
+            print(f"\n[VOCABULARY] Using {len(top_k_words)} classes after filtering.")
             mlflow.log_param("num_classes", len(top_k_words))
 
             # Compute class counts for class-aware augmentation

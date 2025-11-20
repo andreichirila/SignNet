@@ -57,7 +57,7 @@ def parse_args():
         '--expert-name',
         type=str,
         default=None,
-        choices=['direction_expert', 'kommen_expert'],
+        choices=['direction_expert', 'kommen_expert', 'weather_expert'],
         help='If specified, trains a specialized expert model on a subset of classes.'
     )
 

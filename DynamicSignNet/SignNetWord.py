@@ -24,6 +24,30 @@ from datetime import datetime
 from telegram import Bot
 import asyncio
 import signal
+import argparse
+
+# Add this function after all imports, before classes
+def parse_args():
+    """Parse command line arguments"""
+    parser = argparse.ArgumentParser(description='Sign Language Classifier Training')
+
+    parser.add_argument(
+        '--dataset-type',
+        type=str,
+        choices=['flat', 'split'],
+        default='flat',
+        help='Dataset structure: "flat" for single folder with train_test_split, "split" for train/test/val folders'
+    )
+
+    parser.add_argument(
+        '--data-dir',
+        type=str,
+        default='./word_landmarks_extracted',
+        help='Base directory containing dataset'
+    )
+
+    return parser.parse_args()
+
 
 
 # ==================== FEATURE ENGINEERING MODULE (NEW) ====================
@@ -1222,8 +1246,104 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
 
     print(f"✓ Logged per-class metrics for epoch {epoch}")
 
+def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
+                      use_enhanced_features, include_accel, include_bones,
+                      include_bone_velocity, augment, augment_prob, train_class_counts):
+    """Load dataset according to structure type."""
+
+    if args.dataset_type == 'flat':
+        print(f"\n[STEP 2] Using flat structure with train_test_split")
+
+        # Filter to vocabulary
+        filtered_indices = []
+        filtered_labels = []
+        for i in range(len(base_dataset)):
+            _, label, _ = base_dataset[i]
+            old_label = label.item()
+            if old_label in old_to_new_idx:
+                filtered_indices.append(i)
+                word = base_dataset.idx_to_word[old_label]
+                filtered_labels.append(word)
+
+        print(f"  Filtered to {len(filtered_indices)} samples")
+
+        # Split into train/val
+        train_indices, val_indices = train_test_split(
+            filtered_indices,
+            test_size=0.2,
+            random_state=42,
+            stratify=filtered_labels
+        )
+
+        print(f"  Train: {len(train_indices)}, Val: {len(val_indices)}")
+
+        return train_indices, val_indices, None, base_dataset, base_dataset, None
+
+    else:  # 'split'
+        print(f"\n[STEP 2] Using split structure (train/val/test folders)")
+
+        train_dir = str(Path(args.data_dir) / "train")
+        val_dir = str(Path(args.data_dir) / "val")
+        test_dir = str(Path(args.data_dir) / "test")
+
+        # Create separate datasets
+        dataset_train = SignLanguageDataset(
+            train_dir,
+            word_to_idx=base_dataset.word_to_idx,
+            debug=False,
+            augment=augment,
+            augment_prob=augment_prob,
+            use_enhanced_features=use_enhanced_features,
+            include_accel=include_accel,
+            include_bones=include_bones,
+            include_bone_velocity=include_bone_velocity,
+            class_counts=train_class_counts
+        )
+
+        dataset_val = SignLanguageDataset(
+            val_dir,
+            word_to_idx=base_dataset.word_to_idx,
+            debug=False,
+            augment=False,
+            use_enhanced_features=use_enhanced_features,
+            include_accel=include_accel,
+            include_bones=include_bones,
+            include_bone_velocity=include_bone_velocity,
+            class_counts=train_class_counts
+        )
+
+        dataset_test = SignLanguageDataset(
+            test_dir,
+            word_to_idx=base_dataset.word_to_idx,
+            debug=False,
+            augment=False,
+            use_enhanced_features=use_enhanced_features,
+            include_accel=include_accel,
+            include_bones=include_bones,
+            include_bone_velocity=include_bone_velocity,
+            class_counts=train_class_counts
+        )
+
+        # Filter each to vocabulary
+        train_indices = [i for i in range(len(dataset_train))
+                        if dataset_train[i][1].item() in old_to_new_idx]
+        val_indices = [i for i in range(len(dataset_val))
+                      if dataset_val[i][1].item() in old_to_new_idx]
+        test_indices = [i for i in range(len(dataset_test))
+                       if dataset_test[i][1].item() in old_to_new_idx]
+
+        print(f"  Train: {len(train_indices)} samples")
+        print(f"  Val: {len(val_indices)} samples")
+        print(f"  Test: {len(test_indices)} samples")
+
+        return train_indices, val_indices, test_indices, dataset_train, dataset_val, dataset_test
+
+
+
 
 def main():
+    args = parse_args()
+
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -1241,8 +1361,9 @@ def main():
     os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
+    dataset_name = Path(args.data_dir).name
+    run_name = f"{dataset_name}_Transformer"
     EXPERIMENT_NAME = "SignNetWord"
-    RUN_NAME = f"Top150 Transformer"  # UPDATED
     mlflow.set_experiment(EXPERIMENT_NAME)
 
     # ============================================================================
@@ -1250,7 +1371,7 @@ def main():
     # ============================================================================
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    MIN_SAMPLES_PER_CLASS = 70
+    MIN_SAMPLES_PER_CLASS = 5
     USE_CLASS_WEIGHTS = True
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999
@@ -1302,7 +1423,7 @@ def main():
 
     number_of_classes = 300
 
-    NPZ_DIR = "./word_landmarks_extracted"
+    NPZ_DIR = NPZ_DIR = args.data_dir
     MODEL_SAVE_DIR = "./models_balanced"
     PLOTS_DIR = "./plots_balanced"
 
@@ -1310,7 +1431,7 @@ def main():
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
     try:
-        run = mlflow.start_run(log_system_metrics=True, run_name=RUN_NAME)
+        run = mlflow.start_run(log_system_metrics=True, run_name=run_name)
 
         try:
             mlflow.log_param("python_version", platform.python_version())
@@ -1336,11 +1457,22 @@ def main():
             })
 
             # STEP 1: Load dataset WITH ENHANCED FEATURES
-            print(f"\n[STEP 1] Loading dataset with enhanced features={USE_ENHANCED_FEATURES}...")
+            print("\n" + "=" * 80)
+            print(f"[STEP 1] Loading dataset from {args.data_dir} (type: {args.dataset_type})")
+            print("=" * 80)
 
+            # Determine data directory based on type
+            if args.dataset_type == 'flat':
+                data_dir_for_base = args.data_dir
+            else:  # 'split'
+                data_dir_for_base = str(Path(args.data_dir) / "train")
+
+            print(f"  Loading base dataset from: {data_dir_for_base}")
+
+            # Create base dataset to get vocabulary and determine input size
             base_dataset = SignLanguageDataset(
-                NPZ_DIR,
-                debug=True,
+                data_dir_for_base,
+                debug=False,
                 augment=False,
                 use_enhanced_features=USE_ENHANCED_FEATURES,
                 include_accel=INCLUDE_ACCELERATION,
@@ -1348,14 +1480,35 @@ def main():
                 include_bone_velocity=INCLUDE_BONE_VELOCITY
             )
 
+            if len(base_dataset) == 0:
+                raise ValueError(f"No .npz files found in {data_dir_for_base}. Please check your data directory.")
 
-            # GET INPUT SIZE (will be larger if enhanced features enabled)
+            # Get sample to determine input size
             sample_landmarks, _, _ = base_dataset[0]
-            input_size = sample_landmarks.shape[1]
-            print(f"\n>>> Input size: {input_size} (original: 1659)")
+            input_size = sample_landmarks.shape[-1]
+
+            print(f"  Total samples in base: {len(base_dataset)}")
+            print(f"  Input size: {input_size}")
+            print(f"  Classes: {len(base_dataset.word_to_idx)}")
             mlflow.log_param("input_size", input_size)
 
-            npz_files = sorted(Path(NPZ_DIR).glob("*.npz"))
+            if args.dataset_type == 'flat':
+                npz_files = sorted(Path(NPZ_DIR).glob("*.npz"))
+            else:  # 'split'
+                # Use train folder for vocabulary building
+                npz_files = sorted((Path(NPZ_DIR) / "train").glob("*.npz"))
+
+            # NOW the debug print
+            print(f"\n[DEBUG] NPZ files check:")
+            print(f"  NPZ_DIR: {NPZ_DIR}")
+            print(f"  Number of npz_files: {len(npz_files)}")
+            if len(npz_files) > 0:
+                print(f"  First file: {npz_files[0]}")
+                print(f"  Last file: {npz_files[-1]}")
+            else:
+                print(f"  ERROR: No npz_files found!")
+
+            # Build vocabulary
             top_k_words, all_counts = build_topk_vocabulary(
                 npz_files,
                 K=number_of_classes,
@@ -1364,11 +1517,10 @@ def main():
             )
 
             print(f"\n[VOCABULARY] Using {len(top_k_words)} classes after filtering")
-
+            mlflow.log_param("num_classes", len(top_k_words))
 
             # Compute class counts for class-aware augmentation
             train_class_counts = Counter()
-            npz_files = sorted(Path(NPZ_DIR).glob("*.npz"))
             for npz_file in npz_files:
                 try:
                     data = np.load(npz_file, allow_pickle=True)
@@ -1403,39 +1555,36 @@ def main():
             )
 
             # STEP 2: Filter to top words
-            print(f"\n[STEP 2] Filtering to vocabulary...")
+            print(f"\n[STEP 2] Loading data (type: {args.dataset_type})...")
 
             old_to_new_idx = {}
             for new_idx, word in enumerate(sorted(top_k_words)):
                 old_idx = base_dataset.word_to_idx[word]
                 old_to_new_idx[old_idx] = new_idx
 
-            filtered_indices = []
-            filtered_labels = []
-            for i in range(len(base_dataset)):
-                _, label, _ = base_dataset[i]
-                old_label = label.item()
-                if old_label in old_to_new_idx:
-                    filtered_indices.append(i)
-                    word = base_dataset.idx_to_word[old_label]
-                    filtered_labels.append(word)
+            new_idx_to_word = {
+                new_idx: word
+                for old_idx, new_idx in old_to_new_idx.items()
+                for word in [base_dataset.idx_to_word[old_idx]]
+            }
 
-            new_idx_to_word = {new_idx: word for old_idx, new_idx in old_to_new_idx.items() for word in [base_dataset.idx_to_word[old_idx]]}
-
-
-            print(f"  Filtered to {len(filtered_indices)} samples")
-
-            # STEP 3: Split
-            print(f"\n[STEP 3] Splitting dataset...")
-
-            train_indices, val_indices = train_test_split(
-                filtered_indices,
-                test_size=0.2,
-                random_state=42,
-                stratify=filtered_labels
+            # Load data according to structure type
+            train_indices, val_indices, test_indices, dataset_train, dataset_val, dataset_test = load_data_by_type(
+                args=args,
+                base_dataset=base_dataset,
+                top_k_words=top_k_words,
+                old_to_new_idx=old_to_new_idx,
+                use_enhanced_features=USE_ENHANCED_FEATURES,
+                include_accel=INCLUDE_ACCELERATION,
+                include_bones=INCLUDE_BONES,
+                include_bone_velocity=INCLUDE_BONE_VELOCITY,
+                augment=AUGMENT,
+                augment_prob=AUGMENT_PROBABILITY,
+                train_class_counts=train_class_counts
             )
 
             num_classes = len(top_k_words)
+            print(f"  Classes: {num_classes}")
             print(f"  Train: {len(train_indices)}, Val: {len(val_indices)}")
             print(f"  Classes: {num_classes}")
 

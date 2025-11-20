@@ -33,7 +33,7 @@ HIERARCHY_CONFIG = {
 
     # PRIORITY 3: Precipitation Types (Fixing the "Heavy Rain" issue)
     'weather_expert': [
-        'REGEN', 'REGEN-PLUSPLUS', 'SCHAUER', 'NIESELN',
+        'REGEN', 'REGEN-PLUSPLUS', 'SCHAUER',
         'SCHNEE', 'BEWOELKT', 'WOLKE', 'NEBEL'
     ]
 }

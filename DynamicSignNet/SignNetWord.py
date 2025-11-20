@@ -25,6 +25,13 @@ from telegram import Bot
 import asyncio
 import signal
 import argparse
+from SignNetConfig import (
+    MAIN_MODEL_CONFIG,
+    EXPERT_MODEL_CONFIG,
+    HIERARCHY_CONFIG,
+    OVERSAMPLE_CONFIG
+)
+
 
 # Add this function after all imports, before classes
 def parse_args():
@@ -1360,9 +1367,9 @@ def main():
 
         # Override hyperparameters for the smaller, focused model
         global HIDDEN_SIZE, NUM_LAYERS, NUM_HEADS, BATCH_SIZE, LEARNING_RATE, run_name
-        HIDDEN_SIZE = 128
-        NUM_LAYERS = 3
-        NUM_HEADS = 4
+        HIDDEN_SIZE = EXPERT_MODEL_CONFIG['hidden_size']
+        NUM_LAYERS = EXPERT_MODEL_CONFIG['num_layers']
+        NUM_HEADS = EXPERT_MODEL_CONFIG['num_heads']
         BATCH_SIZE = 128
         LEARNING_RATE = 2e-4
 
@@ -1399,10 +1406,10 @@ def main():
 
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 320
+    HIDDEN_SIZE = MAIN_MODEL_CONFIG['hidden_size']
     DROPOUT_RATE = 0.55  # Increased from 0.35
-    NUM_HEADS = 10
-    NUM_LAYERS = 6
+    NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
+    NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
     ATTENTION_DROPOUT = 0.30  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
@@ -1427,36 +1434,6 @@ def main():
     MIN_LR = 1e-6
     T_0 = 25           # First restart cycle length
     T_MULT = 2         # Multiply cycle length after each restart
-
-    # ==================== OVERSAMPLING CONFIGURATION ====================
-    OVERSAMPLE_CONFIG = {
-        'ZWEI': 5,         # 10x oversampling (4.76% → target 40%+)
-        'loc-SUED': 4,      # 8x oversampling (10.53%)
-        'EINS': 3,          # 5x oversampling (32%)
-        'MEISTENS': 3,      # 5x oversampling (21%)
-        'UND': 4,           # 4x oversampling (25%)
-        'ABER': 4,          # 4x oversampling (27%)
-        'KOMMEN': 3,        # 3x oversampling (28%)
-        'AUCH': 5,
-        'cl-KOMMEN': 4,
-    }
-
-    # ==================== HIERARCHICAL CLUSTERS (NEW) ====================
-    # Clusters of classes that are easily confused and need an expert model
-    HIERARCHY_CONFIG = {
-        'direction_expert': [
-            'NORD', 'SUED', 'WEST', 'OST',
-            'loc-NORD', 'loc-SUED', 'loc-WEST',
-            'loc-NORDWEST', 'loc-SUEDOST', 'loc-SUEDWEST', 'NORDOSTRAUM', # Assuming NORDOSTRAUM is a direction
-            'NORDRAUM', 'SUEDRAUM', 'SUEDWESTRAUM', 'NORDWESTRAUM', 'SUEDOSTRAUM'
-        ],
-        'kommen_expert': [
-            'KOMMEN', 'cl-KOMMEN', 'IN-KOMMEND', 'ANKOMMEN' # Assuming ANKOMMEN exists
-        ],
-        # You can add more experts here later
-    }
-
-
 
     number_of_classes = 300
 

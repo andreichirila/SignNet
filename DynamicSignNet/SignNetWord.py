@@ -1257,10 +1257,10 @@ def main():
 
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
-    HIDDEN_SIZE = 256
+    HIDDEN_SIZE = 320
     DROPOUT_RATE = 0.55  # Increased from 0.35
-    NUM_HEADS = 8
-    NUM_LAYERS = 5
+    NUM_HEADS = 10
+    NUM_LAYERS = 6
     ATTENTION_DROPOUT = 0.30  # NEW
     WEIGHT_DECAY = 1e-3  # Increased from 5e-4
     AUGMENT = True
@@ -1294,6 +1294,8 @@ def main():
         'UND': 4,           # 4x oversampling (25%)
         'ABER': 4,          # 4x oversampling (27%)
         'KOMMEN': 3,        # 3x oversampling (28%)
+        'AUCH': 5,
+        'cl-KOMMEN': 4,
     }
 
 

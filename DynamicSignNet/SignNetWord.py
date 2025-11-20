@@ -1277,6 +1277,7 @@ def main():
     INCLUDE_BONES = False                 # NEW
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
+    USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 10
     NUM_EPOCHS = 400
@@ -1676,9 +1677,10 @@ def main():
                     "learning_rate": lr,
                 }, step=epoch)
 
-                if early_stopping(val_topk_accs[1], epoch):
-                    print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
-                    break
+                if USE_EARLY_STOPPING:
+                    if early_stopping(val_topk_accs[1], epoch):
+                        print(f"\n[EARLY STOPPING] Training stopped at epoch {epoch+1}")
+                        break
 
             # STEP 9: Save results
             print("\n" + "="*80)

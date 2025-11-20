@@ -1384,7 +1384,6 @@ def main():
     mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
 
     dataset_name = Path(args.data_dir).name
-    run_name = f"{dataset_name}_Transformer"
     EXPERIMENT_NAME = "SignNetWord"
     mlflow.set_experiment(EXPERIMENT_NAME)
 
@@ -1468,6 +1467,10 @@ def main():
     os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
     os.makedirs(PLOTS_DIR, exist_ok=True)
 
+
+    run_name = f"{dataset_name}_Transformer_{HIDDEN_SIZE}h_{NUM_LAYERS}L"
+    if args.expert_name:
+        run_name = f"expert_{args.expert_name}_{run_name}"
     try:
         run = mlflow.start_run(log_system_metrics=True, run_name=run_name)
 
@@ -1746,7 +1749,7 @@ def main():
 
             if hasattr(torch, 'compile'):
                 print("Compiling model with torch.compile...")
-                model = torch.compile(model_raw, mode='max-autotune-no-cudagraphs')
+                model = torch.compile(model_raw, mode='max-autotune-no-cudagraphs', dynamic=True)
 
             # STEP 7: Setup training WITH FOCAL LOSS
             print(f"\n[STEP 7] Setting up training...")

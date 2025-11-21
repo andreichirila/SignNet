@@ -1290,6 +1290,9 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             stratify=filtered_labels
         )
 
+        np.save('val_indices.npy', val_indices)
+        mlflow.log_artifact("val_indices.npy")
+
         print(f"  Train: {len(train_indices)}, Val: {len(val_indices)}")
 
         return train_indices, val_indices, None, base_dataset, base_dataset, None

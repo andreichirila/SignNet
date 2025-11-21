@@ -40,6 +40,7 @@ def parse_args():
     parser.add_argument('--direction-expert-path', type=str, default='./models_balanced/expert_direction_expert_sign_classifier_best_enhanced.pth')
     parser.add_argument('--main-model-uri', type=str, default='models:/Production/1')
     parser.add_argument('--direction-expert-uri', type=str, default='models:/SignClassifier_DirectionExpert/1')
+    parser.add_argument('--training-run-id', type=str, required=True, help='MLflow run ID from training that contains val_indices.npy')
     return parser.parse_args()
 
 class HierarchicalClassifier(nn.Module):
@@ -214,21 +215,37 @@ def main():
         hierarchical_model = HierarchicalClassifier(main_model, expert_models, HIERARCHY_CONFIG, main_idx_to_word, expert_dicts)
 
         # 3. Load Data
-        dummy_base = SignLanguageDataset(args.data_dir if args.dataset_type=='flat' else os.path.join(args.data_dir, 'train'), debug=False)
+        print("Downloading validation indices from MLflow...")
+        artifact_path = mlflow.artifacts.download_artifacts(
+            run_id=args.training_run_id,
+            artifact_path="val_indices.npy"
+        )
+        val_indices = np.load(artifact_path)
+        print(f"Loaded {len(val_indices)} validation samples")
+
+        # Rest of the code remains the same
+        if args.dataset_type == 'flat':
+            data_root = args.data_dir
+        else:
+            data_root = os.path.join(args.data_dir, "train")
+
+        base_dataset = SignLanguageDataset(data_root, debug=False)
+
+        # Build mapping old_label_idx -> new_label_idx (vocab index)
         old_to_new_idx = {}
         for new_idx, word in enumerate(sorted_main_vocab):
-            if word in dummy_base.word_to_idx:
-                 old_to_new_idx[dummy_base.word_to_idx[word]] = new_idx
-
-        _, val_indices, _, _, dataset_val, _ = load_data_by_type(
-            argparse.Namespace(dataset_type=args.dataset_type, data_dir=args.data_dir),
-            dummy_base, main_vocab_words, old_to_new_idx,
-            False, False, False, False, False, 0.0, None
-        )
+            if word in base_dataset.word_to_idx:
+                old_idx = base_dataset.word_to_idx[word]
+                old_to_new_idx[old_idx] = new_idx
 
         from SignNetWord import RemappedDataset
-        val_subset = RemappedDataset(dataset_val, val_indices, old_to_new_idx)
-        val_loader = torch.utils.data.DataLoader(val_subset, batch_size=64, collate_fn=PadCollate(), shuffle=False)
+        val_subset = RemappedDataset(base_dataset, val_indices.tolist(), old_to_new_idx)
+        val_loader = torch.utils.data.DataLoader(
+            val_subset,
+            batch_size=64,
+            collate_fn=PadCollate(),
+            shuffle=False
+        )
 
         # 4. Run Evaluation
         print("\nStarting Hierarchical Evaluation...")

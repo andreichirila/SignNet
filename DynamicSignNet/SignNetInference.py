@@ -12,6 +12,7 @@ import matplotlib.pyplot as plt
 import mlflow
 import mlflow.pytorch
 from datetime import datetime
+import json
 
 # Import classes from your main training script
 from SignNetWord import (
@@ -36,11 +37,11 @@ def parse_args():
     parser = argparse.ArgumentParser(description='SignNet Hierarchical Inference')
     parser.add_argument('--data-dir', type=str, default='./word_landmarks_extracted')
     parser.add_argument('--dataset-type', type=str, default='flat', choices=['flat', 'split'])
-    parser.add_argument('--main-model-path', type=str, default='./models_balanced/sign_classifier_best_enhanced.pth')
-    parser.add_argument('--direction-expert-path', type=str, default='./models_balanced/expert_direction_expert_sign_classifier_best_enhanced.pth')
+    parser.add_argument('--main-model-path', type=str, default='./models/sign_classifier_final_enhanced.pth')
+    parser.add_argument('--direction-expert-path', type=str, default='./models/direction_expert.pth')
     parser.add_argument('--main-model-uri', type=str, default='models:/Production/1')
     parser.add_argument('--direction-expert-uri', type=str, default='models:/SignClassifier_DirectionExpert/1')
-    parser.add_argument('--training-run-id', type=str, required=True, help='MLflow run ID from training that contains val_indices.npy')
+    parser.add_argument('--training-run-id', type=str, required=False, help='MLflow run ID from training that contains val_indices.npy')
     return parser.parse_args()
 
 class HierarchicalClassifier(nn.Module):
@@ -168,7 +169,9 @@ def main():
     args = parse_args()
 
     # ---------------- MLFLOW SETUP ----------------
-    mlflow.set_tracking_uri("http://mlflow.schlaepfer.me")
+    os.environ['MLFLOW_TRACKING_USERNAME'] = 'roman'
+    os.environ['MLFLOW_TRACKING_PASSWORD'] = 'SignNet'
+    mlflow.set_tracking_uri("https://mlflow.schlaepfer.me")
     mlflow.set_experiment("Hierarchical_Evaluation")
 
     timestamp = datetime.now().strftime('%m%d_%H%M')
@@ -184,17 +187,37 @@ def main():
         })
 
         # 1. Load Vocabulary
-        if args.dataset_type == 'flat':
-            npz_files = sorted(Path(args.data_dir).glob("*.npz"))
+        if args.training_run_id:
+            # Load vocabulary from MLflow
+            print("Downloading main vocabulary from MLflow...")
+            main_vocab_path = mlflow.artifacts.download_artifacts(
+                run_id=args.training_run_id,
+                artifact_path="main_vocab.json"
+            )
+            
+            with open(main_vocab_path, 'r') as f:
+                vocab_data = json.load(f)
+            
+            main_word_to_idx = vocab_data['word_to_idx']
+            main_idx_to_word = {int(k): v for k, v in vocab_data['idx_to_word'].items()}
+            num_classes_main = vocab_data['num_classes']
+            sorted_main_vocab = sorted(main_word_to_idx.keys())
+            
+            print(f"Main Vocabulary (from MLflow): {num_classes_main} classes")
         else:
-            npz_files = sorted((Path(args.data_dir) / "train").glob("*.npz"))
+            # Fallback: Build vocabulary from files (old method)
+            print("Building vocabulary from files (no training_run_id provided)...")
+            if args.dataset_type == 'flat':
+                npz_files = sorted(Path(args.data_dir).glob("*.npz"))
+            else:
+                npz_files = sorted((Path(args.data_dir) / "train").glob("*.npz"))
 
-        main_vocab_words, _ = build_topk_vocabulary(npz_files, K=170, min_samples=70, debug=False)
-        sorted_main_vocab = sorted(list(main_vocab_words))
-        main_word_to_idx = {w: i for i, w in enumerate(sorted_main_vocab)}
-        main_idx_to_word = {i: w for i, w in enumerate(sorted_main_vocab)}
-        num_classes_main = len(main_vocab_words)
-        print(f"Main Vocabulary: {num_classes_main} classes")
+            main_vocab_words, _ = build_topk_vocabulary(npz_files, K=170, min_samples=70, debug=False)
+            sorted_main_vocab = sorted(list(main_vocab_words))
+            main_word_to_idx = {w: i for i, w in enumerate(sorted_main_vocab)}
+            main_idx_to_word = {i: w for i, w in enumerate(sorted_main_vocab)}
+            num_classes_main = len(main_vocab_words)
+            print(f"Main Vocabulary: {num_classes_main} classes")
 
         # 2. Load Models
         main_model = load_model(TransformerSignClassifierWithHandedness, args.main_model_path, MAIN_MODEL_CONFIG, num_classes_main, DEVICE)
@@ -216,10 +239,11 @@ def main():
 
         # 3. Load Data
         print("Downloading validation indices from MLflow...")
-        artifact_path = mlflow.artifacts.download_artifacts(
-            run_id=args.training_run_id,
-            artifact_path="val_indices.npy"
-        )
+        # artifact_path = mlflow.artifacts.download_artifacts(
+        #     run_id=args.training_run_id,
+        #     artifact_path="val_indices.npy"
+        # )
+        artifact_path = "val_indices.npy"  # Corrected to just the filename
         val_indices = np.load(artifact_path)
         print(f"Loaded {len(val_indices)} validation samples")
 

@@ -1603,6 +1603,33 @@ def main():
                 for word in [base_dataset.idx_to_word[old_idx]]
             }
 
+            # Build the forward and reverse mappings
+            main_word_to_idx = {word: new_idx for new_idx, word in new_idx_to_word.items()}
+            main_idx_to_word = new_idx_to_word  # Already have this
+
+            # Create vocabulary dict
+            vocab_dict = {
+                'word_to_idx': main_word_to_idx,
+                'idx_to_word': {int(k): v for k, v in main_idx_to_word.items()},
+                'num_classes': len(top_k_words)
+            }
+
+            # Save to file
+            if args.expert_name:
+                vocab_filename = f'{args.expert_name}_vocab.json'
+            else:
+                vocab_filename = 'main_vocab.json'
+
+            with open(vocab_filename, 'w') as f:
+                json.dump(vocab_dict, f, indent=2)
+
+            # Log to MLflow
+            mlflow.log_artifact(vocab_filename)
+            print(f"[VOCAB] Saved vocabulary to {vocab_filename} and logged to MLflow")
+
+            # Clean up local file
+            os.remove(vocab_filename)
+
             # Load data according to structure type
             train_indices, val_indices, test_indices, dataset_train, dataset_val, dataset_test = load_data_by_type(
                 args=args,

@@ -3,15 +3,19 @@
 # ==================== MODEL CONFIGURATIONS ====================
 # Must match your training config exactly
 MAIN_MODEL_CONFIG = {
+    'input_size': 1659,
     'hidden_size': 320,
     'num_layers': 6,
-    'num_heads': 10
+    'num_heads': 10,
+    'dim_feedforward': 1280
 }
 
 EXPERT_MODEL_CONFIG = {
+    'input_size': 1659,
     'hidden_size': 128,
     'num_layers': 3,
-    'num_heads': 4
+    'num_heads': 4,
+    'dim_feedforward': 512
 }
 
 # ==================== HIERARCHY CONFIGURATION ====================

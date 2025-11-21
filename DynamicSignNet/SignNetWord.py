@@ -1362,20 +1362,6 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
 def main():
     args = parse_args()
 
-    # Check if we are in expert training mode
-    if args.expert_name:
-        print(f"\n{'='*80}")
-        print(f"===== EXPERT TRAINING MODE: {args.expert_name} =====")
-        print(f"{'='*80}\n")
-
-        # Override hyperparameters for the smaller, focused model
-        global HIDDEN_SIZE, NUM_LAYERS, NUM_HEADS, BATCH_SIZE, LEARNING_RATE, run_name
-        HIDDEN_SIZE = EXPERT_MODEL_CONFIG['hidden_size']
-        NUM_LAYERS = EXPERT_MODEL_CONFIG['num_layers']
-        NUM_HEADS = EXPERT_MODEL_CONFIG['num_heads']
-        BATCH_SIZE = 128
-        LEARNING_RATE = 2e-4
-
     torch.backends.cudnn.benchmark = True
     torch.backends.cudnn.deterministic = False
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -1437,6 +1423,19 @@ def main():
     MIN_LR = 1e-6
     T_0 = 25           # First restart cycle length
     T_MULT = 2         # Multiply cycle length after each restart
+
+    # Check if we are in expert training mode
+    if args.expert_name:
+        print(f"\n{'='*80}")
+        print(f"===== EXPERT TRAINING MODE: {args.expert_name} =====")
+        print(f"{'='*80}\n")
+
+        # Override hyperparameters for the smaller, focused model
+        HIDDEN_SIZE = EXPERT_MODEL_CONFIG['hidden_size']
+        NUM_LAYERS = EXPERT_MODEL_CONFIG['num_layers']
+        NUM_HEADS = EXPERT_MODEL_CONFIG['num_heads']
+        BATCH_SIZE = 128
+        LEARNING_RATE = 2e-4
 
     number_of_classes = 300
 

@@ -39,6 +39,8 @@ def parse_args():
     parser.add_argument('--dataset-type', type=str, default='flat', choices=['flat', 'split'])
     parser.add_argument('--main-model-path', type=str, default='./models/sign_classifier_final_enhanced.pth')
     parser.add_argument('--direction-expert-path', type=str, default='./models/direction_expert.pth')
+    parser.add_argument('--kommen-expert-path', type=str, default='./models/kommen_expert.pth')
+    parser.add_argument('--weather-expert-path', type=str, default='./models/weather_expert.pth')
     parser.add_argument('--main-model-uri', type=str, default='models:/Production/1')
     parser.add_argument('--direction-expert-uri', type=str, default='models:/SignClassifier_DirectionExpert/1')
     parser.add_argument('--training-run-id', type=str, required=False, help='MLflow run ID from training that contains val_indices.npy')
@@ -61,32 +63,53 @@ class HierarchicalClassifier(nn.Module):
     def forward(self, landmarks, padding_mask=None):
         root_logits, _ = self.root_model(landmarks, padding_mask)
         root_probs = torch.softmax(root_logits, dim=1)
-        top1_conf, top1_idx = torch.max(root_probs, dim=1)
+        
+        # CHANGE: Get Top-K predictions (e.g., Top 3)
+        K = 3
+        topk_conf, topk_idx = torch.topk(root_probs, k=K, dim=1)
 
         final_preds = []
         used_expert = []
 
         for i in range(len(landmarks)):
-            pred_class_name = self.root_idx_to_word[top1_idx[i].item()]
+            # Default to Top-1
+            best_main_idx = topk_idx[i, 0].item()
+            pred_class_name = self.root_idx_to_word[best_main_idx]
+            
+            candidate_expert = None
+            
+            # Check if ANY of the Top-K predictions trigger an expert
+            for k in range(K):
+                curr_idx = topk_idx[i, k].item()
+                curr_name = self.root_idx_to_word[curr_idx]
+                
+                if curr_name in self.class_to_expert:
+                    expert_name = self.class_to_expert[curr_name]
+                    if expert_name in self.expert_models:
+                        candidate_expert = expert_name
+                        break # Found an expert, stop looking
+            
+            # If an expert was found in Top-K, use it
+            if candidate_expert:
+                expert_model = self.expert_models[candidate_expert]
+                expert_dict = self.expert_dicts[candidate_expert]
 
-            if pred_class_name in self.class_to_expert:
-                expert_name = self.class_to_expert[pred_class_name]
-
-                if expert_name in self.expert_models:
-                    expert_model = self.expert_models[expert_name]
-                    expert_dict = self.expert_dicts[expert_name]
-
-                    expert_logits, _ = expert_model(landmarks[i:i+1], padding_mask[i:i+1] if padding_mask is not None else None)
-                    expert_prob = torch.softmax(expert_logits, dim=1)
-                    _, expert_pred_idx = torch.max(expert_prob, dim=1)
-
-                    expert_pred_name = expert_dict['idx_to_word'][expert_pred_idx.item()]
-
+                expert_logits, _ = expert_model(landmarks[i:i+1], padding_mask[i:i+1] if padding_mask is not None else None)
+                expert_prob = torch.softmax(expert_logits, dim=1)
+                
+                # Get expert prediction
+                e_conf, e_pred_idx = torch.max(expert_prob, dim=1)
+                expert_pred_name = expert_dict['idx_to_word'][e_pred_idx.item()]
+                
+                # OPTIONAL: Safety Check
+                # Only use expert if it is confident enough (e.g. > 50%)
+                # otherwise fall back to main model's Top-1
+                if e_conf.item() > 0.4: 
                     final_preds.append(expert_pred_name)
-                    used_expert.append(expert_name)
+                    used_expert.append(candidate_expert)
                 else:
                     final_preds.append(pred_class_name)
-                    used_expert.append("None (Missing)")
+                    used_expert.append(f"{candidate_expert} (Low Conf)")
             else:
                 final_preds.append(pred_class_name)
                 used_expert.append("None")
@@ -201,23 +224,23 @@ def main():
             main_word_to_idx = vocab_data['word_to_idx']
             main_idx_to_word = {int(k): v for k, v in vocab_data['idx_to_word'].items()}
             num_classes_main = vocab_data['num_classes']
-            sorted_main_vocab = sorted(main_word_to_idx.keys())
             
             print(f"Main Vocabulary (from MLflow): {num_classes_main} classes")
         else:
             # Fallback: Build vocabulary from files (old method)
-            print("Building vocabulary from files (no training_run_id provided)...")
-            if args.dataset_type == 'flat':
-                npz_files = sorted(Path(args.data_dir).glob("*.npz"))
-            else:
-                npz_files = sorted((Path(args.data_dir) / "train").glob("*.npz"))
 
-            main_vocab_words, _ = build_topk_vocabulary(npz_files, K=170, min_samples=70, debug=False)
-            sorted_main_vocab = sorted(list(main_vocab_words))
-            main_word_to_idx = {w: i for i, w in enumerate(sorted_main_vocab)}
-            main_idx_to_word = {i: w for i, w in enumerate(sorted_main_vocab)}
-            num_classes_main = len(main_vocab_words)
-            print(f"Main Vocabulary: {num_classes_main} classes")
+            vocab_filename = 'main_vocab.json'
+            # Load from file
+            with open(vocab_filename, 'r') as f:
+                vocab_dict = json.load(f)
+
+            # Extract components
+            main_word_to_idx = vocab_dict['word_to_idx']
+            main_idx_to_word = {int(k): v for k, v in vocab_dict['idx_to_word'].items()}
+            num_classes_main = vocab_dict['num_classes']
+
+            print(f"Loaded vocabulary with {num_classes_main} classes")
+
 
         # 2. Load Models
         main_model = load_model(TransformerSignClassifierWithHandedness, args.main_model_path, MAIN_MODEL_CONFIG, num_classes_main, DEVICE)
@@ -225,15 +248,60 @@ def main():
         expert_models = {}
         expert_dicts = {}
 
-        # Load Direction Expert
-        if os.path.exists(args.direction_expert_path):
-            vocab_list = sorted(HIERARCHY_CONFIG['direction_expert'])
-            expert_dicts['direction_expert'] = {
-                'word_to_idx': {w: i for i, w in enumerate(vocab_list)},
-                'idx_to_word': {i: w for i, w in enumerate(vocab_list)}
+        print("\nLoading Expert Models...")
+        for expert_name, expert_classes in HIERARCHY_CONFIG.items():
+            # 1. Resolve Path
+            arg_attr = f"{expert_name}_path"
+            if hasattr(args, arg_attr):
+                model_path = getattr(args, arg_attr)
+            else:
+                model_path = f"./models/{expert_name}.pth"
+
+            if not os.path.exists(model_path):
+                # Skip if model file doesn't exist
+                continue
+
+            # 2. Resolve Vocabulary (CRITICAL FIX)
+            # Try to find a vocab file: {model_name}_vocab.json
+            vocab_path = Path(model_path).with_name(f"{Path(model_path).stem}_vocab.json")
+            
+            if vocab_path.exists():
+                print(f"  [i] Found vocab file for {expert_name}: {vocab_path.name}")
+                with open(vocab_path, 'r') as f:
+                    vocab_data = json.load(f)
+                
+                # Handle standard vocab format
+                if 'idx_to_word' in vocab_data:
+                    expert_idx_to_word = {int(k): v for k, v in vocab_data['idx_to_word'].items()}
+                    expert_word_to_idx = vocab_data['word_to_idx']
+                else:
+                    # Fallback if it's just a simple dict
+                    expert_word_to_idx = vocab_data
+                    expert_idx_to_word = {v: k for k, v in expert_word_to_idx.items()}
+            else:
+                print(f"  [!] No vocab file found for {expert_name}. Falling back to sorted config classes (Risk of mismatch!).")
+                vocab_list = sorted(expert_classes)
+                expert_word_to_idx = {w: i for i, w in enumerate(vocab_list)}
+                expert_idx_to_word = {i: w for i, w in enumerate(vocab_list)}
+
+            # 3. Load Model
+            num_classes_expert = len(expert_idx_to_word)
+            expert_dicts[expert_name] = {
+                'word_to_idx': expert_word_to_idx,
+                'idx_to_word': expert_idx_to_word
             }
-            expert_models['direction_expert'] = load_model(TransformerSignClassifierWithHandedness, args.direction_expert_path, EXPERT_MODEL_CONFIG, len(vocab_list), DEVICE)
-            print("Loaded Direction Expert")
+            
+            try:
+                expert_models[expert_name] = load_model(
+                    TransformerSignClassifierWithHandedness, 
+                    model_path, 
+                    EXPERT_MODEL_CONFIG, 
+                    num_classes_expert, 
+                    DEVICE
+                )
+                print(f"  [+] Loaded {expert_name} ({num_classes_expert} classes)")
+            except Exception as e:
+                print(f"  [x] Failed to load {expert_name}: {e}")
 
         hierarchical_model = HierarchicalClassifier(main_model, expert_models, HIERARCHY_CONFIG, main_idx_to_word, expert_dicts)
 
@@ -255,12 +323,18 @@ def main():
 
         base_dataset = SignLanguageDataset(data_root, debug=False)
 
-        # Build mapping old_label_idx -> new_label_idx (vocab index)
+        # Build mapping old_label_idx (Dataset) -> new_label_idx (Model/Vocab)
         old_to_new_idx = {}
-        for new_idx, word in enumerate(sorted_main_vocab):
+        
+        # Iterate directly over the loaded vocabulary dict to get the TRUE model indices
+        for word, model_idx in main_word_to_idx.items():
+            # Check if this word exists in the raw dataset
             if word in base_dataset.word_to_idx:
-                old_idx = base_dataset.word_to_idx[word]
-                old_to_new_idx[old_idx] = new_idx
+                dataset_original_idx = base_dataset.word_to_idx[word]
+                
+                # Map: Dataset ID -> Model ID
+                old_to_new_idx[dataset_original_idx] = model_idx
+
 
         from SignNetWord import RemappedDataset
         val_subset = RemappedDataset(base_dataset, val_indices.tolist(), old_to_new_idx)
@@ -271,65 +345,128 @@ def main():
             shuffle=False
         )
 
-        # 4. Run Evaluation
-        print("\nStarting Hierarchical Evaluation...")
+        # 4. Run Evaluation with ORACLE DIAGNOSTICS
+        print("\nStarting Hierarchical Evaluation with Diagnostics...")
         all_preds_hierarchical = []
         all_preds_baseline = []
         all_labels = []
         expert_usage_stats = Counter()
+
+        # Storage for diagnostic stats
+        # Structure: {expert_name: {'total': 0, 'main_correct': 0, 'expert_standalone_correct': 0, 'routed_correctly': 0}}
+        oracle_stats = {name: {'total': 0, 'main_correct': 0, 'expert_standalone_correct': 0, 'routed_correctly': 0} 
+                       for name in HIERARCHY_CONFIG.keys()}
 
         with torch.no_grad():
             for batch in tqdm(val_loader):
                 landmarks, labels, _, padding_mask = batch
                 landmarks = landmarks.to(DEVICE)
 
-                batch_labels_names = [main_idx_to_word[l.item()] for l in labels]
-                all_labels.extend(batch_labels_names)
-
-                # Hierarchical
-                preds, experts_used = hierarchical_model(landmarks, padding_mask)
-                all_preds_hierarchical.extend(preds)
-                expert_usage_stats.update(experts_used)
-
-                # Baseline
+                # 1. Run Main Model (for baseline metrics)
                 logits, _ = main_model(landmarks, padding_mask)
-                base_preds_idx = torch.argmax(logits, dim=1)
-                base_preds_names = [main_idx_to_word[i.item()] for i in base_preds_idx]
-                all_preds_baseline.extend(base_preds_names)
+                base_probs = torch.softmax(logits, dim=1)
+                base_conf, base_preds_idx = torch.max(base_probs, dim=1)
+
+                # 2. Run Hierarchical Model (The Real System)
+                # This uses the Top-K logic defined in HierarchicalClassifier.forward()
+                hier_preds, hier_experts_used = hierarchical_model(landmarks, padding_mask)
+
+                # Process batch item by item for granular analysis
+                for i in range(len(landmarks)):
+                    # --- Ground Truth ---
+                    gt_idx = labels[i].item()
+                    gt_name = main_idx_to_word[gt_idx]
+                    all_labels.append(gt_name)
+
+                    # --- Main Model Prediction ---
+                    pred_idx = base_preds_idx[i].item()
+                    pred_name = main_idx_to_word[pred_idx]
+                    all_preds_baseline.append(pred_name)
+
+                    # --- Hierarchical Prediction ---
+                    final_pred = hier_preds[i]
+                    expert_used = hier_experts_used[i]
+                    
+                    all_preds_hierarchical.append(final_pred)
+                    expert_usage_stats[expert_used] += 1
+
+                    # --- ORACLE DIAGNOSTICS (The "What If" Analysis) ---
+                    # We analyze samples that ACTUALLY belong to an expert domain
+                    if gt_name in hierarchical_model.class_to_expert:
+                        target_expert = hierarchical_model.class_to_expert[gt_name]
+                        stats = oracle_stats[target_expert]
+                        stats['total'] += 1
+
+                        # 1. Did Main Model get it right?
+                        if pred_name == gt_name:
+                            stats['main_correct'] += 1
+
+                        # 2. Was it routed correctly? 
+                        # Check if the system actually decided to use the correct expert
+                        # (Matches if expert was triggered AND confident enough)
+                        if expert_used == target_expert:
+                            stats['routed_correctly'] += 1
+
+                        # 3. Expert Standalone Accuracy (Oracle)
+                        # Force run the correct expert regardless of main model prediction
+                        if target_expert in hierarchical_model.expert_models:
+                            exp_model = hierarchical_model.expert_models[target_expert]
+                            exp_dict = hierarchical_model.expert_dicts[target_expert]
+                            
+                            e_logits, _ = exp_model(landmarks[i:i+1], padding_mask[i:i+1] if padding_mask is not None else None)
+                            e_pred_idx = torch.argmax(e_logits, dim=1)
+                            oracle_pred_name = exp_dict['idx_to_word'][e_pred_idx.item()]
+                            
+                            if oracle_pred_name == gt_name:
+                                stats['expert_standalone_correct'] += 1
 
         # 5. Metrics & Logging
         acc_base = accuracy_score(all_labels, all_preds_baseline)
         acc_hier = accuracy_score(all_labels, all_preds_hierarchical)
+        net_improvement = acc_hier - acc_base
 
-        # Log Global Metrics
-        mlflow.log_metric("acc_baseline", acc_base)
-        mlflow.log_metric("acc_hierarchical", acc_hier)
-        mlflow.log_metric("acc_improvement", acc_hier - acc_base)
+        # Log overall metrics to MLflow
+        mlflow.log_metric("accuracy_baseline", acc_base)
+        mlflow.log_metric("accuracy_hierarchical", acc_hier)
+        mlflow.log_metric("net_improvement", net_improvement)
 
-        print(f"Baseline: {acc_base:.4%}")
-        print(f"Hierarchical: {acc_hier:.4%}")
+        print(f"\n{'='*60}")
+        print(f"OVERALL RESULTS")
+        print(f"{'='*60}")
+        print(f"Baseline Accuracy:     {acc_base:.4%}")
+        print(f"Hierarchical Accuracy: {acc_hier:.4%}")
+        print(f"Net Improvement:       {net_improvement:+.4%}")
 
-        # Log Expert Stats
-        for expert, count in expert_usage_stats.items():
-            mlflow.log_metric(f"usage_{expert}", count)
+        print(f"\n{'='*60}")
+        print(f"ROOT CAUSE ANALYSIS (Oracle Diagnostics)")
+        print(f"{'='*60}")
+        print(f"{'Expert Name':<20} | {'Samples':<8} | {'Main Acc':<10} | {'Expert Acc':<10} | {'Routing Acc':<10} | {'Potential Gain':<10}")
+        print("-" * 85)
 
-        # Detailed Analysis (Direction)
-        dir_classes = HIERARCHY_CONFIG['direction_expert']
-        dir_indices = [i for i, label in enumerate(all_labels) if label in dir_classes]
+        for expert_name, stats in oracle_stats.items():
+            total = stats['total']
+            if total == 0:
+                print(f"{expert_name:<20} | {total:<8} | N/A")
+                continue
 
-        if dir_indices:
-            dir_labels = [all_labels[i] for i in dir_indices]
-            dir_base = [all_preds_baseline[i] for i in dir_indices]
-            dir_hier = [all_preds_hierarchical[i] for i in dir_indices]
+            main_acc = stats['main_correct'] / total
+            expert_acc = stats['expert_standalone_correct'] / total
+            routing_acc = stats['routed_correctly'] / total
+            
+            # "Potential Gain" is how much better the expert is than the main model
+            # If negative, the expert is worse than the main model -> Retrain Expert
+            gain = expert_acc - main_acc
 
-            acc_dir_base = accuracy_score(dir_labels, dir_base)
-            acc_dir_hier = accuracy_score(dir_labels, dir_hier)
+            # Log per-expert metrics to MLflow
+            mlflow.log_metric(f"{expert_name}_main_acc", main_acc)
+            mlflow.log_metric(f"{expert_name}_expert_acc", expert_acc)
+            mlflow.log_metric(f"{expert_name}_routing_acc", routing_acc)
+            mlflow.log_metric(f"{expert_name}_potential_gain", gain)
 
-            mlflow.log_metric("acc_direction_baseline", acc_dir_base)
-            mlflow.log_metric("acc_direction_hierarchical", acc_dir_hier)
-            mlflow.log_metric("acc_direction_improvement", acc_dir_hier - acc_dir_base)
+            print(f"{expert_name:<20} | {total:<8} | {main_acc:.2%}     | {expert_acc:.2%}     | {routing_acc:.2%}     | {gain:+.2%}")
 
-            print(f"Direction Improvement: {acc_dir_base:.4%} -> {acc_dir_hier:.4%}")
+        print("-" * 85)
+
 
 if __name__ == "__main__":
     main()

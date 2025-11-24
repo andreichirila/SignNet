@@ -1431,10 +1431,10 @@ def main():
         print(f"{'='*80}\n")
 
         # Override hyperparameters for the smaller, focused model
-        # FORCE SMALLER ARCHITECTURE: 128h/3L is too big. We need 64h/2L.
-        HIDDEN_SIZE = 64        
-        NUM_LAYERS = 2          
-        NUM_HEADS = 4           
+        # FORCE SMALLER ARCHITECTURE: 128h/3L is too big. We need 64h/2L.    
+        HIDDEN_SIZE = EXPERT_MODEL_CONFIG['hidden_size']
+        NUM_LAYERS = EXPERT_MODEL_CONFIG['num_layers']
+        NUM_HEADS = EXPERT_MODEL_CONFIG['num_heads']
         
         # === CRITICAL FIXES FOR SMALL DATASETS ===
         # 1. Stability: Lower LR and Batch Size to prevent overshooting
@@ -1948,6 +1948,12 @@ def main():
                 swa_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_swa_enhanced.pth")
                 torch.save(swa_model.module.state_dict() if hasattr(swa_model, "module") else swa_model.state_dict(), swa_path)
                 mlflow.log_artifact(swa_path)
+
+            # CHANGE: Load the best weights before saving 'final' model
+            best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_enhanced.pth")
+            if os.path.exists(best_model_path):
+                print(f"Loading best model from epoch {best_epoch+1} for final save...")
+                model_raw.load_state_dict(torch.load(best_model_path))
 
             final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final_enhanced.pth")
             torch.save(model_raw.state_dict(), final_model_path)

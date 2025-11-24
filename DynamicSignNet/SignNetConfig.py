@@ -12,8 +12,8 @@ MAIN_MODEL_CONFIG = {
 
 EXPERT_MODEL_CONFIG = {
     'input_size': 1659,
-    'hidden_size': 128,
-    'num_layers': 3,
+    'hidden_size': 64,
+    'num_layers': 2,
     'num_heads': 4,
     'dim_feedforward': 512
 }

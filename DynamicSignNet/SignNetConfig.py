@@ -15,7 +15,7 @@ EXPERT_MODEL_CONFIG = {
     'hidden_size': 64,
     'num_layers': 2,
     'num_heads': 4,
-    'dim_feedforward': 512
+    'dim_feedforward': 256
 }
 
 # ==================== HIERARCHY CONFIGURATION ====================

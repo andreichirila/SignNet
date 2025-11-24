@@ -1431,29 +1431,31 @@ def main():
         print(f"{'='*80}\n")
 
         # Override hyperparameters for the smaller, focused model
-        HIDDEN_SIZE = EXPERT_MODEL_CONFIG['hidden_size']
-        NUM_LAYERS = EXPERT_MODEL_CONFIG['num_layers']
-        NUM_HEADS = EXPERT_MODEL_CONFIG['num_heads']
+        # FORCE SMALLER ARCHITECTURE: 128h/3L is too big. We need 64h/2L.
+        HIDDEN_SIZE = 64        # Reduced from config (likely 128)
+        NUM_LAYERS = 2          # Reduced from config (likely 3)
+        NUM_HEADS = 4           # 64/4 = 16 dim per head
         
         # === CRITICAL FIXES FOR SMALL DATASETS ===
         # 1. Stability: Lower LR and Batch Size to prevent overshooting
-        BATCH_SIZE = 32          # Small batch for small data
-        LEARNING_RATE = 5e-5     # Very low LR to settle in minima
+        BATCH_SIZE = 32          
+        LEARNING_RATE = 3e-5     # Reduced from 5e-5 to 3e-5 for stability
         
         # 2. Disable "Big Data" Imbalance Tricks
-        # Experts are usually balanced subsets. Forcing these hurts performance.
         USE_BALANCED_SOFTMAX = False
         USE_FOCAL_LOSS = False
         USE_CLASS_WEIGHTS = False
         USE_WEIGHTED_SAMPLER = False
         
-        # 3. Regularization
-        DROPOUT_RATE = 0.5       # High dropout to prevent memorization
-        WEIGHT_DECAY = 1e-2      # Stronger decay
+        # 3. Regularization - INCREASED SIGNIFICANTLY
+        DROPOUT_RATE = 0.6       # Increased to 0.6 to fight the overfitting seen in plots
+        WEIGHT_DECAY = 0.05      # Increased to 0.05 (stronger penalty)
+        ATTENTION_DROPOUT = 0.4  # Increased
         
-        # 4. Training Duration
-        NUM_EPOCHS = 150
-        WARMUP_EPOCHS = 10
+        # 4. Training Duration & Augmentation
+        NUM_EPOCHS = 120         
+        WARMUP_EPOCHS = 5
+        AUGMENT_PROBABILITY = 0.5 # Reduce noise for small classes
 
     number_of_classes = 300
 

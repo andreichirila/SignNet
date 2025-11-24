@@ -1434,8 +1434,26 @@ def main():
         HIDDEN_SIZE = EXPERT_MODEL_CONFIG['hidden_size']
         NUM_LAYERS = EXPERT_MODEL_CONFIG['num_layers']
         NUM_HEADS = EXPERT_MODEL_CONFIG['num_heads']
-        BATCH_SIZE = 128
-        LEARNING_RATE = 2e-4
+        
+        # === CRITICAL FIXES FOR SMALL DATASETS ===
+        # 1. Stability: Lower LR and Batch Size to prevent overshooting
+        BATCH_SIZE = 32          # Small batch for small data
+        LEARNING_RATE = 5e-5     # Very low LR to settle in minima
+        
+        # 2. Disable "Big Data" Imbalance Tricks
+        # Experts are usually balanced subsets. Forcing these hurts performance.
+        USE_BALANCED_SOFTMAX = False
+        USE_FOCAL_LOSS = False
+        USE_CLASS_WEIGHTS = False
+        USE_WEIGHTED_SAMPLER = False
+        
+        # 3. Regularization
+        DROPOUT_RATE = 0.5       # High dropout to prevent memorization
+        WEIGHT_DECAY = 1e-2      # Stronger decay
+        
+        # 4. Training Duration
+        NUM_EPOCHS = 150
+        WARMUP_EPOCHS = 10
 
     number_of_classes = 300
 

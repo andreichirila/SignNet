@@ -832,17 +832,18 @@ class BalancedSoftmaxLoss(nn.Module):
     Balanced Softmax for long-tailed classification:
     p(y=c|x) ∝ exp(z_c + log n_c), where n_c = class frequency.
     """
-    def __init__(self, class_counts: torch.Tensor):
+    def __init__(self, class_counts: torch.Tensor, label_smoothing=0.0):
         super().__init__()
         # class_counts is 1D tensor of size [C]
         priors = class_counts.float().clamp_min(1.0)
         self.log_priors = torch.log(priors / priors.sum())
+        self.label_smoothing = label_smoothing
 
     def forward(self, logits, targets):
         # Broadcast log_priors to batch; move to device
         log_priors = self.log_priors.to(logits.device)
         balanced_logits = logits + log_priors.unsqueeze(0)
-        return F.cross_entropy(balanced_logits, targets)
+        return F.cross_entropy(balanced_logits, targets, label_smoothing=self.label_smoothing)
 
 
 class MultiTaskLoss(nn.Module):
@@ -856,7 +857,7 @@ class MultiTaskLoss(nn.Module):
 
         # Set up sign classification loss
         if use_balanced_softmax and balanced_class_counts is not None:
-            self.sign_loss = BalancedSoftmaxLoss(balanced_class_counts)
+            self.sign_loss = BalancedSoftmaxLoss(balanced_class_counts, label_smoothing=label_smoothing)
         elif use_focal:
             self.sign_loss = FocalLoss(alpha=0.25, gamma=2.0, weight=class_weights)
         else:
@@ -1396,11 +1397,11 @@ def main():
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = MAIN_MODEL_CONFIG['hidden_size']
-    DROPOUT_RATE = 0.55  # Increased from 0.35
+    DROPOUT_RATE = 0.60  # Increased from 0.55 to close generalization gap
     NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
     NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
     ATTENTION_DROPOUT = 0.30  # NEW
-    WEIGHT_DECAY = 1e-3  # Increased from 5e-4
+    WEIGHT_DECAY = 1e-2  # Increased from 1e-3 to 1e-2 (stronger regularization)
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.7
 
@@ -1953,7 +1954,19 @@ def main():
             best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_enhanced.pth")
             if os.path.exists(best_model_path):
                 print(f"Loading best model from epoch {best_epoch+1} for final save...")
-                model_raw.load_state_dict(torch.load(best_model_path))
+                
+                # Load state dict
+                state_dict = torch.load(best_model_path)
+                
+                # Fix for torch.compile prefix '_orig_mod.'
+                new_state_dict = {}
+                for k, v in state_dict.items():
+                    if k.startswith("_orig_mod."):
+                        new_state_dict[k[10:]] = v  # Remove "_orig_mod."
+                    else:
+                        new_state_dict[k] = v
+                
+                model_raw.load_state_dict(new_state_dict)
 
             final_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_final_enhanced.pth")
             torch.save(model_raw.state_dict(), final_model_path)

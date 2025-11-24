@@ -12,7 +12,7 @@ from tqdm import tqdm
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, classification_report, f1_score, precision_score, recall_score
 from torch.optim.swa_utils import AveragedModel, SWALR, update_bn
-from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts
+from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, CosineAnnealingLR
 import seaborn as sns
 import mlflow
 import mlflow.pytorch
@@ -1432,14 +1432,14 @@ def main():
 
         # Override hyperparameters for the smaller, focused model
         # FORCE SMALLER ARCHITECTURE: 128h/3L is too big. We need 64h/2L.
-        HIDDEN_SIZE = 64        # Reduced from config (likely 128)
-        NUM_LAYERS = 2          # Reduced from config (likely 3)
-        NUM_HEADS = 4           # 64/4 = 16 dim per head
+        HIDDEN_SIZE = 64        
+        NUM_LAYERS = 2          
+        NUM_HEADS = 4           
         
         # === CRITICAL FIXES FOR SMALL DATASETS ===
         # 1. Stability: Lower LR and Batch Size to prevent overshooting
         BATCH_SIZE = 32          
-        LEARNING_RATE = 3e-5     # Reduced from 5e-5 to 3e-5 for stability
+        LEARNING_RATE = 3e-5     
         
         # 2. Disable "Big Data" Imbalance Tricks
         USE_BALANCED_SOFTMAX = False
@@ -1447,15 +1447,15 @@ def main():
         USE_CLASS_WEIGHTS = False
         USE_WEIGHTED_SAMPLER = False
         
-        # 3. Regularization - INCREASED SIGNIFICANTLY
-        DROPOUT_RATE = 0.6       # Increased to 0.6 to fight the overfitting seen in plots
-        WEIGHT_DECAY = 0.05      # Increased to 0.05 (stronger penalty)
-        ATTENTION_DROPOUT = 0.4  # Increased
+        # 3. Regularization - TUNED (Relaxed slightly to cure underfitting)
+        DROPOUT_RATE = 0.5       # Reduced from 0.6 -> 0.5
+        WEIGHT_DECAY = 0.02      # Reduced from 0.05 -> 0.02
+        ATTENTION_DROPOUT = 0.3  # Reduced from 0.4 -> 0.3
         
         # 4. Training Duration & Augmentation
         NUM_EPOCHS = 120         
         WARMUP_EPOCHS = 5
-        AUGMENT_PROBABILITY = 0.5 # Reduce noise for small classes
+        AUGMENT_PROBABILITY = 0.5 
 
     number_of_classes = 300
 
@@ -1802,12 +1802,20 @@ def main():
                 total_iters=WARMUP_EPOCHS
             )
 
-            restart_scheduler = CosineAnnealingWarmRestarts(
-                optimizer,
-                T_0=T_0,              # First cycle: 20 epochs
-                T_mult=T_MULT,        # Next cycles: 40, 80, ... epochs
-                eta_min=MIN_LR        # Minimum LR at cycle end
-            )
+            # CHANGE: Use smooth decay for experts to avoid restart shocks
+            if args.expert_name:
+                restart_scheduler = CosineAnnealingLR(
+                    optimizer,
+                    T_max=NUM_EPOCHS - WARMUP_EPOCHS,
+                    eta_min=MIN_LR
+                )
+            else:
+                restart_scheduler = CosineAnnealingWarmRestarts(
+                    optimizer,
+                    T_0=T_0,              # First cycle: 25 epochs
+                    T_mult=T_MULT,        # Next cycles: 40, 80, ... epochs
+                    eta_min=MIN_LR        # Minimum LR at cycle end
+                )
 
             from torch.optim.lr_scheduler import SequentialLR
             scheduler = SequentialLR(

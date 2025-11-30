@@ -67,24 +67,24 @@ class DataConfig:
 
     # Augmentation settings
     use_augmentation: bool = True
-    rotation_range: float = 15.0
-    scale_range: tuple = (0.9, 1.1)
+    rotation_range: float = 20.0
+    scale_range: tuple = (0.85, 1.15)
     translation_range: float = 0.1
     horizontal_flip_prob: float = 0.0
 
     # Occlusion augmentation
-    occlusion_prob: float = 0.15
-    left_hand_occlusion_prob: float = 0.10
-    right_hand_occlusion_prob: float = 0.10
-    face_occlusion_prob: float = 0.05
+    occlusion_prob: float = 0.25
+    left_hand_occlusion_prob: float = 0.15
+    right_hand_occlusion_prob: float = 0.15
+    face_occlusion_prob: float = 0.10
     occlusion_duration_range: tuple = (5, 15)
 
     # Temporal augmentation
-    temporal_dropout_prob: float = 0.1
+    temporal_dropout_prob: float = 0.15
     frame_drop_range: tuple = (0.9, 1.0)
 
     # Bone-preserving augmentation
-    use_bone_preserving: bool = False
+    use_bone_preserving: bool = True
     bone_noise_std: float = 0.02
 
 

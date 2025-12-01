@@ -704,6 +704,241 @@ class SkeletalAugmentation:
             landmarks[t] = frame
         
         return landmarks
+    
+class LandmarkOcclusionAugmentation:
+    """
+    Landmark Occlusion Simulation for robust sign language recognition.
+    
+    Simulates real-world scenarios where MediaPipe fails to detect certain
+    body parts due to occlusion, motion blur, or poor lighting.
+    
+    Expected input layout from landmark_extraction.py:
+    [hands (126), face (1434), pose (99)] = 1659 features
+    """
+    
+    # Anatomical region definitions (flat feature indices)
+    REGIONS = {
+        'left_hand': (0, 63),           # 21 landmarks × 3 coords
+        'right_hand': (63, 126),        # 21 landmarks × 3 coords
+        'face': (126, 1560),            # 478 landmarks × 3 coords
+        'pose': (1560, 1659),           # 33 landmarks × 3 coords
+    }
+    
+    # Sub-regions for more granular occlusion (relative to hand start)
+    # MediaPipe hand landmarks: 0=wrist, 1-4=thumb, 5-8=index, 9-12=middle, 13-16=ring, 17-20=pinky
+    HAND_SUB_REGIONS = {
+        'thumb': (1*3, 5*3),            # landmarks 1-4 × 3 coords = 12 features
+        'index': (5*3, 9*3),            # landmarks 5-8 × 3 coords = 12 features
+        'middle': (9*3, 13*3),          # landmarks 9-12 × 3 coords = 12 features
+        'ring': (13*3, 17*3),           # landmarks 13-16 × 3 coords = 12 features
+        'pinky': (17*3, 21*3),          # landmarks 17-20 × 3 coords = 12 features
+    }
+    
+    # Face sub-regions (approximate MediaPipe face mesh regions)
+    FACE_SUB_REGIONS = {
+        'left_eye': (126, 126 + 48),    # ~16 landmarks × 3
+        'right_eye': (126 + 48, 126 + 96),
+        'nose': (126 + 96, 126 + 126),  # ~10 landmarks × 3
+        'mouth': (126 + 126, 126 + 186), # ~20 landmarks × 3
+        'left_cheek': (126 + 186, 126 + 246),
+        'right_cheek': (126 + 246, 126 + 306),
+    }
+    
+    # Pose sub-regions - CORRECTED for non-contiguous MediaPipe layout
+    # MediaPipe Pose: https://developers.google.com/mediapipe/solutions/vision/pose_landmarker
+    # Pose starts at flat index 1560, each landmark = 3 values (x,y,z)
+    POSE_SUB_REGIONS = {
+        # Left arm: landmarks 11 (shoulder), 13 (elbow), 15 (wrist)
+        # These are NOT contiguous, so we target the key joints individually
+        'left_arm': [
+            (1560 + 11*3, 1560 + 12*3),  # Left shoulder (landmark 11)
+            (1560 + 13*3, 1560 + 14*3),  # Left elbow (landmark 13)
+            (1560 + 15*3, 1560 + 16*3),  # Left wrist (landmark 15)
+        ],
+        # Right arm: landmarks 12 (shoulder), 14 (elbow), 16 (wrist)
+        'right_arm': [
+            (1560 + 12*3, 1560 + 13*3),  # Right shoulder (landmark 12)
+            (1560 + 14*3, 1560 + 15*3),  # Right elbow (landmark 14)
+            (1560 + 16*3, 1560 + 17*3),  # Right wrist (landmark 16)
+        ],
+        # Torso: shoulders (11,12) and hips (23,24)
+        'torso': [
+            (1560 + 11*3, 1560 + 13*3),  # Both shoulders (landmarks 11-12)
+            (1560 + 23*3, 1560 + 25*3),  # Both hips (landmarks 23-24)
+        ],
+    }
+    
+    # Realistic occlusion patterns (which regions tend to be occluded together)
+    OCCLUSION_PATTERNS = [
+        # Single hand occlusion (most common in signing)
+        ['left_hand'],
+        ['right_hand'],
+        # Both hands near face (common gesture)
+        ['left_hand', 'right_hand'],
+        # Partial face occlusion (hand covering mouth/nose)
+        ['face'],
+        # Arm tracking loss
+        ['left_arm'],
+        ['right_arm'],
+    ]
+    
+    def __init__(self,
+                 region_dropout_prob: float = 0.15,
+                 temporal_dropout_prob: float = 0.10,
+                 max_temporal_dropout_frames: int = 5,
+                 sub_region_dropout_prob: float = 0.20,
+                 use_realistic_patterns: bool = True,
+                 probability: float = 0.5):
+        """
+        Args:
+            region_dropout_prob: Probability of dropping an entire anatomical region
+            temporal_dropout_prob: Probability of temporal dropout (consecutive frame occlusion)
+            max_temporal_dropout_frames: Maximum consecutive frames to occlude
+            sub_region_dropout_prob: Probability of dropping sub-regions (fingers, facial features)
+            use_realistic_patterns: Use realistic co-occlusion patterns
+            probability: Overall probability of applying any occlusion
+        """
+        self.region_dropout_prob = region_dropout_prob
+        self.temporal_dropout_prob = temporal_dropout_prob
+        self.max_temporal_dropout_frames = max_temporal_dropout_frames
+        self.sub_region_dropout_prob = sub_region_dropout_prob
+        self.use_realistic_patterns = use_realistic_patterns
+        self.probability = probability
+    
+    def _zero_region(self, landmarks: np.ndarray, start: int, end: int, 
+                     frame_start: int = None, frame_end: int = None) -> np.ndarray:
+        """Zero out a region of landmarks, optionally for specific frames only."""
+        if frame_start is not None and frame_end is not None:
+            landmarks[frame_start:frame_end, start:end] = 0.0
+        else:
+            landmarks[:, start:end] = 0.0
+        return landmarks
+    
+    def _apply_region_dropout(self, landmarks: np.ndarray) -> np.ndarray:
+        """Drop entire anatomical regions."""
+        if self.use_realistic_patterns:
+            # Use realistic co-occlusion patterns
+            if np.random.random() < self.region_dropout_prob:
+                pattern = self.OCCLUSION_PATTERNS[np.random.randint(len(self.OCCLUSION_PATTERNS))]
+                for region_name in pattern:
+                    if region_name in self.REGIONS:
+                        start, end = self.REGIONS[region_name]
+                        landmarks = self._zero_region(landmarks, start, end)
+                    elif region_name in self.POSE_SUB_REGIONS:
+                        # Handle list of ranges for non-contiguous pose regions
+                        ranges = self.POSE_SUB_REGIONS[region_name]
+                        for start, end in ranges:
+                            landmarks = self._zero_region(landmarks, start, end)
+        else:
+            # Independent region dropout
+            for region_name, (start, end) in self.REGIONS.items():
+                if np.random.random() < self.region_dropout_prob:
+                    landmarks = self._zero_region(landmarks, start, end)
+        
+        return landmarks
+    
+    def _apply_temporal_dropout(self, landmarks: np.ndarray) -> np.ndarray:
+        """Simulate tracking loss over consecutive frames."""
+        T = landmarks.shape[0]
+        if T < 3:
+            return landmarks
+        
+        for region_name, (start, end) in self.REGIONS.items():
+            if np.random.random() < self.temporal_dropout_prob:
+                # Random start frame
+                dropout_length = np.random.randint(1, min(self.max_temporal_dropout_frames + 1, T // 2))
+                start_frame = np.random.randint(0, max(1, T - dropout_length))
+                end_frame = min(start_frame + dropout_length, T)
+                
+                landmarks = self._zero_region(landmarks, start, end, start_frame, end_frame)
+        
+        return landmarks
+    
+    def _apply_sub_region_dropout(self, landmarks: np.ndarray) -> np.ndarray:
+        """Drop sub-regions like individual fingers or facial features."""
+        # Hand sub-regions (apply to both hands)
+        for hand_offset in [0, 63]:  # left_hand starts at 0, right_hand at 63
+            for sub_name, (rel_start, rel_end) in self.HAND_SUB_REGIONS.items():
+                if np.random.random() < self.sub_region_dropout_prob:
+                    abs_start = hand_offset + rel_start
+                    abs_end = hand_offset + rel_end
+                    landmarks = self._zero_region(landmarks, abs_start, abs_end)
+        
+        # Face sub-regions
+        for sub_name, (start, end) in self.FACE_SUB_REGIONS.items():
+            if np.random.random() < self.sub_region_dropout_prob * 0.5:  # Less aggressive for face
+                landmarks = self._zero_region(landmarks, start, end)
+        
+        return landmarks
+    
+    def _apply_gradual_occlusion(self, landmarks: np.ndarray) -> np.ndarray:
+        """Simulate gradual tracking loss/recovery (fading in/out)."""
+        T = landmarks.shape[0]
+        if T < 5:
+            return landmarks
+        
+        for region_name, (start, end) in self.REGIONS.items():
+            if np.random.random() < self.temporal_dropout_prob * 0.5:
+                # Create fade-out-fade-in pattern
+                fade_length = np.random.randint(2, min(5, T // 3))
+                center_frame = np.random.randint(fade_length, T - fade_length)
+                
+                # Create alpha mask (1 = visible, 0 = occluded)
+                alpha = np.ones(T)
+                for i in range(fade_length):
+                    # Fade out before center
+                    if center_frame - fade_length + i >= 0:
+                        alpha[center_frame - fade_length + i] = i / fade_length
+                    # Fade in after center
+                    if center_frame + i < T:
+                        alpha[center_frame + i] = i / fade_length
+                
+                # Center frames fully occluded
+                alpha[max(0, center_frame - 1):min(T, center_frame + 2)] = 0.0
+                
+                # Apply alpha mask
+                for t in range(T):
+                    landmarks[t, start:end] *= alpha[t]
+        
+        return landmarks
+    
+    def __call__(self, landmarks: np.ndarray) -> np.ndarray:
+        """
+        Apply occlusion augmentation to a sequence of landmarks.
+        
+        Args:
+            landmarks: Shape (T, F) where T is time and F is flattened features (1659)
+        
+        Returns:
+            Augmented landmarks with simulated occlusions
+        """
+        if np.random.random() > self.probability:
+            return landmarks
+        
+        landmarks = landmarks.copy()
+        T, F = landmarks.shape
+        
+        # Only process if we have the expected feature size
+        if F < 1659:
+            return landmarks
+        
+        # Apply different types of occlusion (not all at once)
+        occlusion_type = np.random.random()
+        
+        if occlusion_type < 0.4:
+            # Region dropout (most common)
+            landmarks = self._apply_region_dropout(landmarks)
+        elif occlusion_type < 0.7:
+            # Temporal dropout (tracking loss)
+            landmarks = self._apply_temporal_dropout(landmarks)
+        elif occlusion_type < 0.9:
+            # Sub-region dropout (partial occlusion)
+            landmarks = self._apply_sub_region_dropout(landmarks)
+        else:
+            # Gradual occlusion (realistic fade in/out)
+            landmarks = self._apply_gradual_occlusion(landmarks)
+        
+        return landmarks
 
 
 class SignLanguageDataset(Dataset):
@@ -714,7 +949,8 @@ class SignLanguageDataset(Dataset):
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
                  use_enhanced_features=False, include_accel=False,
                  include_bones=True, include_bone_velocity=False, class_counts=None,
-                 use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5):
+                 use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5,
+                 use_occlusion_augmentation=True, occlusion_probability=0.3):  # NEW PARAMETERS
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
@@ -733,7 +969,7 @@ class SignLanguageDataset(Dataset):
                 strength=0.5,
                 prob=augment_prob
             )
-            # NEW: Initialize skeletal augmentation with configurable parameters
+            # Initialize skeletal augmentation with configurable parameters
             if use_skeletal_augmentation:
                 self.skeletal_augmentation = SkeletalAugmentation(
                     sigma=skeletal_sigma,
@@ -743,8 +979,22 @@ class SignLanguageDataset(Dataset):
                 )
             else:
                 self.skeletal_augmentation = None
+            
+            # NEW: Initialize occlusion augmentation
+            if use_occlusion_augmentation:
+                self.occlusion_augmentation = LandmarkOcclusionAugmentation(
+                    region_dropout_prob=0.15,
+                    temporal_dropout_prob=0.10,
+                    max_temporal_dropout_frames=5,
+                    sub_region_dropout_prob=0.20,
+                    use_realistic_patterns=True,
+                    probability=occlusion_probability
+                )
+            else:
+                self.occlusion_augmentation = None
         else:
             self.skeletal_augmentation = None
+            self.occlusion_augmentation = None
 
         if debug:
             print(f"\n[DEBUG] SignLanguageDataset.__init__")
@@ -755,6 +1005,9 @@ class SignLanguageDataset(Dataset):
             print(f"  Skeletal augmentation: {use_skeletal_augmentation if augment else 'N/A (augment=False)'}")
             if use_skeletal_augmentation and augment:
                 print(f"    Sigma: {skeletal_sigma}, Probability: {skeletal_probability}")
+            print(f"  Occlusion augmentation: {use_occlusion_augmentation if augment else 'N/A (augment=False)'}")  # NEW
+            if use_occlusion_augmentation and augment:
+                print(f"    Probability: {occlusion_probability}")
 
         if word_to_idx is None:
             self.word_to_idx = {}
@@ -825,10 +1078,15 @@ class SignLanguageDataset(Dataset):
 
         label = self.word_to_idx.get(gloss, 0)
 
-        # NEW: Apply skeletal augmentation BEFORE feature engineering
+        # Apply skeletal augmentation BEFORE feature engineering
         # This perturbs raw landmarks while preserving bone lengths
         if self.augment and self.skeletal_augmentation is not None:
             landmarks = self.skeletal_augmentation(landmarks)
+
+        # NEW: Apply occlusion augmentation BEFORE feature engineering
+        # This simulates real-world tracking failures
+        if self.augment and self.occlusion_augmentation is not None:
+            landmarks = self.occlusion_augmentation(landmarks)
 
         # APPLY FEATURE ENGINEERING IF ENABLED (with is_train flag)
         if self.use_enhanced_features:
@@ -1518,7 +1776,8 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
 def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
                       use_enhanced_features, include_accel, include_bones,
                       include_bone_velocity, augment, augment_prob, train_class_counts,
-                      use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5):  # ADD THESE
+                      use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5,
+                      use_occlusion_augmentation=True, occlusion_probability=0.3):  # NEW PARAMETERS
     """Load dataset according to structure type."""
 
     if args.dataset_type == 'flat':
@@ -1550,7 +1809,42 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
 
         print(f"  Train: {len(train_indices)}, Val: {len(val_indices)}")
 
-        return train_indices, val_indices, None, base_dataset, base_dataset, None
+        # Create properly configured datasets for flat type
+        data_dir = args.data_dir
+        
+        dataset_train = SignLanguageDataset(
+            data_dir,
+            word_to_idx=base_dataset.word_to_idx,
+            debug=False,
+            augment=augment,
+            augment_prob=augment_prob,
+            use_enhanced_features=use_enhanced_features,
+            include_accel=include_accel,
+            include_bones=include_bones,
+            include_bone_velocity=include_bone_velocity,
+            class_counts=train_class_counts,
+            use_skeletal_augmentation=use_skeletal_augmentation,
+            skeletal_sigma=skeletal_sigma,
+            skeletal_probability=skeletal_probability,
+            use_occlusion_augmentation=use_occlusion_augmentation,
+            occlusion_probability=occlusion_probability
+        )
+
+        dataset_val = SignLanguageDataset(
+            data_dir,
+            word_to_idx=base_dataset.word_to_idx,
+            debug=False,
+            augment=False,  # No augmentation for validation
+            use_enhanced_features=use_enhanced_features,
+            include_accel=include_accel,
+            include_bones=include_bones,
+            include_bone_velocity=include_bone_velocity,
+            class_counts=train_class_counts,
+            use_skeletal_augmentation=False,
+            use_occlusion_augmentation=False
+        )
+
+        return train_indices, val_indices, None, dataset_train, dataset_val, None
 
     else:  # 'split'
         print(f"\n[STEP 2] Using split structure (train/val/test folders)")
@@ -1571,9 +1865,11 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_bones=include_bones,
             include_bone_velocity=include_bone_velocity,
             class_counts=train_class_counts,
-            use_skeletal_augmentation=use_skeletal_augmentation,  # USE PARAMETER
-            skeletal_sigma=skeletal_sigma,                        # USE PARAMETER
-            skeletal_probability=skeletal_probability             # USE PARAMETER
+            use_skeletal_augmentation=use_skeletal_augmentation,
+            skeletal_sigma=skeletal_sigma,
+            skeletal_probability=skeletal_probability,
+            use_occlusion_augmentation=use_occlusion_augmentation,  # NEW
+            occlusion_probability=occlusion_probability              # NEW
         )
 
         dataset_val = SignLanguageDataset(
@@ -1586,7 +1882,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_bones=include_bones,
             include_bone_velocity=include_bone_velocity,
             class_counts=train_class_counts,
-            use_skeletal_augmentation=False  # ADD THIS (always False for val)
+            use_skeletal_augmentation=False,
+            use_occlusion_augmentation=False  # Always False for val
         )
 
         dataset_test = SignLanguageDataset(
@@ -1599,7 +1896,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_bones=include_bones,
             include_bone_velocity=include_bone_velocity,
             class_counts=train_class_counts,
-            use_skeletal_augmentation=False  # ADD THIS (always False for test)
+            use_skeletal_augmentation=False,
+            use_occlusion_augmentation=False  # Always False for test
         )
 
         # Filter each to vocabulary
@@ -1676,9 +1974,13 @@ def main():
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
     # SKELETAL AUGMENTATION SETTINGS
-    USE_SKELETAL_AUGMENTATION = True
+    USE_SKELETAL_AUGMENTATION = False
     SKELETAL_SIGMA = 0.025          # Increased from 0.015 (more noise)
     SKELETAL_PROBABILITY = 0.7      # Increased from 0.5 (more samples augmented)
+
+    # OCCLUSION AUGMENTATION SETTINGS (NEW)
+    USE_OCCLUSION_AUGMENTATION = True
+    OCCLUSION_PROBABILITY = 0.3  # 30% of samples get occlusion
 
     # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False
@@ -1765,6 +2067,8 @@ def main():
                 "skeletal_probability": SKELETAL_PROBABILITY,
                 "include_bones": INCLUDE_BONES,
                 "include_bone_velocity": INCLUDE_BONE_VELOCITY,
+                "use_occlusion_augmentation": USE_OCCLUSION_AUGMENTATION,  # NEW
+                "occlusion_probability": OCCLUSION_PROBABILITY,            # NEW
             })
 
             # STEP 1: Load dataset WITH ENHANCED FEATURES
@@ -1856,32 +2160,6 @@ def main():
                 except Exception:
                     continue
 
-            dataset_train = SignLanguageDataset(
-                NPZ_DIR,
-                word_to_idx=base_dataset.word_to_idx,
-                debug=False,
-                augment=AUGMENT,
-                augment_prob=AUGMENT_PROBABILITY,
-                use_enhanced_features=USE_ENHANCED_FEATURES,
-                include_accel=INCLUDE_ACCELERATION,
-                include_bones=INCLUDE_BONES,
-                include_bone_velocity=INCLUDE_BONE_VELOCITY,
-                class_counts=train_class_counts,
-                use_skeletal_augmentation=USE_SKELETAL_AUGMENTATION
-            )
-            dataset_val = SignLanguageDataset(
-                NPZ_DIR,
-                word_to_idx=base_dataset.word_to_idx,
-                debug=False,
-                augment=False,
-                use_enhanced_features=USE_ENHANCED_FEATURES,
-                include_accel=INCLUDE_ACCELERATION,
-                include_bones=INCLUDE_BONES,
-                include_bone_velocity=INCLUDE_BONE_VELOCITY,
-                class_counts=train_class_counts,
-                use_skeletal_augmentation=False  # Always False for validation
-            )
-
             # STEP 2: Filter to top words
             print(f"\n[STEP 2] Loading data (type: {args.dataset_type})...")
 
@@ -1936,9 +2214,11 @@ def main():
                 augment=AUGMENT,
                 augment_prob=AUGMENT_PROBABILITY,
                 train_class_counts=train_class_counts,
-                use_skeletal_augmentation=USE_SKELETAL_AUGMENTATION,  # ADD THIS
-                skeletal_sigma=SKELETAL_SIGMA,                        # ADD THIS
-                skeletal_probability=SKELETAL_PROBABILITY             # ADD THIS
+                use_skeletal_augmentation=USE_SKELETAL_AUGMENTATION,
+                skeletal_sigma=SKELETAL_SIGMA,
+                skeletal_probability=SKELETAL_PROBABILITY,
+                use_occlusion_augmentation=USE_OCCLUSION_AUGMENTATION,  # NEW
+                occlusion_probability=OCCLUSION_PROBABILITY              # NEW
             )
 
             num_classes = len(top_k_words)

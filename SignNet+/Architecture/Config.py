@@ -67,21 +67,21 @@ class DataConfig:
 
     # Augmentation settings
     use_augmentation: bool = True
-    rotation_range: float = 20.0
-    scale_range: tuple = (0.85, 1.15)
-    translation_range: float = 0.1
+    rotation_range: float = 25.0
+    scale_range: tuple = (0.80, 1.20)
+    translation_range: float = 0.15
     horizontal_flip_prob: float = 0.0
 
     # Occlusion augmentation
-    occlusion_prob: float = 0.25
-    left_hand_occlusion_prob: float = 0.15
-    right_hand_occlusion_prob: float = 0.15
+    occlusion_prob: float = 0.30
+    left_hand_occlusion_prob: float = 0.20
+    right_hand_occlusion_prob: float = 0.20
     face_occlusion_prob: float = 0.10
     occlusion_duration_range: tuple = (5, 15)
 
     # Temporal augmentation
-    temporal_dropout_prob: float = 0.15
-    frame_drop_range: tuple = (0.9, 1.0)
+    temporal_dropout_prob: float = 0.20
+    frame_drop_range: tuple = (0.85, 1.0)
 
     # Bone-preserving augmentation
     use_bone_preserving: bool = True
@@ -98,14 +98,14 @@ class ModelConfig:
     # GCN configuration
     gcn_input_dim: int = 2
     gcn_hidden_dims: List[int] = field(default_factory=lambda: [64, 128, 256])
-    gcn_dropout: float = 0.1
+    gcn_dropout: float = 0.2
 
     # Transformer configuration
     d_model: int = 512
     n_heads: int = 8
     n_layers: int = 6
     d_ff: int = 2048
-    transformer_dropout: float = 0.1
+    transformer_dropout: float = 0.2
     max_seq_length: int = 214
 
     # Positional encoding
@@ -124,7 +124,7 @@ class TrainingConfig:
 
     # Optimizer
     learning_rate: float = 1e-4
-    weight_decay: float = 0.01
+    weight_decay: float = 0.05
     gradient_clip: float = 1.0
 
     # Scheduler
@@ -136,13 +136,16 @@ class TrainingConfig:
     focal_gamma: float = 2.0
 
     # Early stopping
-    patience: int = 15
+    patience: int = 20
 
     # Mixed precision
     use_mixed_precision: bool = True
 
     # Checkpoints - OS-dependent path
     checkpoint_dir: str = PLATFORM_PATHS["checkpoint_dir"]
+
+    # Label Smoothing
+    label_smoothing: float = 0.1
 
 
 @dataclass

@@ -874,13 +874,21 @@ class LandmarkOcclusionAugmentation:
     def _apply_gradual_occlusion(self, landmarks: np.ndarray) -> np.ndarray:
         """Simulate gradual tracking loss/recovery (fading in/out)."""
         T = landmarks.shape[0]
-        if T < 5:
+        if T < 6:  # Need at least 6 frames for fade effect
             return landmarks
         
         for region_name, (start, end) in self.REGIONS.items():
             if np.random.random() < self.temporal_dropout_prob * 0.5:
                 # Create fade-out-fade-in pattern
-                fade_length = np.random.randint(2, min(5, T // 3))
+                max_fade = min(5, T // 3)
+                if max_fade < 2:  # Safety check
+                    continue
+                fade_length = np.random.randint(2, max_fade + 1)  # +1 because randint is exclusive on high
+                
+                # Ensure we have room for center_frame selection
+                if fade_length >= T - fade_length:
+                    continue
+                    
                 center_frame = np.random.randint(fade_length, T - fade_length)
                 
                 # Create alpha mask (1 = visible, 0 = occluded)

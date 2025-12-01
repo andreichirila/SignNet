@@ -840,14 +840,22 @@ class LandmarkOcclusionAugmentation:
     def _apply_temporal_dropout(self, landmarks: np.ndarray) -> np.ndarray:
         """Simulate tracking loss over consecutive frames."""
         T = landmarks.shape[0]
-        if T < 3:
+        if T < 4:  # Need at least 4 frames for meaningful temporal dropout
             return landmarks
         
         for region_name, (start, end) in self.REGIONS.items():
             if np.random.random() < self.temporal_dropout_prob:
-                # Random start frame
-                dropout_length = np.random.randint(1, min(self.max_temporal_dropout_frames + 1, T // 2))
-                start_frame = np.random.randint(0, max(1, T - dropout_length))
+                # Calculate max dropout length (at most half the sequence)
+                max_dropout = min(self.max_temporal_dropout_frames + 1, T // 2)
+                if max_dropout <= 1:  # Safety check
+                    continue
+                    
+                dropout_length = np.random.randint(1, max_dropout)
+                max_start = T - dropout_length
+                if max_start <= 0:  # Safety check
+                    continue
+                    
+                start_frame = np.random.randint(0, max_start)
                 end_frame = min(start_frame + dropout_length, T)
                 
                 landmarks = self._zero_region(landmarks, start, end, start_frame, end_frame)

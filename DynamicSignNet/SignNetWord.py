@@ -1,5 +1,6 @@
 import os
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -72,15 +73,56 @@ class EnhancedLandmarkFeatures:
     State-of-the-art feature engineering for sign language recognition
     """
 
+    # Define landmark counts based on extraction layout
+    NUM_HAND_LANDMARKS = 21
+    NUM_HANDS = 2
+    NUM_FACE_LANDMARKS = 478
+    NUM_POSE_LANDMARKS = 33
+    TOTAL_LANDMARKS = NUM_HANDS * NUM_HAND_LANDMARKS + NUM_FACE_LANDMARKS + NUM_POSE_LANDMARKS  # 553
+
+    # Flat feature offsets (each landmark has x, y, z)
+    HAND_FLAT_SIZE = NUM_HANDS * NUM_HAND_LANDMARKS * 3  # 126
+    FACE_FLAT_SIZE = NUM_FACE_LANDMARKS * 3              # 1434
+    POSE_FLAT_SIZE = NUM_POSE_LANDMARKS * 3              # 99
+    TOTAL_FLAT_SIZE = HAND_FLAT_SIZE + FACE_FLAT_SIZE + POSE_FLAT_SIZE  # 1659
+
     @staticmethod
     def reshape_landmarks(landmarks_flat):
-        """Reshape flat landmarks (T, 1659) to (T, num_landmarks, 3)"""
+        """
+        Reshape flat landmarks to (T, num_landmarks, 3).
+        
+        Input layout from extraction:
+        [hands (126), face (1434), pose (99)] = 1659 features
+        
+        Output layout:
+        [left_hand (21), right_hand (21), face (478), pose (33)] × 3 = 553 landmarks
+        """
         T = landmarks_flat.shape[0]
-        if landmarks_flat.shape[1] % 3 != 0:
-            pad_size = 3 - (landmarks_flat.shape[1] % 3)
+        F = landmarks_flat.shape[1]
+        
+        # Handle the expected 1659 feature case
+        if F == 1659:
+            # Extract each component
+            hands_flat = landmarks_flat[:, :126]      # (T, 126)
+            face_flat = landmarks_flat[:, 126:1560]   # (T, 1434)
+            pose_flat = landmarks_flat[:, 1560:1659]  # (T, 99)
+            
+            # Reshape to (T, num_landmarks, 3)
+            hands_3d = hands_flat.reshape(T, 42, 3)   # 2 hands × 21 landmarks
+            face_3d = face_flat.reshape(T, 478, 3)
+            pose_3d = pose_flat.reshape(T, 33, 3)
+            
+            # Concatenate: [hands, face, pose]
+            landmarks_3d = np.concatenate([hands_3d, face_3d, pose_3d], axis=1)
+            return landmarks_3d  # (T, 553, 3)
+        
+        # Fallback for other sizes
+        if F % 3 != 0:
+            pad_size = 3 - (F % 3)
             landmarks_flat = np.pad(landmarks_flat, ((0, 0), (0, pad_size)), mode='constant')
+            F = landmarks_flat.shape[1]
 
-        num_landmarks = landmarks_flat.shape[1] // 3
+        num_landmarks = F // 3
         landmarks_3d = landmarks_flat.reshape(T, num_landmarks, 3)
         return landmarks_3d
 
@@ -104,13 +146,16 @@ class EnhancedLandmarkFeatures:
 
     @staticmethod
     def compute_hand_distances(landmarks_3d):
-        """Compute inter-hand distance aligned with _default_edges mapping."""
+        """Compute inter-hand distance."""
         T, L, _ = landmarks_3d.shape
-        EXPECTED_L = 553
-        if L != EXPECTED_L:
-            return np.zeros((T, 1))  # fallback-safe
-        LH_START, LH_END = 0, 21
-        RH_START, RH_END = 21, 42
+        
+        # Hand landmark indices after reshape
+        LH_START, LH_END = 0, 21      # Left hand: landmarks 0-20
+        RH_START, RH_END = 21, 42     # Right hand: landmarks 21-41
+        
+        if L < RH_END:
+            return np.zeros((T, 1))
+            
         left_center = landmarks_3d[:, LH_START:LH_END, :].mean(axis=1)
         right_center = landmarks_3d[:, RH_START:RH_END, :].mean(axis=1)
         distances = np.linalg.norm(left_center - right_center, axis=1, keepdims=True)
@@ -118,17 +163,21 @@ class EnhancedLandmarkFeatures:
 
     @staticmethod
     def compute_hand_to_face_distances(landmarks_3d):
-        """Distance from each hand center to face center aligned with _default_edges mapping."""
+        """Distance from each hand center to face center."""
         T, L, _ = landmarks_3d.shape
-        EXPECTED_L = 553
-        if L != EXPECTED_L:
-            return np.zeros((T, 1)), np.zeros((T, 1))  # fallback-safe
-        FACE_START, FACE_END = 42, 520
+        
+        # Landmark indices after reshape
         LH_START, LH_END = 0, 21
         RH_START, RH_END = 21, 42
+        FACE_START, FACE_END = 42, 520  # 478 face landmarks
+        
+        if L < FACE_END:
+            return np.zeros((T, 1)), np.zeros((T, 1))
+            
         face_center = landmarks_3d[:, FACE_START:FACE_END, :].mean(axis=1)
         left_center = landmarks_3d[:, LH_START:LH_END, :].mean(axis=1)
         right_center = landmarks_3d[:, RH_START:RH_END, :].mean(axis=1)
+        
         left_to_face = np.linalg.norm(left_center - face_center, axis=1, keepdims=True)
         right_to_face = np.linalg.norm(right_center - face_center, axis=1, keepdims=True)
         return left_to_face, right_to_face
@@ -142,35 +191,32 @@ class EnhancedLandmarkFeatures:
     @staticmethod
     def _default_edges(num_landmarks: int):
         """
-        Default bone edges for your NPZ layout:
-        - Left hand: 0..20  (MediaPipe Hands indices)
-        - Right hand: 21..41 (MediaPipe Hands indices)
-        - Face: 42..519 (MediaPipe Face Mesh)  -> no edges by default (too dense)
-        - Pose: 520..552 (MediaPipe Pose, 33 pts) -> compact upper-body graph
-        Falls back to consecutive edges if layout is unexpected.
+        Default bone edges for landmark layout after reshape:
+        - Left hand:  0..20   (21 landmarks)
+        - Right hand: 21..41  (21 landmarks)
+        - Face:       42..519 (478 landmarks) -> sparse edges only
+        - Pose:       520..552 (33 landmarks)
+        
+        Total: 553 landmarks
         """
-        # Expected layout: (2*21) + 478 + 33 = 553 landmarks
         EXPECTED_L = 553
         if num_landmarks != EXPECTED_L:
-            # Fallback: connect consecutive landmarks to stay safe
-            print(f"\n[WARNING ] num_landmarks != EXPECTED_L {num_landmarks}")
+            print(f"\n[WARNING] num_landmarks={num_landmarks} != EXPECTED_L={EXPECTED_L}")
             return [(i, i + 1) for i in range(max(0, num_landmarks - 1))]
 
         LH_START = 0
         RH_START = 21
-        FACE_START, FACE_END = 42, 520   # 42..519 inclusive (478 points)
-        POSE_START = 520                 # 520..552 inclusive (33 points)
+        POSE_START = 520
 
         edges = []
 
-        # MediaPipe Hands chains (relative indices inside a single hand block of 21 points)
-        # 0: wrist
+        # MediaPipe Hands finger chains (relative to hand base)
         hand_chains = [
-            [0, 1, 2, 3, 4],        # thumb: 0-1-2-3-4
-            [0, 5, 6, 7, 8],        # index: 0-5-6-7-8
-            [0, 9, 10, 11, 12],     # middle: 0-9-10-11-12
-            [0, 13, 14, 15, 16],    # ring: 0-13-14-15-16
-            [0, 17, 18, 19, 20],    # pinky: 0-17-18-19-20
+            [0, 1, 2, 3, 4],        # thumb
+            [0, 5, 6, 7, 8],        # index
+            [0, 9, 10, 11, 12],     # middle
+            [0, 13, 14, 15, 16],    # ring
+            [0, 17, 18, 19, 20],    # pinky
         ]
 
         def add_hand_edges(base):
@@ -182,9 +228,7 @@ class EnhancedLandmarkFeatures:
         add_hand_edges(LH_START)
         add_hand_edges(RH_START)
 
-        # Compact upper-body pose graph (MediaPipe Pose indices, relative to POSE_START):
-        # Key indices: 11 L_shoulder, 12 R_shoulder, 13 L_elbow, 14 R_elbow,
-        #              15 L_wrist,   16 R_wrist,   23 L_hip,   24 R_hip, 0 nose.
+        # Pose edges (upper body)
         def P(i):
             return POSE_START + i
 
@@ -194,13 +238,9 @@ class EnhancedLandmarkFeatures:
             (P(11), P(12)),                     # clavicle
             (P(11), P(23)), (P(12), P(24)),     # shoulders to hips
             (P(23), P(24)),                     # hip line
-            (P(0),  P(11)), (P(0),  P(12)),     # nose to shoulders (helps head-arm relation)
+            (P(0),  P(11)), (P(0),  P(12)),     # nose to shoulders
         ]
         edges.extend(pose_edges)
-
-        # Face mesh omitted by default (too dense); add sparse anchors only if needed.
-        # Example (optional): nose to a couple of face anchors if you map them.
-        # edges.append((P(0), FACE_START + some_face_idx))
 
         return edges
 
@@ -471,7 +511,199 @@ class TemporalAugmentation:
 
         return augmented
 
-
+class SkeletalAugmentation:
+    """
+    Skeleton-Based Augmentation with Bone Length Preservation.
+    
+    Applies Gaussian noise to joint positions while maintaining anatomically
+    correct bone lengths through kinematic constraints.
+    
+    Expected input layout from landmark_extraction.py:
+    [hands (126), face (1434), pose (99)] = 1659 features
+    - Hands: 2 hands × 21 landmarks × 3 coords = 126
+    - Face: 478 landmarks × 3 coords = 1434
+    - Pose: 33 landmarks × 3 coords = 99
+    """
+    
+    # Hand bone connections (landmark indices within a 21-point hand)
+    HAND_BONES = [
+        # Thumb
+        (0, 1), (1, 2), (2, 3), (3, 4),
+        # Index finger
+        (0, 5), (5, 6), (6, 7), (7, 8),
+        # Middle finger
+        (0, 9), (9, 10), (10, 11), (11, 12),
+        # Ring finger
+        (0, 13), (13, 14), (14, 15), (15, 16),
+        # Pinky
+        (0, 17), (17, 18), (18, 19), (19, 20)
+    ]
+    
+    # Pose bone connections (upper body - indices within 33-point pose)
+    POSE_BONES = [
+        # Torso
+        (11, 12),  # Shoulders
+        (11, 23), (12, 24),  # Shoulder to hip
+        (23, 24),  # Hips
+        # Left arm
+        (11, 13), (13, 15),  # Shoulder -> Elbow -> Wrist
+        # Right arm
+        (12, 14), (14, 16),  # Shoulder -> Elbow -> Wrist
+    ]
+    
+    # Flat feature offsets matching landmark_extraction.py layout
+    # Layout: [hands (126), face (1434), pose (99)]
+    LEFT_HAND_OFFSET = 0       # Left hand: features 0-62 (21 landmarks × 3)
+    RIGHT_HAND_OFFSET = 63     # Right hand: features 63-125 (21 landmarks × 3)
+    FACE_OFFSET = 126          # Face: features 126-1559 (478 landmarks × 3)
+    POSE_OFFSET = 1560         # Pose: features 1560-1658 (33 landmarks × 3)
+    
+    def __init__(self, 
+                 sigma: float = 0.015, 
+                 probability: float = 0.5,
+                 preserve_bones: bool = True,
+                 num_iterations: int = 3):
+        """
+        Args:
+            sigma: Standard deviation of Gaussian noise (0.01-0.02 recommended)
+            probability: Probability of applying augmentation
+            preserve_bones: Whether to enforce bone length constraints after perturbation
+            num_iterations: Number of iterations for bone length correction
+        """
+        self.sigma = sigma
+        self.probability = probability
+        self.preserve_bones = preserve_bones
+        self.num_iterations = num_iterations
+    
+    def _extract_landmarks_3d(self, frame: np.ndarray, offset: int, num_landmarks: int) -> np.ndarray:
+        """Extract landmarks as (num_landmarks, 3) from flat feature vector."""
+        start = offset
+        end = offset + num_landmarks * 3
+        if end > len(frame):
+            return np.zeros((num_landmarks, 3), dtype=frame.dtype)
+        return frame[start:end].reshape(num_landmarks, 3)
+    
+    def _insert_landmarks_3d(self, frame: np.ndarray, landmarks_3d: np.ndarray, offset: int) -> np.ndarray:
+        """Insert (num_landmarks, 3) back into flat feature vector."""
+        num_landmarks = landmarks_3d.shape[0]
+        start = offset
+        end = offset + num_landmarks * 3
+        if end <= len(frame):
+            frame[start:end] = landmarks_3d.flatten()
+        return frame
+    
+    def _compute_bone_lengths(self, landmarks: np.ndarray, bone_connections: list) -> dict:
+        """Compute original bone lengths for preservation."""
+        bone_lengths = {}
+        for i, (start_idx, end_idx) in enumerate(bone_connections):
+            if start_idx < len(landmarks) and end_idx < len(landmarks):
+                bone_vec = landmarks[end_idx] - landmarks[start_idx]
+                bone_lengths[i] = np.linalg.norm(bone_vec)
+        return bone_lengths
+    
+    def _apply_bone_length_constraints(self, 
+                                        landmarks: np.ndarray, 
+                                        original_lengths: dict, 
+                                        bone_connections: list) -> np.ndarray:
+        """
+        Iteratively adjust joint positions to preserve bone lengths.
+        Uses a simple relaxation approach (FABRIK-inspired).
+        """
+        landmarks = landmarks.copy()
+        
+        for _ in range(self.num_iterations):
+            for bone_idx, (start_idx, end_idx) in enumerate(bone_connections):
+                if bone_idx not in original_lengths:
+                    continue
+                if start_idx >= len(landmarks) or end_idx >= len(landmarks):
+                    continue
+                    
+                target_length = original_lengths[bone_idx]
+                if target_length < 1e-6:  # Skip zero-length bones
+                    continue
+                
+                # Current bone vector
+                bone_vec = landmarks[end_idx] - landmarks[start_idx]
+                current_length = np.linalg.norm(bone_vec)
+                
+                if current_length < 1e-6:
+                    continue
+                
+                # Scale factor to restore original length
+                scale = target_length / current_length
+                
+                # Adjust both points symmetrically
+                correction = bone_vec * (scale - 1.0) * 0.5
+                landmarks[start_idx] -= correction
+                landmarks[end_idx] += correction
+        
+        return landmarks
+    
+    def _perturb_landmarks(self, landmarks: np.ndarray, bone_connections: list) -> np.ndarray:
+        """Apply Gaussian perturbation and optionally preserve bone lengths."""
+        if len(landmarks) == 0:
+            return landmarks
+        
+        # Store original bone lengths
+        original_lengths = self._compute_bone_lengths(landmarks, bone_connections)
+        
+        # Apply Gaussian noise
+        noise = np.random.normal(0, self.sigma, landmarks.shape).astype(landmarks.dtype)
+        perturbed = landmarks + noise
+        
+        # Restore bone lengths if enabled
+        if self.preserve_bones and len(original_lengths) > 0:
+            perturbed = self._apply_bone_length_constraints(
+                perturbed, original_lengths, bone_connections
+            )
+        
+        return perturbed
+    
+    def __call__(self, landmarks: np.ndarray) -> np.ndarray:
+        """
+        Apply skeletal augmentation to a sequence of landmarks.
+        
+        Args:
+            landmarks: Shape (T, F) where T is time and F is flattened features (1659)
+                       Layout: [hands (126), face (1434), pose (99)]
+        
+        Returns:
+            Augmented landmarks with same shape
+        """
+        if np.random.random() > self.probability:
+            return landmarks
+        
+        landmarks = landmarks.copy()
+        T, F = landmarks.shape
+        
+        # Only process if we have the expected feature size
+        if F < 1659:
+            return landmarks
+        
+        for t in range(T):
+            frame = landmarks[t].copy()
+            
+            # Process left hand (21 landmarks starting at offset 0)
+            left_hand = self._extract_landmarks_3d(frame, self.LEFT_HAND_OFFSET, 21)
+            if not np.allclose(left_hand, 0):  # Only if hand detected
+                left_perturbed = self._perturb_landmarks(left_hand, self.HAND_BONES)
+                frame = self._insert_landmarks_3d(frame, left_perturbed, self.LEFT_HAND_OFFSET)
+            
+            # Process right hand (21 landmarks starting at offset 63)
+            right_hand = self._extract_landmarks_3d(frame, self.RIGHT_HAND_OFFSET, 21)
+            if not np.allclose(right_hand, 0):  # Only if hand detected
+                right_perturbed = self._perturb_landmarks(right_hand, self.HAND_BONES)
+                frame = self._insert_landmarks_3d(frame, right_perturbed, self.RIGHT_HAND_OFFSET)
+            
+            # Process pose (33 landmarks starting at offset 1560)
+            pose = self._extract_landmarks_3d(frame, self.POSE_OFFSET, 33)
+            if not np.allclose(pose, 0):  # Only if pose detected
+                pose_perturbed = self._perturb_landmarks(pose, self.POSE_BONES)
+                frame = self._insert_landmarks_3d(frame, pose_perturbed, self.POSE_OFFSET)
+            
+            landmarks[t] = frame
+        
+        return landmarks
 
 
 class SignLanguageDataset(Dataset):
@@ -481,7 +713,8 @@ class SignLanguageDataset(Dataset):
     """
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
                  use_enhanced_features=False, include_accel=False,
-                 include_bones=True, include_bone_velocity=False, class_counts=None):
+                 include_bones=True, include_bone_velocity=False, class_counts=None,
+                 use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5):
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
@@ -491,22 +724,37 @@ class SignLanguageDataset(Dataset):
         self.include_accel = include_accel
         self.include_bones = include_bones
         self.include_bone_velocity = include_bone_velocity
-        self.class_counts = class_counts  # NEW: Store for class-aware augmentation
+        self.class_counts = class_counts
 
         if augment:
             self.augmentation = TemporalAugmentation(
-                class_counts=class_counts,  # NEW: Pass class counts
+                class_counts=class_counts,
                 base_prob=0.5,
                 strength=0.5,
                 prob=augment_prob
             )
+            # NEW: Initialize skeletal augmentation with configurable parameters
+            if use_skeletal_augmentation:
+                self.skeletal_augmentation = SkeletalAugmentation(
+                    sigma=skeletal_sigma,
+                    probability=skeletal_probability,
+                    preserve_bones=True,
+                    num_iterations=3
+                )
+            else:
+                self.skeletal_augmentation = None
+        else:
+            self.skeletal_augmentation = None
 
         if debug:
             print(f"\n[DEBUG] SignLanguageDataset.__init__")
             print(f"  NPZ directory: {self.npz_dir}")
             print(f"  Total NPZ files found: {len(self.npz_files)}")
-            print(f"  Enhanced features: {use_enhanced_features}")  # NEW
-            print(f"  Include acceleration: {include_accel}")  # NEW
+            print(f"  Enhanced features: {use_enhanced_features}")
+            print(f"  Include acceleration: {include_accel}")
+            print(f"  Skeletal augmentation: {use_skeletal_augmentation if augment else 'N/A (augment=False)'}")
+            if use_skeletal_augmentation and augment:
+                print(f"    Sigma: {skeletal_sigma}, Probability: {skeletal_probability}")
 
         if word_to_idx is None:
             self.word_to_idx = {}
@@ -567,7 +815,7 @@ class SignLanguageDataset(Dataset):
         # Load gloss and convert to string CORRECTLY
         glosses = data["glosses"]
         if len(glosses) > 0:
-            gloss_item = glosses[0]  # ← FIX: Extract first element
+            gloss_item = glosses[0]
             if isinstance(gloss_item, (np.ndarray, np.str_, bytes)):
                 gloss = str(gloss_item)
             else:
@@ -577,18 +825,23 @@ class SignLanguageDataset(Dataset):
 
         label = self.word_to_idx.get(gloss, 0)
 
+        # NEW: Apply skeletal augmentation BEFORE feature engineering
+        # This perturbs raw landmarks while preserving bone lengths
+        if self.augment and self.skeletal_augmentation is not None:
+            landmarks = self.skeletal_augmentation(landmarks)
+
         # APPLY FEATURE ENGINEERING IF ENABLED (with is_train flag)
         if self.use_enhanced_features:
             landmarks = EnhancedLandmarkFeatures.extract_all_features(
                 landmarks,
                 fps=25,
-                is_train=self.augment,  # ← CHANGED: Use self.augment instead of self.split
+                is_train=self.augment,
                 include_accel=self.include_accel,
                 include_bones=self.include_bones,
                 include_bone_velocity=self.include_bone_velocity
             )
 
-        # Apply augmentation AFTER feature engineering (class-aware)
+        # Apply temporal augmentation AFTER feature engineering (class-aware)
         if self.augment:
             landmarks = self.augmentation(landmarks, class_label=gloss)
 
@@ -1264,7 +1517,8 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
 
 def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
                       use_enhanced_features, include_accel, include_bones,
-                      include_bone_velocity, augment, augment_prob, train_class_counts):
+                      include_bone_velocity, augment, augment_prob, train_class_counts,
+                      use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5):  # ADD THESE
     """Load dataset according to structure type."""
 
     if args.dataset_type == 'flat':
@@ -1316,7 +1570,10 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_accel=include_accel,
             include_bones=include_bones,
             include_bone_velocity=include_bone_velocity,
-            class_counts=train_class_counts
+            class_counts=train_class_counts,
+            use_skeletal_augmentation=use_skeletal_augmentation,  # USE PARAMETER
+            skeletal_sigma=skeletal_sigma,                        # USE PARAMETER
+            skeletal_probability=skeletal_probability             # USE PARAMETER
         )
 
         dataset_val = SignLanguageDataset(
@@ -1328,7 +1585,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_accel=include_accel,
             include_bones=include_bones,
             include_bone_velocity=include_bone_velocity,
-            class_counts=train_class_counts
+            class_counts=train_class_counts,
+            use_skeletal_augmentation=False  # ADD THIS (always False for val)
         )
 
         dataset_test = SignLanguageDataset(
@@ -1340,7 +1598,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_accel=include_accel,
             include_bones=include_bones,
             include_bone_velocity=include_bone_velocity,
-            class_counts=train_class_counts
+            class_counts=train_class_counts,
+            use_skeletal_augmentation=False  # ADD THIS (always False for test)
         )
 
         # Filter each to vocabulary
@@ -1416,6 +1675,12 @@ def main():
     INCLUDE_BONES = False                 # NEW
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
+    # SKELETAL AUGMENTATION SETTINGS
+    USE_SKELETAL_AUGMENTATION = True
+    SKELETAL_SIGMA = 0.015
+    SKELETAL_PROBABILITY = 0.5
+
+    # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 10
@@ -1491,10 +1756,15 @@ def main():
                 "dropout_rate": DROPOUT_RATE,
                 "augmentation_enabled": AUGMENT,
                 "augmentation_probability": AUGMENT_PROBABILITY,
-                "use_enhanced_features": USE_ENHANCED_FEATURES,  # NEW
-                "include_acceleration": INCLUDE_ACCELERATION,  # NEW
-                "use_focal_loss": USE_FOCAL_LOSS,  # NEW
-                "attention_dropout": ATTENTION_DROPOUT,  # NEW
+                "use_enhanced_features": USE_ENHANCED_FEATURES,
+                "include_acceleration": INCLUDE_ACCELERATION,
+                "use_focal_loss": USE_FOCAL_LOSS,
+                "attention_dropout": ATTENTION_DROPOUT,
+                "use_skeletal_augmentation": USE_SKELETAL_AUGMENTATION,
+                "skeletal_sigma": SKELETAL_SIGMA,
+                "skeletal_probability": SKELETAL_PROBABILITY,
+                "include_bones": INCLUDE_BONES,
+                "include_bone_velocity": INCLUDE_BONE_VELOCITY,
             })
 
             # STEP 1: Load dataset WITH ENHANCED FEATURES
@@ -1596,7 +1866,8 @@ def main():
                 include_accel=INCLUDE_ACCELERATION,
                 include_bones=INCLUDE_BONES,
                 include_bone_velocity=INCLUDE_BONE_VELOCITY,
-                class_counts=train_class_counts  # NEW: Pass class counts
+                class_counts=train_class_counts,
+                use_skeletal_augmentation=USE_SKELETAL_AUGMENTATION
             )
             dataset_val = SignLanguageDataset(
                 NPZ_DIR,
@@ -1607,7 +1878,8 @@ def main():
                 include_accel=INCLUDE_ACCELERATION,
                 include_bones=INCLUDE_BONES,
                 include_bone_velocity=INCLUDE_BONE_VELOCITY,
-                class_counts=train_class_counts  # Even validation gets the mapping (though augment=False)
+                class_counts=train_class_counts,
+                use_skeletal_augmentation=False  # Always False for validation
             )
 
             # STEP 2: Filter to top words
@@ -1663,7 +1935,10 @@ def main():
                 include_bone_velocity=INCLUDE_BONE_VELOCITY,
                 augment=AUGMENT,
                 augment_prob=AUGMENT_PROBABILITY,
-                train_class_counts=train_class_counts
+                train_class_counts=train_class_counts,
+                use_skeletal_augmentation=USE_SKELETAL_AUGMENTATION,  # ADD THIS
+                skeletal_sigma=SKELETAL_SIGMA,                        # ADD THIS
+                skeletal_probability=SKELETAL_PROBABILITY             # ADD THIS
             )
 
             num_classes = len(top_k_words)

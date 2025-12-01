@@ -1677,8 +1677,8 @@ def main():
 
     # SKELETAL AUGMENTATION SETTINGS
     USE_SKELETAL_AUGMENTATION = True
-    SKELETAL_SIGMA = 0.015
-    SKELETAL_PROBABILITY = 0.5
+    SKELETAL_SIGMA = 0.025          # Increased from 0.015 (more noise)
+    SKELETAL_PROBABILITY = 0.7      # Increased from 0.5 (more samples augmented)
 
     # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False

@@ -4,10 +4,10 @@
 # Must match your training config exactly
 MAIN_MODEL_CONFIG = {
     'input_size': 1659,
-    'hidden_size': 320,
+    'hidden_size': 512,
     'num_layers': 6,
-    'num_heads': 10,
-    'dim_feedforward': 1280
+    'num_heads': 8,
+    'dim_feedforward': 2048
 }
 
 EXPERT_MODEL_CONFIG = {

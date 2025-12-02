@@ -2002,7 +2002,7 @@ def main():
     USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 10
-    NUM_EPOCHS = 400
+    NUM_EPOCHS = 600
     BASE_LR = 1e-4
     MIN_LR = 1e-6
     T_0 = 25           # First restart cycle length

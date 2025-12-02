@@ -999,10 +999,10 @@ class SignLanguageDataset(Dataset):
             # NEW: Initialize occlusion augmentation
             if use_occlusion_augmentation:
                 self.occlusion_augmentation = LandmarkOcclusionAugmentation(
-                    region_dropout_prob=0.15,
-                    temporal_dropout_prob=0.10,
-                    max_temporal_dropout_frames=5,
-                    sub_region_dropout_prob=0.20,
+                    region_dropout_prob=0.20,  # Increased from 0.15 for stronger augmentation
+                    temporal_dropout_prob=0.15,  # Increased from 0.10
+                    max_temporal_dropout_frames=7,  # Increased from 5
+                    sub_region_dropout_prob=0.25,  # Increased from 0.20
                     use_realistic_patterns=True,
                     probability=occlusion_probability
                 )
@@ -1970,13 +1970,13 @@ def main():
     BATCH_SIZE = 256
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = MAIN_MODEL_CONFIG['hidden_size']
-    DROPOUT_RATE = 0.60  # Increased from 0.55 to close generalization gap
+    DROPOUT_RATE = 0.65  # Increased from 0.60 to reduce 7% train-val gap
     NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
     NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
-    ATTENTION_DROPOUT = 0.30  # NEW
-    WEIGHT_DECAY = 1e-2  # Increased from 1e-3 to 1e-2 (stronger regularization)
+    ATTENTION_DROPOUT = 0.35  # Increased from 0.30 for stronger regularization
+    WEIGHT_DECAY = 1e-2  # Keep strong L2 regularization
     AUGMENT = True
-    AUGMENT_PROBABILITY = 0.7
+    AUGMENT_PROBABILITY = 0.75  # Increased from 0.7 for more augmentation
 
     # FEATURE ENGINEERING SETTINGS (NEW)
     USE_ENHANCED_FEATURES = False  # Toggle feature engineering

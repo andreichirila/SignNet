@@ -2184,7 +2184,7 @@ def main():
 
     # MIRROR AUGMENTATION SETTINGS (NEW)
     USE_MIRROR_AUGMENTATION = True
-    MIRROR_PROBABILITY = 0.5  # 50% of samples get horizontal flip
+    MIRROR_PROBABILITY = 0.3  # 30% of samples get horizontal flip (reduced from 0.5)
 
     # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False

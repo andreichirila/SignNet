@@ -4,10 +4,10 @@
 # Must match your training config exactly
 MAIN_MODEL_CONFIG = {
     'input_size': 1659,
-    'hidden_size': 384,  # Reduced from 512 to prevent overfitting
-    'num_layers': 5,     # Reduced from 6 to prevent overfitting
-    'num_heads': 8,
-    'dim_feedforward': 1536  # Reduced from 2048 (4x hidden_size)
+    'hidden_size': 512,  # Restored to 512 for Option 2 (with mirroring)
+    'num_layers': 6,     # Restored to 6 layers
+    'num_heads': 16,     # Increased from 8 for finer attention (32 dims/head)
+    'dim_feedforward': 2048  # Restored to 2048 (4x hidden_size)
 }
 
 EXPERT_MODEL_CONFIG = {

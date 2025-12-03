@@ -957,6 +957,156 @@ class LandmarkOcclusionAugmentation:
         return landmarks
 
 
+class MirrorAugmentation:
+    """
+    Horizontal Mirroring Augmentation for sign language recognition.
+    
+    Flips the sign horizontally by:
+    1. Swapping left and right hand landmarks
+    2. Flipping x-coordinates (1 - x) for all landmarks
+    3. Swapping left/right pose landmarks (shoulders, elbows, wrists, etc.)
+    
+    This effectively creates the mirror image of a sign, which is useful for:
+    - Data augmentation (doubles effective dataset size)
+    - Learning hand-invariant features
+    - Handling left-handed vs right-handed signers
+    
+    Expected input layout from landmark_extraction.py:
+    [hands (126), face (1434), pose (99)] = 1659 features
+    """
+    
+    # Feature layout (each landmark has x, y, z = 3 values)
+    LEFT_HAND_START = 0
+    LEFT_HAND_END = 63      # 21 landmarks × 3
+    RIGHT_HAND_START = 63
+    RIGHT_HAND_END = 126    # 21 landmarks × 3
+    FACE_START = 126
+    FACE_END = 1560         # 478 landmarks × 3
+    POSE_START = 1560
+    POSE_END = 1659         # 33 landmarks × 3
+    
+    # MediaPipe Pose landmark pairs that need swapping (left ↔ right)
+    # Format: (left_landmark_idx, right_landmark_idx)
+    POSE_SWAP_PAIRS = [
+        (11, 12),  # Left/Right shoulder
+        (13, 14),  # Left/Right elbow
+        (15, 16),  # Left/Right wrist
+        (17, 18),  # Left/Right pinky
+        (19, 20),  # Left/Right index
+        (21, 22),  # Left/Right thumb
+        (23, 24),  # Left/Right hip
+        (25, 26),  # Left/Right knee
+        (27, 28),  # Left/Right ankle
+        (29, 30),  # Left/Right heel
+        (31, 32),  # Left/Right foot index
+    ]
+    
+    # MediaPipe Face Mesh pairs for left/right symmetry (approximate)
+    # These are the main symmetric landmarks - face mesh has complex topology
+    # We'll flip x-coordinates for all face landmarks, which handles symmetry naturally
+    
+    def __init__(self, probability: float = 0.5):
+        """
+        Args:
+            probability: Probability of applying mirroring augmentation
+        """
+        self.probability = probability
+    
+    def _flip_x_coordinates(self, landmarks: np.ndarray, start: int, end: int) -> np.ndarray:
+        """
+        Flip x-coordinates within a region.
+        For MediaPipe normalized coordinates, x is in [0, 1], so flip = 1 - x
+        
+        Args:
+            landmarks: Shape (T, F) where F is flattened features
+            start: Start index of region
+            end: End index of region
+        """
+        # x coordinates are at indices 0, 3, 6, 9, ... (every 3rd starting from 0)
+        for i in range(start, end, 3):
+            landmarks[:, i] = 1.0 - landmarks[:, i]
+        return landmarks
+    
+    def _swap_hands(self, landmarks: np.ndarray) -> np.ndarray:
+        """
+        Swap left and right hand landmarks.
+        """
+        # Copy left hand
+        left_hand = landmarks[:, self.LEFT_HAND_START:self.LEFT_HAND_END].copy()
+        # Copy right hand
+        right_hand = landmarks[:, self.RIGHT_HAND_START:self.RIGHT_HAND_END].copy()
+        
+        # Swap
+        landmarks[:, self.LEFT_HAND_START:self.LEFT_HAND_END] = right_hand
+        landmarks[:, self.RIGHT_HAND_START:self.RIGHT_HAND_END] = left_hand
+        
+        return landmarks
+    
+    def _swap_pose_pairs(self, landmarks: np.ndarray) -> np.ndarray:
+        """
+        Swap left/right pose landmark pairs.
+        """
+        for left_idx, right_idx in self.POSE_SWAP_PAIRS:
+            # Calculate flat indices (each landmark = 3 values)
+            left_start = self.POSE_START + left_idx * 3
+            left_end = left_start + 3
+            right_start = self.POSE_START + right_idx * 3
+            right_end = right_start + 3
+            
+            # Bounds check
+            if right_end <= self.POSE_END:
+                # Swap the landmarks
+                left_coords = landmarks[:, left_start:left_end].copy()
+                right_coords = landmarks[:, right_start:right_end].copy()
+                landmarks[:, left_start:left_end] = right_coords
+                landmarks[:, right_start:right_end] = left_coords
+        
+        return landmarks
+    
+    def __call__(self, landmarks: np.ndarray, return_applied: bool = False):
+        """
+        Apply mirror augmentation to a sequence of landmarks.
+        
+        Args:
+            landmarks: Shape (T, F) where T is time and F is flattened features (1659)
+            return_applied: If True, returns tuple (landmarks, was_applied)
+        
+        Returns:
+            Mirrored landmarks with same shape, or tuple (landmarks, was_applied)
+        """
+        if np.random.random() > self.probability:
+            if return_applied:
+                return landmarks, False
+            return landmarks
+        
+        landmarks = landmarks.copy()
+        T, F = landmarks.shape
+        
+        # Only process if we have the expected feature size
+        if F < 1659:
+            if return_applied:
+                return landmarks, False
+            return landmarks
+        
+        # Step 1: Swap left and right hands
+        landmarks = self._swap_hands(landmarks)
+        
+        # Step 2: Swap left/right pose landmark pairs
+        landmarks = self._swap_pose_pairs(landmarks)
+        
+        # Step 3: Flip all x-coordinates (creates the mirror image)
+        # Hands
+        landmarks = self._flip_x_coordinates(landmarks, self.LEFT_HAND_START, self.RIGHT_HAND_END)
+        # Face
+        landmarks = self._flip_x_coordinates(landmarks, self.FACE_START, self.FACE_END)
+        # Pose
+        landmarks = self._flip_x_coordinates(landmarks, self.POSE_START, self.POSE_END)
+        
+        if return_applied:
+            return landmarks, True
+        return landmarks
+
+
 class SignLanguageDataset(Dataset):
     """
     Load preprocessed landmarks from NPZ files with per-frame handedness.
@@ -966,7 +1116,8 @@ class SignLanguageDataset(Dataset):
                  use_enhanced_features=False, include_accel=False,
                  include_bones=True, include_bone_velocity=False, class_counts=None,
                  use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5,
-                 use_occlusion_augmentation=True, occlusion_probability=0.3):  # NEW PARAMETERS
+                 use_occlusion_augmentation=True, occlusion_probability=0.3,
+                 use_mirror_augmentation=True, mirror_probability=0.5):  # MIRROR AUGMENTATION
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
@@ -1008,9 +1159,18 @@ class SignLanguageDataset(Dataset):
                 )
             else:
                 self.occlusion_augmentation = None
+            
+            # NEW: Initialize mirror augmentation
+            if use_mirror_augmentation:
+                self.mirror_augmentation = MirrorAugmentation(
+                    probability=mirror_probability
+                )
+            else:
+                self.mirror_augmentation = None
         else:
             self.skeletal_augmentation = None
             self.occlusion_augmentation = None
+            self.mirror_augmentation = None
 
         if debug:
             print(f"\n[DEBUG] SignLanguageDataset.__init__")
@@ -1104,6 +1264,13 @@ class SignLanguageDataset(Dataset):
         if self.augment and self.occlusion_augmentation is not None:
             landmarks = self.occlusion_augmentation(landmarks)
 
+        # NEW: Apply mirror augmentation BEFORE feature engineering
+        # This flips the sign horizontally (swaps left/right hands)
+        # Track if mirroring was applied so we can swap handedness labels
+        mirror_applied = False
+        if self.augment and self.mirror_augmentation is not None:
+            landmarks, mirror_applied = self.mirror_augmentation(landmarks, return_applied=True)
+
         # APPLY FEATURE ENGINEERING IF ENABLED (with is_train flag)
         if self.use_enhanced_features:
             landmarks = EnhancedLandmarkFeatures.extract_all_features(
@@ -1125,6 +1292,15 @@ class SignLanguageDataset(Dataset):
             handedness = self._get_dominant_handedness(handedness_data)
         else:
             handedness = 3
+
+        # Swap handedness if mirror augmentation was applied
+        # LEFT only (0) <-> RIGHT only (1), BOTH (2) and NONE (3) stay the same
+        if mirror_applied:
+            if handedness == 0:  # LEFT -> RIGHT
+                handedness = 1
+            elif handedness == 1:  # RIGHT -> LEFT
+                handedness = 0
+            # BOTH (2) and NONE (3) remain unchanged
 
         # Convert to tensors
         landmarks_tensor = torch.from_numpy(landmarks).float()
@@ -1793,7 +1969,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
                       use_enhanced_features, include_accel, include_bones,
                       include_bone_velocity, augment, augment_prob, train_class_counts,
                       use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5,
-                      use_occlusion_augmentation=True, occlusion_probability=0.3):  # NEW PARAMETERS
+                      use_occlusion_augmentation=True, occlusion_probability=0.3,
+                      use_mirror_augmentation=True, mirror_probability=0.5):  # MIRROR AUGMENTATION
     """Load dataset according to structure type."""
 
     if args.dataset_type == 'flat':
@@ -1843,7 +2020,9 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             skeletal_sigma=skeletal_sigma,
             skeletal_probability=skeletal_probability,
             use_occlusion_augmentation=use_occlusion_augmentation,
-            occlusion_probability=occlusion_probability
+            occlusion_probability=occlusion_probability,
+            use_mirror_augmentation=use_mirror_augmentation,
+            mirror_probability=mirror_probability
         )
 
         dataset_val = SignLanguageDataset(
@@ -1857,7 +2036,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_bone_velocity=include_bone_velocity,
             class_counts=train_class_counts,
             use_skeletal_augmentation=False,
-            use_occlusion_augmentation=False
+            use_occlusion_augmentation=False,
+            use_mirror_augmentation=False
         )
 
         return train_indices, val_indices, None, dataset_train, dataset_val, None
@@ -1885,7 +2065,9 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             skeletal_sigma=skeletal_sigma,
             skeletal_probability=skeletal_probability,
             use_occlusion_augmentation=use_occlusion_augmentation,  # NEW
-            occlusion_probability=occlusion_probability              # NEW
+            occlusion_probability=occlusion_probability,             # NEW
+            use_mirror_augmentation=use_mirror_augmentation,
+            mirror_probability=mirror_probability
         )
 
         dataset_val = SignLanguageDataset(
@@ -1899,7 +2081,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_bone_velocity=include_bone_velocity,
             class_counts=train_class_counts,
             use_skeletal_augmentation=False,
-            use_occlusion_augmentation=False  # Always False for val
+            use_occlusion_augmentation=False,  # Always False for val
+            use_mirror_augmentation=False
         )
 
         dataset_test = SignLanguageDataset(
@@ -1913,7 +2096,8 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
             include_bone_velocity=include_bone_velocity,
             class_counts=train_class_counts,
             use_skeletal_augmentation=False,
-            use_occlusion_augmentation=False  # Always False for test
+            use_occlusion_augmentation=False,  # Always False for test
+            use_mirror_augmentation=False
         )
 
         # Filter each to vocabulary
@@ -1998,15 +2182,19 @@ def main():
     USE_OCCLUSION_AUGMENTATION = True
     OCCLUSION_PROBABILITY = 0.3  # 30% of samples get occlusion
 
+    # MIRROR AUGMENTATION SETTINGS (NEW)
+    USE_MIRROR_AUGMENTATION = True
+    MIRROR_PROBABILITY = 0.5  # 50% of samples get horizontal flip
+
     # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
-    WARMUP_EPOCHS = 20    # Extended warmup for very long training
-    NUM_EPOCHS = 2000     # Extended for full overnight training (~12-14 hours)
+    WARMUP_EPOCHS = 10
+    NUM_EPOCHS = 600
     BASE_LR = 1e-4
-    MIN_LR = 1e-7         # Even lower floor for ultra-fine convergence
-    T_0 = 75              # Longer first cycle for 2000 epochs (75→150→300→600→1200)
-    T_MULT = 2            # Multiply cycle length after each restart
+    MIN_LR = 1e-6
+    T_0 = 25           # First restart cycle length
+    T_MULT = 2         # Multiply cycle length after each restart
 
     # Check if we are in expert training mode
     if args.expert_name:
@@ -2233,8 +2421,10 @@ def main():
                 use_skeletal_augmentation=USE_SKELETAL_AUGMENTATION,
                 skeletal_sigma=SKELETAL_SIGMA,
                 skeletal_probability=SKELETAL_PROBABILITY,
-                use_occlusion_augmentation=USE_OCCLUSION_AUGMENTATION,  # NEW
-                occlusion_probability=OCCLUSION_PROBABILITY              # NEW
+                use_occlusion_augmentation=USE_OCCLUSION_AUGMENTATION,
+                occlusion_probability=OCCLUSION_PROBABILITY,
+                use_mirror_augmentation=USE_MIRROR_AUGMENTATION,
+                mirror_probability=MIRROR_PROBABILITY
             )
 
             num_classes = len(top_k_words)

@@ -1305,7 +1305,7 @@ class OversampledDataset(RemappedDataset):
 
         for i, real_idx in enumerate(self.indices):
             # Get original sample to check class
-            _, label, _ = self.base_dataset[real_idx]
+            _, label = self.base_dataset[real_idx]
             class_name = self.base_dataset.idx_to_word[label.item()]
 
             # Add original index
@@ -1860,7 +1860,7 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
         filtered_indices = []
         filtered_labels = []
         for i in range(len(base_dataset)):
-            _, label, _ = base_dataset[i]
+            _, label = base_dataset[i]
             old_label = label.item()
             if old_label in old_to_new_idx:
                 filtered_indices.append(i)
@@ -2318,7 +2318,7 @@ def main():
 
                 train_class_counts = Counter()
                 for idx in train_indices:
-                    _, old_label, _ = base_dataset[idx]
+                    _, old_label = base_dataset[idx]
                     new_label = old_to_new_idx[old_label.item()]
                     train_class_counts[new_label] += 1
 
@@ -2334,7 +2334,7 @@ def main():
 
                 train_class_counts = Counter()
                 for idx in train_indices:
-                    _, old_label, _ = base_dataset[idx]
+                    _, old_label = base_dataset[idx]
                     new_label = old_to_new_idx[old_label.item()]
                     train_class_counts[new_label] += 1
 
@@ -2348,7 +2348,7 @@ def main():
 
                 sample_weights = []
                 for idx in train_indices:
-                    _, old_label, _ = base_dataset[idx]
+                    _, old_label = base_dataset[idx]
                     new_label = old_to_new_idx[old_label.item()]
                     count = train_class_counts[new_label]
                     weight = 1.0 / np.sqrt(count)

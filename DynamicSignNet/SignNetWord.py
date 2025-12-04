@@ -2069,11 +2069,11 @@ def main():
     # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
-    WARMUP_EPOCHS = 20    # Longer warmup for 2000 epochs
-    NUM_EPOCHS = 2000     # Extended training
+    WARMUP_EPOCHS = 30    # Longer warmup for 4000 epochs
+    NUM_EPOCHS = 4000     # Extended training
     BASE_LR = 1e-4
     MIN_LR = 1e-7         # Lower floor for long training
-    T_0 = 75              # Longer first cycle for 2000 epochs
+    T_0 = 100             # Longer first cycle for 4000 epochs
     T_MULT = 2            # Multiply cycle length after each restart
 
     # Check if we are in expert training mode

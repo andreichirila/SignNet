@@ -1109,8 +1109,8 @@ class MirrorAugmentation:
 
 class SignLanguageDataset(Dataset):
     """
-    Load preprocessed landmarks from NPZ files with per-frame handedness.
-    NOW SUPPORTS ENHANCED FEATURES (NEW)
+    Load preprocessed landmarks from NPZ files for sign language classification.
+    Supports enhanced features, skeletal/occlusion/mirror augmentations.
     """
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
                  use_enhanced_features=False, include_accel=False,
@@ -1207,33 +1207,6 @@ class SignLanguageDataset(Dataset):
     def __len__(self):
         return len(self.npz_files)
 
-    def _get_dominant_handedness(self, handedness_data):
-        """Aggregate per-frame handedness to sample-level"""
-        left_count = 0
-        right_count = 0
-
-        for frame_hands in handedness_data:
-            if isinstance(frame_hands, str):
-                if frame_hands == "LEFT":
-                    left_count += 1
-                elif frame_hands == "RIGHT":
-                    right_count += 1
-            else:
-                for hand in frame_hands:
-                    if hand == "LEFT":
-                        left_count += 1
-                    elif hand == "RIGHT":
-                        right_count += 1
-
-        if left_count > 0 and right_count == 0:
-            return 0  # LEFT only
-        elif right_count > 0 and left_count == 0:
-            return 1  # RIGHT only
-        elif left_count > 0 and right_count > 0:
-            return 2  # BOTH hands used
-        else:
-            return 3  # No hand detected (NONE)
-
     def __getitem__(self, idx):
         npz_file = self.npz_files[idx]
         data = np.load(npz_file, allow_pickle=True)
@@ -1264,12 +1237,10 @@ class SignLanguageDataset(Dataset):
         if self.augment and self.occlusion_augmentation is not None:
             landmarks = self.occlusion_augmentation(landmarks)
 
-        # NEW: Apply mirror augmentation BEFORE feature engineering
+        # Apply mirror augmentation BEFORE feature engineering
         # This flips the sign horizontally (swaps left/right hands)
-        # Track if mirroring was applied so we can swap handedness labels
-        mirror_applied = False
         if self.augment and self.mirror_augmentation is not None:
-            landmarks, mirror_applied = self.mirror_augmentation(landmarks, return_applied=True)
+            landmarks, _ = self.mirror_augmentation(landmarks, return_applied=True)
 
         # APPLY FEATURE ENGINEERING IF ENABLED (with is_train flag)
         if self.use_enhanced_features:
@@ -1286,28 +1257,11 @@ class SignLanguageDataset(Dataset):
         if self.augment:
             landmarks = self.augmentation(landmarks, class_label=gloss)
 
-        # Load and aggregate handedness
-        if "handedness" in data:
-            handedness_data = data["handedness"]
-            handedness = self._get_dominant_handedness(handedness_data)
-        else:
-            handedness = 3
-
-        # Swap handedness if mirror augmentation was applied
-        # LEFT only (0) <-> RIGHT only (1), BOTH (2) and NONE (3) stay the same
-        if mirror_applied:
-            if handedness == 0:  # LEFT -> RIGHT
-                handedness = 1
-            elif handedness == 1:  # RIGHT -> LEFT
-                handedness = 0
-            # BOTH (2) and NONE (3) remain unchanged
-
         # Convert to tensors
         landmarks_tensor = torch.from_numpy(landmarks).float()
         label_tensor = torch.tensor(label, dtype=torch.long)
-        handedness_tensor = torch.tensor(handedness, dtype=torch.long)
 
-        return landmarks_tensor, label_tensor, handedness_tensor
+        return landmarks_tensor, label_tensor
 
 
 class RemappedDataset(Dataset):
@@ -1323,7 +1277,7 @@ class RemappedDataset(Dataset):
 
     def __getitem__(self, idx):
         base_idx = self.indices[idx]
-        landmarks, old_label, handedness = self.base_dataset[base_idx]
+        landmarks, old_label = self.base_dataset[base_idx]
 
         old_label_val = old_label.item()
 
@@ -1332,7 +1286,7 @@ class RemappedDataset(Dataset):
 
         new_label = self.old_to_new_idx[old_label_val]
 
-        return landmarks, torch.tensor(new_label, dtype=torch.long), handedness
+        return landmarks, torch.tensor(new_label, dtype=torch.long)
 
 class OversampledDataset(RemappedDataset):
     """Extends RemappedDataset to oversample specific classes"""
@@ -1374,12 +1328,10 @@ class OversampledDataset(RemappedDataset):
         return super().__getitem__(original_idx)
 
 
-class TransformerSignClassifierWithHandedness(nn.Module):
+class TransformerSignClassifier(nn.Module):
     """
-    Transformer encoder model with:
-    - Multi-task learning (sign + handedness)
-    - Uses existing per-frame features (joints + bones + velocities + etc.)
-    Drop-in replacement for LSTMSignClassifierWithHandedness.
+    Transformer encoder model for sign language classification.
+    Single-task model (sign classification only).
     """
     def __init__(
         self,
@@ -1421,17 +1373,14 @@ class TransformerSignClassifierWithHandedness(nn.Module):
 
         self.dropout = nn.Dropout(dropout_rate)
 
-        # Task 1: Sign classification head
+        # Sign classification head
         self.fc_sign = nn.Linear(hidden_size, num_classes)
 
-        # Task 2: Handedness classification head (4 classes: LEFT, RIGHT, BOTH, NONE)
-        self.fc_handedness = nn.Linear(hidden_size, 4)
-
         if debug:
-            print(f"[DEBUG] TransformerSignClassifierWithHandedness initialized")
+            print(f"[DEBUG] TransformerSignClassifier initialized")
             print(f"  Input size: {input_size}")
             print(f"  Hidden size: {hidden_size}")
-            print(f"  Num classes (sign): {num_classes}")
+            print(f"  Num classes: {num_classes}")
             print(f"  Num heads: {num_heads}")
             print(f"  Num layers: {num_layers}")
             print(f"  FFN dim: {dim_feedforward}")
@@ -1445,7 +1394,6 @@ class TransformerSignClassifierWithHandedness(nn.Module):
             src_key_padding_mask: optional (batch_size, seq_len) True=pad
         Returns:
             sign_logits: (batch_size, num_classes)
-            handedness_logits: (batch_size, 4)
         """
         B, T, D = landmarks.shape
 
@@ -1459,12 +1407,10 @@ class TransformerSignClassifierWithHandedness(nn.Module):
         x = x + pos_emb
 
         # Transformer encoder
-        # src_key_padding_mask: (B, T) with True at PAD positions
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, T, hidden)
 
         # Global average pooling over time (mask-aware)
         if src_key_padding_mask is not None:
-            # mask: True for PAD -> set to 0 weight
             mask = (~src_key_padding_mask).float().unsqueeze(-1)  # (B, T, 1)
             x_masked = x * mask
             lengths = mask.sum(dim=1).clamp(min=1.0)  # (B, 1)
@@ -1475,9 +1421,8 @@ class TransformerSignClassifierWithHandedness(nn.Module):
         pooled = self.dropout(pooled)
 
         sign_logits = self.fc_sign(pooled)
-        handedness_logits = self.fc_handedness(pooled)
 
-        return sign_logits, handedness_logits
+        return sign_logits
 
 
 
@@ -1485,7 +1430,6 @@ class PadCollate:
     def __call__(self, batch):
         landmarks_list = [item[0] for item in batch]
         labels_list = [item[1] for item in batch]
-        handedness_list = [item[2] for item in batch]
 
         lengths = [lm.shape[0] for lm in landmarks_list]
         max_seq_len = max(lengths)
@@ -1502,16 +1446,14 @@ class PadCollate:
 
         landmarks_tensor = torch.stack(padded_landmarks).float()  # (B, T, D)
         labels = torch.tensor(labels_list, dtype=torch.long)
-        handedness = torch.tensor(handedness_list, dtype=torch.long)
 
         # src_key_padding_mask: True at PAD positions
-        # shape (B, T)
         padding_mask = torch.zeros(len(batch), max_seq_len, dtype=torch.bool)
         for i, l in enumerate(lengths):
             if l < max_seq_len:
                 padding_mask[i, l:] = True
 
-        return landmarks_tensor, labels, handedness, padding_mask
+        return landmarks_tensor, labels, padding_mask
 
 
 
@@ -1549,10 +1491,10 @@ class BalancedSoftmaxLoss(nn.Module):
         return F.cross_entropy(balanced_logits, targets, label_smoothing=self.label_smoothing)
 
 
-class MultiTaskLoss(nn.Module):
+class SignLoss(nn.Module):
     """
-    Multi-task loss with uncertainty-based dynamic weighting.
-    Learns optimal task weights automatically during training.
+    Single-task loss for sign classification.
+    Supports Focal Loss and Balanced Softmax.
     """
     def __init__(self, label_smoothing=0.0, use_focal=False, class_weights=None,
                  use_balanced_softmax=False, balanced_class_counts=None):
@@ -1560,41 +1502,18 @@ class MultiTaskLoss(nn.Module):
 
         # Set up sign classification loss
         if use_balanced_softmax and balanced_class_counts is not None:
-            self.sign_loss = BalancedSoftmaxLoss(balanced_class_counts, label_smoothing=label_smoothing)
+            self.loss_fn = BalancedSoftmaxLoss(balanced_class_counts, label_smoothing=label_smoothing)
         elif use_focal:
-            self.sign_loss = FocalLoss(alpha=0.25, gamma=2.0, weight=class_weights)
+            self.loss_fn = FocalLoss(alpha=0.25, gamma=2.0, weight=class_weights)
         else:
-            self.sign_loss = nn.CrossEntropyLoss(
+            self.loss_fn = nn.CrossEntropyLoss(
                 label_smoothing=label_smoothing,
                 weight=class_weights
             )
 
-        # Handedness loss
-        self.handedness_loss = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
-
-        # Learnable uncertainty parameters (log-variance)
-        # Initialize to 0 (variance = 1) for balanced start
-        self.log_var_sign = nn.Parameter(torch.zeros(1))
-        self.log_var_hand = nn.Parameter(torch.zeros(1))
-
-    def forward(self, sign_logits, handedness_logits, sign_labels, handedness_labels):
-        # Calculate individual task losses
-        loss_sign = self.sign_loss(sign_logits, sign_labels)
-        loss_handedness = self.handedness_loss(handedness_logits, handedness_labels)
-
-        # Uncertainty-based weighting
-        # precision = exp(-log_var) = 1 / variance
-        precision_sign = torch.exp(-self.log_var_sign)
-        precision_hand = torch.exp(-self.log_var_hand)
-
-        # Weighted losses with regularization term
-        weighted_sign = precision_sign * loss_sign + self.log_var_sign
-        weighted_hand = precision_hand * loss_handedness + self.log_var_hand
-
-        # Total loss
-        total_loss = weighted_sign + weighted_hand
-
-        return total_loss, loss_sign, loss_handedness
+    def forward(self, sign_logits, sign_labels):
+        loss = self.loss_fn(sign_logits, sign_labels)
+        return loss
 
 
 
@@ -1710,15 +1629,11 @@ class GracefulShutdown:
 
 
 def train_epoch_interruptible(model, train_loader, optimizer, criterion, device, epoch):
-    """Training with multi-task learning and top-k accuracy metrics."""
+    """Training with top-k accuracy metrics."""
     model.train()
 
     total_loss = 0.0
-    total_sign_loss = 0.0
-    total_hand_loss = 0.0
-
     topk_correct = {k: 0.0 for k in [1, 2, 3, 4, 5]}
-    hand_acc = 0.0
     num_batches = 0
     total_samples = 0
 
@@ -1726,53 +1641,40 @@ def train_epoch_interruptible(model, train_loader, optimizer, criterion, device,
     pbar = tqdm(train_loader, desc=f"[Epoch {epoch+1}] Train", leave=False)
 
     for batch in pbar:
-        landmarks, sign_labels, handedness_labels, padding_mask = batch
+        landmarks, sign_labels, padding_mask = batch
         landmarks = landmarks.to(device)
         sign_labels = sign_labels.to(device)
-        handedness_labels = handedness_labels.to(device)
         padding_mask = padding_mask.to(device)
 
         optimizer.zero_grad(set_to_none=True)
         with amp.autocast(device_type='cuda', enabled=(device.type == "cuda")):
-            sign_logits, handedness_logits = model(landmarks, src_key_padding_mask=padding_mask)
-            total_loss_batch, loss_sign, loss_hand = criterion(
-                sign_logits, handedness_logits, sign_labels, handedness_labels
-            )
+            sign_logits = model(landmarks, src_key_padding_mask=padding_mask)
+            loss = criterion(sign_logits, sign_labels)
 
-        scaler.scale(total_loss_batch).backward()
+        scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         scaler.step(optimizer)
         scaler.update()
 
         batch_size = sign_labels.size(0)
-        total_loss += total_loss_batch.item()
-        total_sign_loss += loss_sign.item()
-        total_hand_loss += loss_hand.item()
+        total_loss += loss.item()
 
         topk_batch_accs = compute_topk_accuracy(sign_logits, sign_labels, k_values=[1, 2, 3, 4, 5])
         for k, acc in topk_batch_accs.items():
             topk_correct[k] += acc * batch_size
 
         total_samples += batch_size
-
-        hand_preds = torch.argmax(handedness_logits, dim=1)
-        hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
-        hand_acc += hand_batch_acc
-
         num_batches += 1
+        
         pbar.set_postfix({
             'Loss': f'{total_loss/num_batches:.4f}',
             'Top1': f'{topk_correct[1]/total_samples:.4f}',
-            'Top5': f'{topk_correct[5]/total_samples:.4f}',
-            'Hand': f'{hand_acc/num_batches:.4f}'
+            'Top5': f'{topk_correct[5]/total_samples:.4f}'
         })
 
     avg_loss = total_loss / num_batches
-    avg_sign_loss = total_sign_loss / num_batches
-    avg_hand_loss = total_hand_loss / num_batches
-    avg_hand_acc = hand_acc / num_batches
     avg_topk_accs = {k: correct / total_samples for k, correct in topk_correct.items()}
-    return avg_loss, avg_topk_accs, avg_hand_acc, avg_sign_loss, avg_hand_loss
+    return avg_loss, avg_topk_accs
 
 
 
@@ -1781,13 +1683,9 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
     model.eval()
 
     total_loss = 0.0
-
     topk_correct = {k: 0.0 for k in [1, 2, 3, 4, 5]}
-    hand_acc = 0.0
     num_batches = 0
     total_samples = 0
-
-    handedness_distribution = {"LEFT": 0, "RIGHT": 0, "BOTH": 0, "NONE": 0}
 
     all_preds = []
     all_labels = []
@@ -1796,20 +1694,14 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
         pbar = tqdm(val_loader, desc="[Val]", leave=False)
 
         for batch in pbar:
-            landmarks, sign_labels, handedness_labels, padding_mask = batch
+            landmarks, sign_labels, padding_mask = batch
             landmarks = landmarks.to(device)
             sign_labels = sign_labels.to(device)
-            handedness_labels = handedness_labels.to(device)
             padding_mask = padding_mask.to(device)
 
-            with torch.no_grad():
-                sign_logits, handedness_logits = model(landmarks, src_key_padding_mask=padding_mask)
-
-            total_loss_batch, _, _ = criterion(
-                sign_logits, handedness_logits,
-                sign_labels, handedness_labels
-            )
-            total_loss += total_loss_batch.item()
+            sign_logits = model(landmarks, src_key_padding_mask=padding_mask)
+            loss = criterion(sign_logits, sign_labels)
+            total_loss += loss.item()
 
             batch_size = sign_labels.size(0)
             topk_batch_accs = compute_topk_accuracy(sign_logits, sign_labels, k_values=[1, 2, 3, 4, 5])
@@ -1819,15 +1711,6 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
             total_samples += batch_size
 
             sign_preds = torch.argmax(sign_logits, dim=1)
-
-            hand_preds = torch.argmax(handedness_logits, dim=1)
-            hand_batch_acc = (hand_preds == handedness_labels).float().mean().item()
-            hand_acc += hand_batch_acc
-
-            handedness_names = ["LEFT", "RIGHT", "BOTH", "NONE"]
-            for hand_label in handedness_labels.cpu().numpy():
-                handedness_distribution[handedness_names[hand_label]] += 1
-
             all_preds.extend(sign_preds.cpu().numpy())
             all_labels.extend(sign_labels.cpu().numpy())
 
@@ -1838,8 +1721,6 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
             })
 
     avg_loss = total_loss / num_batches
-    avg_hand_acc = hand_acc / num_batches
-
     avg_topk_accs = {k: correct / total_samples for k, correct in topk_correct.items()}
 
     all_preds = np.array(all_preds)
@@ -1882,8 +1763,7 @@ def validate_epoch(model, val_loader, criterion, device, idx_to_word):
         'recall_macro': float(recall_macro)
     }
 
-    return avg_loss, avg_topk_accs, avg_hand_acc, handedness_distribution, \
-           confusion_mat, class_metrics, all_preds, all_labels
+    return avg_loss, avg_topk_accs, confusion_mat, class_metrics, all_preds, all_labels
 
 
 def plot_confusion_matrix(confusion_mat, idx_to_word, save_path, top_n=50):
@@ -2519,16 +2399,16 @@ def main():
                 persistent_workers=True
             )
 
-            # STEP 6: Build model WITH RESIDUAL ATTENTION
-            print(f"\n[STEP 6] Building model with residual attention...")
+            # STEP 6: Build model
+            print(f"\n[STEP 6] Building model...")
 
 
-            model_raw = TransformerSignClassifierWithHandedness(
+            model_raw = TransformerSignClassifier(
                 input_size=input_size,
-                hidden_size=HIDDEN_SIZE,      # e.g. 96 or 128
+                hidden_size=HIDDEN_SIZE,
                 num_classes=num_classes,
-                num_layers=NUM_LAYERS,                 # 2–3 layers is a good start
-                num_heads=NUM_HEADS,                  # keep consistent with hidden_size (must divide)
+                num_layers=NUM_LAYERS,
+                num_heads=NUM_HEADS,
                 dim_feedforward=4 * HIDDEN_SIZE,
                 dropout_rate=DROPOUT_RATE,
                 attention_dropout=ATTENTION_DROPOUT,
@@ -2539,10 +2419,10 @@ def main():
                 print("Compiling model with torch.compile...")
                 model = torch.compile(model_raw, mode='max-autotune-no-cudagraphs', dynamic=True)
 
-            # STEP 7: Setup training WITH FOCAL LOSS
+            # STEP 7: Setup training
             print(f"\n[STEP 7] Setting up training...")
 
-            criterion = MultiTaskLoss(
+            criterion = SignLoss(
                 label_smoothing=0.05,
                 use_focal=(USE_FOCAL_LOSS and not USE_BALANCED_SOFTMAX),
                 class_weights=(class_weights if USE_CLASS_WEIGHTS and not USE_BALANCED_SOFTMAX else None),
@@ -2618,14 +2498,14 @@ def main():
                 if shutdown_handler.is_interrupted():
                     break
 
-                train_loss, train_topk_accs, train_hand_acc, train_sign_loss, train_hand_loss = train_epoch_interruptible(
+                train_loss, train_topk_accs = train_epoch_interruptible(
                     model, train_loader, optimizer, criterion, DEVICE, epoch
                 )
 
                 if shutdown_handler.is_interrupted():
                     break
 
-                val_loss, val_topk_accs, val_hand_acc, handedness_dist, confusion_mat, class_metrics, all_preds, all_labels = validate_epoch(
+                val_loss, val_topk_accs, confusion_mat, class_metrics, all_preds, all_labels = validate_epoch(
                     model, val_loader, criterion, DEVICE, new_idx_to_word
                 )
 
@@ -2696,7 +2576,7 @@ def main():
             if USE_SWA and epochs_trained > swa_start:
                 # Skipping update_bn since the model has no BatchNorm layers and forward needs lengths
                 swa_model.eval()
-                swa_val_loss, swa_val_topk, swa_hand_acc, *_ = validate_epoch(
+                swa_val_loss, swa_val_topk, *_ = validate_epoch(
                     swa_model, val_loader, criterion, DEVICE, new_idx_to_word
                 )
                 mlflow.log_metrics({

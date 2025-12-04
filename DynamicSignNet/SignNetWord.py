@@ -2183,7 +2183,7 @@ def main():
                 raise ValueError(f"No .npz files found in {data_dir_for_base}. Please check your data directory.")
 
             # Get sample to determine input size
-            sample_landmarks, _, _ = base_dataset[0]
+            sample_landmarks, _ = base_dataset[0]
             input_size = sample_landmarks.shape[-1]
 
             print(f"  Total samples in base: {len(base_dataset)}")

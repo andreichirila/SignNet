@@ -6,7 +6,7 @@ MAIN_MODEL_CONFIG = {
     'input_size': 1659,
     'hidden_size': 384,  # Compact: reduced from 512 to prevent overfitting
     'num_layers': 6,     # Compact: reduced from 6
-    'num_heads': 8,      # 32 dims per head (256/8)
+    'num_heads': 9,      # 32 dims per head (256/8)
     'dim_feedforward': 1536  # 4x hidden_size
 }
 

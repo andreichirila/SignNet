@@ -2124,7 +2124,7 @@ def main():
     OCCLUSION_PROBABILITY = 0.3  # 30% of samples get occlusion
 
     # MIRROR AUGMENTATION SETTINGS (NEW)
-    USE_MIRROR_AUGMENTATION = True
+    USE_MIRROR_AUGMENTATION = False
     MIRROR_PROBABILITY = 0.3  # 30% of samples get horizontal flip (reduced from 0.5)
 
     # LR SCHEDULER SETTINGS

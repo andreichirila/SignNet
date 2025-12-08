@@ -1328,9 +1328,47 @@ class OversampledDataset(RemappedDataset):
         return super().__getitem__(original_idx)
 
 
+class MultiScaleAttention(nn.Module):
+    """
+    Multi-Scale Attention for capturing features at different temporal scales.
+    Uses multiple attention heads with different groupings to learn multi-resolution representations.
+    """
+    def __init__(self, embed_dim, num_heads, num_scales=3, dropout=0.1):
+        super().__init__()
+        self.num_scales = num_scales
+        heads_per_scale = num_heads // num_scales
+        if heads_per_scale * num_scales != num_heads:
+            raise ValueError(f"num_heads ({num_heads}) must be divisible by num_scales ({num_scales})")
+        
+        self.attentions = nn.ModuleList([
+            nn.MultiheadAttention(embed_dim, heads_per_scale, dropout=dropout, batch_first=True)
+            for _ in range(num_scales)
+        ])
+        self.scale_combine = nn.Linear(embed_dim * num_scales, embed_dim)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, query, key=None, value=None, key_padding_mask=None):
+        if key is None:
+            key = query
+        if value is None:
+            value = query
+            
+        outputs = []
+        for attn in self.attentions:
+            out, _ = attn(query, key, value, key_padding_mask=key_padding_mask)
+            outputs.append(out)
+        
+        # Concatenate outputs from different scales
+        combined = torch.cat(outputs, dim=-1)  # (B, T, embed_dim * num_scales)
+        # Project back to embed_dim
+        result = self.scale_combine(combined)
+        result = self.dropout(result)
+        return result
+
+
 class TransformerSignClassifier(nn.Module):
     """
-    Transformer encoder model for sign language classification.
+    Transformer encoder model for sign language classification with multi-scale attention.
     Single-task model (sign classification only).
     """
     def __init__(
@@ -1358,20 +1396,27 @@ class TransformerSignClassifier(nn.Module):
         self.pos_embedding = nn.Parameter(torch.zeros(1, 2048, hidden_size))  # max_len=2048
         nn.init.normal_(self.pos_embedding, std=0.02)
 
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_size,
-            nhead=num_heads,
-            dim_feedforward=dim_feedforward,
-            dropout=attention_dropout,
-            batch_first=True,
-            activation="gelu",
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer,
-            num_layers=num_layers,
-        )
+        # Multi-scale attention layers
+        self.layers = nn.ModuleList([
+            nn.ModuleDict({
+                'multi_scale_attn': MultiScaleAttention(hidden_size, num_heads, num_scales=3, dropout=attention_dropout),
+                'feedforward': nn.Sequential(
+                    nn.Linear(hidden_size, dim_feedforward),
+                    nn.GELU(),
+                    nn.Dropout(dropout_rate),
+                    nn.Linear(dim_feedforward, hidden_size),
+                    nn.Dropout(dropout_rate)
+                ),
+                'norm1': nn.LayerNorm(hidden_size),
+                'norm2': nn.LayerNorm(hidden_size)
+            })
+            for _ in range(num_layers)
+        ])
 
         self.dropout = nn.Dropout(dropout_rate)
+
+        # Attention-based pooling for better sequence representation
+        self.pool_attn = nn.Linear(hidden_size, 1)
 
         # Sign classification head
         self.fc_sign = nn.Linear(hidden_size, num_classes)
@@ -1406,17 +1451,33 @@ class TransformerSignClassifier(nn.Module):
         pos_emb = self.pos_embedding[:, :T, :]  # (1, T, hidden)
         x = x + pos_emb
 
-        # Transformer encoder
-        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, T, hidden)
+        # Apply multi-scale transformer layers
+        for layer in self.layers:
+            # Multi-scale attention with residual connection
+            attn_out = layer['multi_scale_attn'](x, x, x, key_padding_mask=src_key_padding_mask)
+            x = layer['norm1'](x + attn_out)
+            
+            # Feedforward with residual connection
+            ff_out = layer['feedforward'](x)
+            x = layer['norm2'](x + ff_out)
 
-        # Global average pooling over time (mask-aware)
+        # Attention-based pooling over time (mask-aware)
         if src_key_padding_mask is not None:
-            mask = (~src_key_padding_mask).float().unsqueeze(-1)  # (B, T, 1)
-            x_masked = x * mask
-            lengths = mask.sum(dim=1).clamp(min=1.0)  # (B, 1)
-            pooled = x_masked.sum(dim=1) / lengths    # (B, hidden)
+            # Compute attention weights
+            attn_logits = self.pool_attn(x)  # (B, T, 1)
+            # Apply mask by setting masked positions to large negative value
+            attn_logits = attn_logits.masked_fill(src_key_padding_mask.unsqueeze(-1), float('-inf'))
+            attn_weights = F.softmax(attn_logits, dim=1)  # (B, T, 1)
+            
+            # Weighted sum
+            pooled = (x * attn_weights).sum(dim=1)  # (B, hidden)
         else:
-            pooled = x.mean(dim=1)  # (B, hidden)
+            # Compute attention weights for full sequence
+            attn_logits = self.pool_attn(x)  # (B, T, 1)
+            attn_weights = F.softmax(attn_logits, dim=1)  # (B, T, 1)
+            
+            # Weighted sum
+            pooled = (x * attn_weights).sum(dim=1)  # (B, hidden)
 
         pooled = self.dropout(pooled)
 

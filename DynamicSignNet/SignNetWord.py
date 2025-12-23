@@ -1849,7 +1849,7 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
     with open(metrics_json_path, 'w') as f:
         json.dump(class_metrics_table, f, indent=2)
 
-    mlflow.log_artifact(metrics_json_path)
+    # mlflow.log_artifact(metrics_json_path)
     os.remove(metrics_json_path)
 
     print(f"✓ Logged per-class metrics for epoch {epoch}")

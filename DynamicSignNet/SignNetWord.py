@@ -1109,15 +1109,15 @@ class MirrorAugmentation:
 
 class SignLanguageDataset(Dataset):
     """
-    Load preprocessed landmarks from NPZ files for sign language classification.
-    Supports enhanced features, skeletal/occlusion/mirror augmentations.
+    RAM-Cached Dataset for high-speed training.
+    Loads all .npz files into memory at startup to eliminate disk I/O bottlenecks.
     """
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
                  use_enhanced_features=False, include_accel=False,
                  include_bones=True, include_bone_velocity=False, class_counts=None,
                  use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5,
                  use_occlusion_augmentation=True, occlusion_probability=0.3,
-                 use_mirror_augmentation=True, mirror_probability=0.5):  # MIRROR AUGMENTATION
+                 use_mirror_augmentation=True, mirror_probability=0.5):
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
@@ -1129,6 +1129,7 @@ class SignLanguageDataset(Dataset):
         self.include_bone_velocity = include_bone_velocity
         self.class_counts = class_counts
 
+        # --- AUGMENTATION SETUP ---
         if augment:
             self.augmentation = TemporalAugmentation(
                 class_counts=class_counts,
@@ -1136,7 +1137,6 @@ class SignLanguageDataset(Dataset):
                 strength=0.5,
                 prob=augment_prob
             )
-            # Initialize skeletal augmentation with configurable parameters
             if use_skeletal_augmentation:
                 self.skeletal_augmentation = SkeletalAugmentation(
                     sigma=skeletal_sigma,
@@ -1147,20 +1147,18 @@ class SignLanguageDataset(Dataset):
             else:
                 self.skeletal_augmentation = None
             
-            # NEW: Initialize occlusion augmentation
             if use_occlusion_augmentation:
                 self.occlusion_augmentation = LandmarkOcclusionAugmentation(
-                    region_dropout_prob=0.20,  # Increased from 0.15 for stronger augmentation
-                    temporal_dropout_prob=0.15,  # Increased from 0.10
-                    max_temporal_dropout_frames=7,  # Increased from 5
-                    sub_region_dropout_prob=0.25,  # Increased from 0.20
+                    region_dropout_prob=0.20,
+                    temporal_dropout_prob=0.15,
+                    max_temporal_dropout_frames=7,
+                    sub_region_dropout_prob=0.25,
                     use_realistic_patterns=True,
                     probability=occlusion_probability
                 )
             else:
                 self.occlusion_augmentation = None
             
-            # NEW: Initialize mirror augmentation
             if use_mirror_augmentation:
                 self.mirror_augmentation = MirrorAugmentation(
                     probability=mirror_probability
@@ -1172,77 +1170,88 @@ class SignLanguageDataset(Dataset):
             self.occlusion_augmentation = None
             self.mirror_augmentation = None
 
-        if debug:
-            print(f"\n[DEBUG] SignLanguageDataset.__init__")
-            print(f"  NPZ directory: {self.npz_dir}")
-            print(f"  Total NPZ files found: {len(self.npz_files)}")
-            print(f"  Enhanced features: {use_enhanced_features}")
-            print(f"  Include acceleration: {include_accel}")
-            print(f"  Skeletal augmentation: {use_skeletal_augmentation if augment else 'N/A (augment=False)'}")
-            if use_skeletal_augmentation and augment:
-                print(f"    Sigma: {skeletal_sigma}, Probability: {skeletal_probability}")
-            print(f"  Occlusion augmentation: {use_occlusion_augmentation if augment else 'N/A (augment=False)'}")  # NEW
-            if use_occlusion_augmentation and augment:
-                print(f"    Probability: {occlusion_probability}")
-
+        # --- VOCABULARY SETUP ---
         if word_to_idx is None:
             self.word_to_idx = {}
-            for npz_file in self.npz_files:
-                try:
-                    data = np.load(npz_file, allow_pickle=True)
-                    gloss = data["glosses"][0]
-                    if gloss not in self.word_to_idx:
-                        self.word_to_idx[gloss] = len(self.word_to_idx)
-                except Exception as e:
-                    print(f"  [WARNING] Error loading {npz_file}: {e}")
+            # We will build vocab during the caching loop to avoid double-reading files
+            build_vocab = True
         else:
             self.word_to_idx = word_to_idx
+            build_vocab = False
+
+        # --- RAM CACHING LOOP ---
+        self.data_cache = []
+        print(f"\n[DATASET] Caching {len(self.npz_files)} files to RAM...")
+        
+        # Use tqdm to show progress
+        for npz_file in tqdm(self.npz_files, desc="Loading Data"):
+            try:
+                data = np.load(npz_file, allow_pickle=True)
+                
+                # Extract and cast to float32 immediately to save memory
+                landmarks = data["landmarks"].astype(np.float32)
+                
+                # Extract gloss
+                glosses = data["glosses"]
+                if len(glosses) > 0:
+                    gloss_item = glosses[0]
+                    if isinstance(gloss_item, (np.ndarray, np.str_, bytes)):
+                        gloss = str(gloss_item)
+                    else:
+                        gloss = gloss_item
+                else:
+                    gloss = "UNKNOWN"
+                
+                # Build vocab if needed
+                if build_vocab:
+                    if gloss not in self.word_to_idx:
+                        self.word_to_idx[gloss] = len(self.word_to_idx)
+                
+                label = self.word_to_idx.get(gloss, 0)
+                
+                # Store lightweight tuple in list
+                self.data_cache.append({
+                    "landmarks": landmarks,
+                    "label": label,
+                    "gloss": gloss
+                })
+                
+            except Exception as e:
+                print(f"  [WARNING] Skipping corrupt file {npz_file}: {e}")
 
         self.idx_to_word = {v: k for k, v in self.word_to_idx.items()}
 
         if debug:
-            print(f"  Total unique words: {len(self.word_to_idx)}")
-            print(f"  Word vocabulary: {list(self.word_to_idx.keys())[:10]}...")
+            print(f"\n[DEBUG] Dataset Loaded")
+            print(f"  Cached samples: {len(self.data_cache)}")
+            print(f"  Vocabulary size: {len(self.word_to_idx)}")
 
     def __len__(self):
-        return len(self.npz_files)
+        return len(self.data_cache)
 
     def __getitem__(self, idx):
-        npz_file = self.npz_files[idx]
-        data = np.load(npz_file, allow_pickle=True)
+        # FAST: Retrieve from RAM
+        item = self.data_cache[idx]
+        
+        # We must copy() because augmentations modify data in-place
+        # and we don't want to corrupt the cached original version
+        landmarks = item["landmarks"].copy()
+        label = item["label"]
+        gloss = item["gloss"]
 
-        # Load landmarks
-        landmarks = data["landmarks"].astype(np.float32)
-
-        # Load gloss and convert to string CORRECTLY
-        glosses = data["glosses"]
-        if len(glosses) > 0:
-            gloss_item = glosses[0]
-            if isinstance(gloss_item, (np.ndarray, np.str_, bytes)):
-                gloss = str(gloss_item)
-            else:
-                gloss = gloss_item
-        else:
-            gloss = "UNKNOWN"
-
-        label = self.word_to_idx.get(gloss, 0)
-
-        # Apply skeletal augmentation BEFORE feature engineering
-        # This perturbs raw landmarks while preserving bone lengths
+        # 1. Skeletal Augmentation (modifies raw coordinates)
         if self.augment and self.skeletal_augmentation is not None:
             landmarks = self.skeletal_augmentation(landmarks)
 
-        # NEW: Apply occlusion augmentation BEFORE feature engineering
-        # This simulates real-world tracking failures
+        # 2. Occlusion Augmentation (masks raw coordinates)
         if self.augment and self.occlusion_augmentation is not None:
             landmarks = self.occlusion_augmentation(landmarks)
 
-        # Apply mirror augmentation BEFORE feature engineering
-        # This flips the sign horizontally (swaps left/right hands)
+        # 3. Mirror Augmentation (flips raw coordinates)
         if self.augment and self.mirror_augmentation is not None:
             landmarks, _ = self.mirror_augmentation(landmarks, return_applied=True)
 
-        # APPLY FEATURE ENGINEERING IF ENABLED (with is_train flag)
+        # 4. Feature Engineering (calculates velocity/bones from modified landmarks)
         if self.use_enhanced_features:
             landmarks = EnhancedLandmarkFeatures.extract_all_features(
                 landmarks,
@@ -1253,7 +1262,7 @@ class SignLanguageDataset(Dataset):
                 include_bone_velocity=self.include_bone_velocity
             )
 
-        # Apply temporal augmentation AFTER feature engineering (class-aware)
+        # 5. Temporal Augmentation (modifies final feature vector)
         if self.augment:
             landmarks = self.augmentation(landmarks, class_label=gloss)
 
@@ -1328,47 +1337,9 @@ class OversampledDataset(RemappedDataset):
         return super().__getitem__(original_idx)
 
 
-class MultiScaleAttention(nn.Module):
-    """
-    Multi-Scale Attention for capturing features at different temporal scales.
-    Uses multiple attention heads with different groupings to learn multi-resolution representations.
-    """
-    def __init__(self, embed_dim, num_heads, num_scales=3, dropout=0.1):
-        super().__init__()
-        self.num_scales = num_scales
-        heads_per_scale = num_heads // num_scales
-        if heads_per_scale * num_scales != num_heads:
-            raise ValueError(f"num_heads ({num_heads}) must be divisible by num_scales ({num_scales})")
-        
-        self.attentions = nn.ModuleList([
-            nn.MultiheadAttention(embed_dim, heads_per_scale, dropout=dropout, batch_first=True)
-            for _ in range(num_scales)
-        ])
-        self.scale_combine = nn.Linear(embed_dim * num_scales, embed_dim)
-        self.dropout = nn.Dropout(dropout)
-
-    def forward(self, query, key=None, value=None, key_padding_mask=None):
-        if key is None:
-            key = query
-        if value is None:
-            value = query
-            
-        outputs = []
-        for attn in self.attentions:
-            out, _ = attn(query, key, value, key_padding_mask=key_padding_mask)
-            outputs.append(out)
-        
-        # Concatenate outputs from different scales
-        combined = torch.cat(outputs, dim=-1)  # (B, T, embed_dim * num_scales)
-        # Project back to embed_dim
-        result = self.scale_combine(combined)
-        result = self.dropout(result)
-        return result
-
-
 class TransformerSignClassifier(nn.Module):
     """
-    Transformer encoder model for sign language classification with multi-scale attention.
+    Transformer encoder model for sign language classification.
     Single-task model (sign classification only).
     """
     def __init__(
@@ -1396,27 +1367,20 @@ class TransformerSignClassifier(nn.Module):
         self.pos_embedding = nn.Parameter(torch.zeros(1, 2048, hidden_size))  # max_len=2048
         nn.init.normal_(self.pos_embedding, std=0.02)
 
-        # Multi-scale attention layers
-        self.layers = nn.ModuleList([
-            nn.ModuleDict({
-                'multi_scale_attn': MultiScaleAttention(hidden_size, num_heads, num_scales=3, dropout=attention_dropout),
-                'feedforward': nn.Sequential(
-                    nn.Linear(hidden_size, dim_feedforward),
-                    nn.GELU(),
-                    nn.Dropout(dropout_rate),
-                    nn.Linear(dim_feedforward, hidden_size),
-                    nn.Dropout(dropout_rate)
-                ),
-                'norm1': nn.LayerNorm(hidden_size),
-                'norm2': nn.LayerNorm(hidden_size)
-            })
-            for _ in range(num_layers)
-        ])
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=hidden_size,
+            nhead=num_heads,
+            dim_feedforward=dim_feedforward,
+            dropout=attention_dropout,
+            batch_first=True,
+            activation="gelu",
+        )
+        self.transformer_encoder = nn.TransformerEncoder(
+            encoder_layer,
+            num_layers=num_layers,
+        )
 
         self.dropout = nn.Dropout(dropout_rate)
-
-        # Attention-based pooling for better sequence representation
-        self.pool_attn = nn.Linear(hidden_size, 1)
 
         # Sign classification head
         self.fc_sign = nn.Linear(hidden_size, num_classes)
@@ -1451,33 +1415,17 @@ class TransformerSignClassifier(nn.Module):
         pos_emb = self.pos_embedding[:, :T, :]  # (1, T, hidden)
         x = x + pos_emb
 
-        # Apply multi-scale transformer layers
-        for layer in self.layers:
-            # Multi-scale attention with residual connection
-            attn_out = layer['multi_scale_attn'](x, x, x, key_padding_mask=src_key_padding_mask)
-            x = layer['norm1'](x + attn_out)
-            
-            # Feedforward with residual connection
-            ff_out = layer['feedforward'](x)
-            x = layer['norm2'](x + ff_out)
+        # Transformer encoder
+        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # (B, T, hidden)
 
-        # Attention-based pooling over time (mask-aware)
+        # Global average pooling over time (mask-aware)
         if src_key_padding_mask is not None:
-            # Compute attention weights
-            attn_logits = self.pool_attn(x)  # (B, T, 1)
-            # Apply mask by setting masked positions to large negative value
-            attn_logits = attn_logits.masked_fill(src_key_padding_mask.unsqueeze(-1), float('-inf'))
-            attn_weights = F.softmax(attn_logits, dim=1)  # (B, T, 1)
-            
-            # Weighted sum
-            pooled = (x * attn_weights).sum(dim=1)  # (B, hidden)
+            mask = (~src_key_padding_mask).float().unsqueeze(-1)  # (B, T, 1)
+            x_masked = x * mask
+            lengths = mask.sum(dim=1).clamp(min=1.0)  # (B, 1)
+            pooled = x_masked.sum(dim=1) / lengths    # (B, hidden)
         else:
-            # Compute attention weights for full sequence
-            attn_logits = self.pool_attn(x)  # (B, T, 1)
-            attn_weights = F.softmax(attn_logits, dim=1)  # (B, T, 1)
-            
-            # Weighted sum
-            pooled = (x * attn_weights).sum(dim=1)  # (B, hidden)
+            pooled = x.mean(dim=1)  # (B, hidden)
 
         pooled = self.dropout(pooled)
 
@@ -2092,7 +2040,7 @@ def main():
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999
 
-    BATCH_SIZE = 256   # Large batch for compact model
+    BATCH_SIZE = 64
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = MAIN_MODEL_CONFIG['hidden_size']
     DROPOUT_RATE = 0.65  # Increased from 0.60 to reduce 7% train-val gap
@@ -2104,7 +2052,7 @@ def main():
     AUGMENT_PROBABILITY = 0.75  # Increased from 0.7 for more augmentation
 
     # FEATURE ENGINEERING SETTINGS (NEW)
-    USE_ENHANCED_FEATURES = True  # Enable enhanced features
+    USE_ENHANCED_FEATURES = False  # Toggle feature engineering
     INCLUDE_ACCELERATION = True  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True
@@ -2124,14 +2072,14 @@ def main():
     OCCLUSION_PROBABILITY = 0.3  # 30% of samples get occlusion
 
     # MIRROR AUGMENTATION SETTINGS (NEW)
-    USE_MIRROR_AUGMENTATION = False
+    USE_MIRROR_AUGMENTATION = True
     MIRROR_PROBABILITY = 0.3  # 30% of samples get horizontal flip (reduced from 0.5)
 
     # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
-    WARMUP_EPOCHS = 30    # Longer warmup for 4000 epochs
-    NUM_EPOCHS = 4000     # Extended training
+    WARMUP_EPOCHS = 20
+    NUM_EPOCHS = 500
     BASE_LR = 1e-4
     MIN_LR = 1e-7         # Lower floor for long training
     T_0 = 100             # Longer first cycle for 4000 epochs
@@ -2429,7 +2377,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     sampler=train_sampler,
                     collate_fn=PadCollate(),
-                    num_workers=4,
+                    num_workers=2,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2443,7 +2391,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     shuffle=True,
                     collate_fn=PadCollate(),
-                    num_workers=4,
+                    num_workers=2,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2454,7 +2402,7 @@ def main():
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 collate_fn=PadCollate(),
-                num_workers=4,
+                num_workers=2,
                 pin_memory=True,
                 prefetch_factor=4,
                 persistent_workers=True
@@ -2588,7 +2536,7 @@ def main():
                     best_epoch = epoch
                     best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_enhanced.pth")
                     torch.save(model.state_dict(), best_model_path)
-                    # log_class_metrics_to_mlflow(class_metrics, epoch)
+                    log_class_metrics_to_mlflow(class_metrics, epoch)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)

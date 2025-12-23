@@ -2377,7 +2377,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     sampler=train_sampler,
                     collate_fn=PadCollate(),
-                    num_workers=2,
+                    num_workers=4,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2391,7 +2391,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     shuffle=True,
                     collate_fn=PadCollate(),
-                    num_workers=2,
+                    num_workers=4,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2402,7 +2402,7 @@ def main():
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 collate_fn=PadCollate(),
-                num_workers=2,
+                num_workers=4,
                 pin_memory=True,
                 prefetch_factor=4,
                 persistent_workers=True

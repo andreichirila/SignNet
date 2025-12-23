@@ -2034,7 +2034,7 @@ def main():
     MIRROR_PROBABILITY = 0.3  # 30% of samples get horizontal flip (reduced from 0.5)
 
     # LR SCHEDULER SETTINGS
-    USE_EARLY_STOPPING = True
+    USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 20
     NUM_EPOCHS = 600

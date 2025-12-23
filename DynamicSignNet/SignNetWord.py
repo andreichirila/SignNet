@@ -2377,7 +2377,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     sampler=train_sampler,
                     collate_fn=PadCollate(),
-                    num_workers=2,
+                    num_workers=0,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2391,7 +2391,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     shuffle=True,
                     collate_fn=PadCollate(),
-                    num_workers=2,
+                    num_workers=0,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2402,7 +2402,7 @@ def main():
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 collate_fn=PadCollate(),
-                num_workers=2,
+                num_workers=0,
                 pin_memory=True,
                 prefetch_factor=4,
                 persistent_workers=True
@@ -2536,7 +2536,7 @@ def main():
                     best_epoch = epoch
                     best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_enhanced.pth")
                     torch.save(model.state_dict(), best_model_path)
-                    log_class_metrics_to_mlflow(class_metrics, epoch)
+                    # log_class_metrics_to_mlflow(class_metrics, epoch)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)

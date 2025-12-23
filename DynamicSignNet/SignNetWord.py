@@ -513,195 +513,34 @@ class TemporalAugmentation:
 
 class SkeletalAugmentation:
     """
-    Skeleton-Based Augmentation with Bone Length Preservation.
-    
-    Applies Gaussian noise to joint positions while maintaining anatomically
-    correct bone lengths through kinematic constraints.
-    
-    Expected input layout from landmark_extraction.py:
-    [hands (126), face (1434), pose (99)] = 1659 features
-    - Hands: 2 hands × 21 landmarks × 3 coords = 126
-    - Face: 478 landmarks × 3 coords = 1434
-    - Pose: 33 landmarks × 3 coords = 99
+    Vectorized Skeletal Augmentation (High Speed).
+    Applies noise to the entire sequence array at once, skipping empty (zero) frames.
     """
-    
-    # Hand bone connections (landmark indices within a 21-point hand)
-    HAND_BONES = [
-        # Thumb
-        (0, 1), (1, 2), (2, 3), (3, 4),
-        # Index finger
-        (0, 5), (5, 6), (6, 7), (7, 8),
-        # Middle finger
-        (0, 9), (9, 10), (10, 11), (11, 12),
-        # Ring finger
-        (0, 13), (13, 14), (14, 15), (15, 16),
-        # Pinky
-        (0, 17), (17, 18), (18, 19), (19, 20)
-    ]
-    
-    # Pose bone connections (upper body - indices within 33-point pose)
-    POSE_BONES = [
-        # Torso
-        (11, 12),  # Shoulders
-        (11, 23), (12, 24),  # Shoulder to hip
-        (23, 24),  # Hips
-        # Left arm
-        (11, 13), (13, 15),  # Shoulder -> Elbow -> Wrist
-        # Right arm
-        (12, 14), (14, 16),  # Shoulder -> Elbow -> Wrist
-    ]
-    
-    # Flat feature offsets matching landmark_extraction.py layout
-    # Layout: [hands (126), face (1434), pose (99)]
-    LEFT_HAND_OFFSET = 0       # Left hand: features 0-62 (21 landmarks × 3)
-    RIGHT_HAND_OFFSET = 63     # Right hand: features 63-125 (21 landmarks × 3)
-    FACE_OFFSET = 126          # Face: features 126-1559 (478 landmarks × 3)
-    POSE_OFFSET = 1560         # Pose: features 1560-1658 (33 landmarks × 3)
-    
-    def __init__(self, 
-                 sigma: float = 0.015, 
-                 probability: float = 0.5,
-                 preserve_bones: bool = True,
-                 num_iterations: int = 3):
-        """
-        Args:
-            sigma: Standard deviation of Gaussian noise (0.01-0.02 recommended)
-            probability: Probability of applying augmentation
-            preserve_bones: Whether to enforce bone length constraints after perturbation
-            num_iterations: Number of iterations for bone length correction
-        """
+    def __init__(self, sigma=0.015, probability=0.5, preserve_bones=False, num_iterations=0):
+        # Note: preserve_bones and num_iterations are kept in __init__ for 
+        # backward compatibility with your existing code calls, but they are 
+        # ignored in this fast implementation to ensure speed.
         self.sigma = sigma
         self.probability = probability
-        self.preserve_bones = preserve_bones
-        self.num_iterations = num_iterations
-    
-    def _extract_landmarks_3d(self, frame: np.ndarray, offset: int, num_landmarks: int) -> np.ndarray:
-        """Extract landmarks as (num_landmarks, 3) from flat feature vector."""
-        start = offset
-        end = offset + num_landmarks * 3
-        if end > len(frame):
-            return np.zeros((num_landmarks, 3), dtype=frame.dtype)
-        return frame[start:end].reshape(num_landmarks, 3)
-    
-    def _insert_landmarks_3d(self, frame: np.ndarray, landmarks_3d: np.ndarray, offset: int) -> np.ndarray:
-        """Insert (num_landmarks, 3) back into flat feature vector."""
-        num_landmarks = landmarks_3d.shape[0]
-        start = offset
-        end = offset + num_landmarks * 3
-        if end <= len(frame):
-            frame[start:end] = landmarks_3d.flatten()
-        return frame
-    
-    def _compute_bone_lengths(self, landmarks: np.ndarray, bone_connections: list) -> dict:
-        """Compute original bone lengths for preservation."""
-        bone_lengths = {}
-        for i, (start_idx, end_idx) in enumerate(bone_connections):
-            if start_idx < len(landmarks) and end_idx < len(landmarks):
-                bone_vec = landmarks[end_idx] - landmarks[start_idx]
-                bone_lengths[i] = np.linalg.norm(bone_vec)
-        return bone_lengths
-    
-    def _apply_bone_length_constraints(self, 
-                                        landmarks: np.ndarray, 
-                                        original_lengths: dict, 
-                                        bone_connections: list) -> np.ndarray:
+
+    def __call__(self, landmarks):
         """
-        Iteratively adjust joint positions to preserve bone lengths.
-        Uses a simple relaxation approach (FABRIK-inspired).
-        """
-        landmarks = landmarks.copy()
-        
-        for _ in range(self.num_iterations):
-            for bone_idx, (start_idx, end_idx) in enumerate(bone_connections):
-                if bone_idx not in original_lengths:
-                    continue
-                if start_idx >= len(landmarks) or end_idx >= len(landmarks):
-                    continue
-                    
-                target_length = original_lengths[bone_idx]
-                if target_length < 1e-6:  # Skip zero-length bones
-                    continue
-                
-                # Current bone vector
-                bone_vec = landmarks[end_idx] - landmarks[start_idx]
-                current_length = np.linalg.norm(bone_vec)
-                
-                if current_length < 1e-6:
-                    continue
-                
-                # Scale factor to restore original length
-                scale = target_length / current_length
-                
-                # Adjust both points symmetrically
-                correction = bone_vec * (scale - 1.0) * 0.5
-                landmarks[start_idx] -= correction
-                landmarks[end_idx] += correction
-        
-        return landmarks
-    
-    def _perturb_landmarks(self, landmarks: np.ndarray, bone_connections: list) -> np.ndarray:
-        """Apply Gaussian perturbation and optionally preserve bone lengths."""
-        if len(landmarks) == 0:
-            return landmarks
-        
-        # Store original bone lengths
-        original_lengths = self._compute_bone_lengths(landmarks, bone_connections)
-        
-        # Apply Gaussian noise
-        noise = np.random.normal(0, self.sigma, landmarks.shape).astype(landmarks.dtype)
-        perturbed = landmarks + noise
-        
-        # Restore bone lengths if enabled
-        if self.preserve_bones and len(original_lengths) > 0:
-            perturbed = self._apply_bone_length_constraints(
-                perturbed, original_lengths, bone_connections
-            )
-        
-        return perturbed
-    
-    def __call__(self, landmarks: np.ndarray) -> np.ndarray:
-        """
-        Apply skeletal augmentation to a sequence of landmarks.
-        
         Args:
-            landmarks: Shape (T, F) where T is time and F is flattened features (1659)
-                       Layout: [hands (126), face (1434), pose (99)]
-        
-        Returns:
-            Augmented landmarks with same shape
+            landmarks: (T, F) np.ndarray
         """
         if np.random.random() > self.probability:
             return landmarks
+
+        # Create a mask for non-zero values (so we don't add noise to missing data/padding)
+        # We assume if a coordinate is exactly 0.0, it's missing/padded.
+        mask = (landmarks != 0.0)
         
-        landmarks = landmarks.copy()
-        T, F = landmarks.shape
+        # Generate noise for the whole matrix at once (The "Vectorized" part)
+        noise = np.random.normal(0, self.sigma, landmarks.shape).astype(np.float32)
         
-        # Only process if we have the expected feature size
-        if F < 1659:
-            return landmarks
-        
-        for t in range(T):
-            frame = landmarks[t].copy()
-            
-            # Process left hand (21 landmarks starting at offset 0)
-            left_hand = self._extract_landmarks_3d(frame, self.LEFT_HAND_OFFSET, 21)
-            if not np.allclose(left_hand, 0):  # Only if hand detected
-                left_perturbed = self._perturb_landmarks(left_hand, self.HAND_BONES)
-                frame = self._insert_landmarks_3d(frame, left_perturbed, self.LEFT_HAND_OFFSET)
-            
-            # Process right hand (21 landmarks starting at offset 63)
-            right_hand = self._extract_landmarks_3d(frame, self.RIGHT_HAND_OFFSET, 21)
-            if not np.allclose(right_hand, 0):  # Only if hand detected
-                right_perturbed = self._perturb_landmarks(right_hand, self.HAND_BONES)
-                frame = self._insert_landmarks_3d(frame, right_perturbed, self.RIGHT_HAND_OFFSET)
-            
-            # Process pose (33 landmarks starting at offset 1560)
-            pose = self._extract_landmarks_3d(frame, self.POSE_OFFSET, 33)
-            if not np.allclose(pose, 0):  # Only if pose detected
-                pose_perturbed = self._perturb_landmarks(pose, self.POSE_BONES)
-                frame = self._insert_landmarks_3d(frame, pose_perturbed, self.POSE_OFFSET)
-            
-            landmarks[t] = frame
+        # Apply noise only where data exists
+        # In-place modification is fastest
+        landmarks[mask] += noise[mask]
         
         return landmarks
     

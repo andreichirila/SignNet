@@ -1360,24 +1360,28 @@ class TransformerSignClassifier(nn.Module):
         self.num_classes = num_classes
         self.debug = debug
 
+        # --- 1. Internal Feature Extractor (GPU Optimized) ---
+        # We hardcode these to match your main() settings for consistency
         self.feature_extractor = GPUFeatureExtractor(
             include_accel=False, 
             include_bones=True, 
             include_bone_velocity=False
         )
-
-        # CALCULATE NEW INPUT SIZE AUTOMATICALLY
-        # Raw(1659) + Vel(1659) + Bones(67*3=201) + HandDist(1) ≈ 3520
-        # We process a dummy input to get the exact size
+        
+        # --- 2. Auto-Calculate Input Size ---
+        # Run a dummy forward pass to see how big the features actually are
+        # (Raw 1659 + Velocity 1659 + Bones 150 + HandDist 1 = 3469)
         with torch.no_grad():
             dummy = torch.zeros(1, 10, input_size)
             out_dummy = self.feature_extractor(dummy)
             real_input_size = out_dummy.shape[-1]
             
-        print(f"[MODEL] Auto-calculated input size with features: {real_input_size}")
+        if debug:
+            print(f"[MODEL] Auto-calculated input size: {input_size} -> {real_input_size}")
 
-        # Project input features to model dimension (hidden_size)
-        self.input_proj = nn.Linear(input_size, hidden_size)
+        # --- 3. Project to Hidden Size ---
+        # CRITICAL FIX: Use real_input_size (3469), not input_size (1659)
+        self.input_proj = nn.Linear(real_input_size, hidden_size)
 
         # Positional encoding (learned)
         self.pos_embedding = nn.Parameter(torch.zeros(1, 2048, hidden_size))  # max_len=2048
@@ -1403,7 +1407,7 @@ class TransformerSignClassifier(nn.Module):
 
         if debug:
             print(f"[DEBUG] TransformerSignClassifier initialized")
-            print(f"  Input size: {input_size}")
+            print(f"  Input size: {input_size} (Expanded to {real_input_size})")
             print(f"  Hidden size: {hidden_size}")
             print(f"  Num classes: {num_classes}")
             print(f"  Num heads: {num_heads}")
@@ -1422,10 +1426,11 @@ class TransformerSignClassifier(nn.Module):
         """
         B, T, D = landmarks.shape
 
-        # Project to hidden_size
+        # 1. Extract Features on GPU (1659 -> 3469)
         x = self.feature_extractor(landmarks)
 
-        x = self.input_proj(x)
+        # 2. Project to hidden_size (3469 -> hidden)
+        x = self.input_proj(x)  # (B, T, hidden)
 
         # Add positional embeddings (crop to current length)
         if T > self.pos_embedding.size(1):
@@ -1450,7 +1455,6 @@ class TransformerSignClassifier(nn.Module):
         sign_logits = self.fc_sign(pooled)
 
         return sign_logits
-
 
 
 class PadCollate:

@@ -1360,6 +1360,22 @@ class TransformerSignClassifier(nn.Module):
         self.num_classes = num_classes
         self.debug = debug
 
+        self.feature_extractor = GPUFeatureExtractor(
+            include_accel=False, 
+            include_bones=True, 
+            include_bone_velocity=False
+        )
+
+        # CALCULATE NEW INPUT SIZE AUTOMATICALLY
+        # Raw(1659) + Vel(1659) + Bones(67*3=201) + HandDist(1) ≈ 3520
+        # We process a dummy input to get the exact size
+        with torch.no_grad():
+            dummy = torch.zeros(1, 10, input_size)
+            out_dummy = self.feature_extractor(dummy)
+            real_input_size = out_dummy.shape[-1]
+            
+        print(f"[MODEL] Auto-calculated input size with features: {real_input_size}")
+
         # Project input features to model dimension (hidden_size)
         self.input_proj = nn.Linear(input_size, hidden_size)
 
@@ -1407,7 +1423,9 @@ class TransformerSignClassifier(nn.Module):
         B, T, D = landmarks.shape
 
         # Project to hidden_size
-        x = self.input_proj(landmarks)  # (B, T, hidden)
+        x = self.feature_extractor(landmarks)
+
+        x = self.input_proj(x)
 
         # Add positional embeddings (crop to current length)
         if T > self.pos_embedding.size(1):
@@ -2004,6 +2022,103 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
         return train_indices, val_indices, test_indices, dataset_train, dataset_val, dataset_test
 
 
+class GPUFeatureExtractor(nn.Module):
+    """
+    Computes enhanced features (Velocity, Bones) on the GPU batch-wise.
+    Replaces the CPU-based EnhancedLandmarkFeatures.
+    """
+    def __init__(self, include_accel=False, include_bones=True, include_bone_velocity=False):
+        super().__init__()
+        self.include_accel = include_accel
+        self.include_bones = include_bones
+        self.include_bone_velocity = include_bone_velocity
+        
+        # Pre-compute edges for bones (same as before)
+        self.register_buffer('bone_pairs', self._get_bone_pairs())
+
+    def _get_bone_pairs(self):
+        """Standard MediaPipe connections translated to tensor indices"""
+        # Hand edges
+        hand_chains = [
+            [0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [0, 9, 10, 11, 12], 
+            [0, 13, 14, 15, 16], [0, 17, 18, 19, 20]
+        ]
+        edges = []
+        # Left Hand (0-20) & Right Hand (21-41)
+        for base in [0, 21]:
+            for chain in hand_chains:
+                for a, b in zip(chain[:-1], chain[1:]):
+                    edges.append([base + a, base + b])
+        
+        # Pose edges (offset 520)
+        pose_base = 520
+        pose_pairs = [
+            (11, 13), (13, 15), (12, 14), (14, 16), (11, 12),
+            (11, 23), (12, 24), (23, 24), (0, 11), (0, 12)
+        ]
+        for a, b in pose_pairs:
+            edges.append([pose_base + a, pose_base + b])
+            
+        return torch.tensor(edges, dtype=torch.long) # (Num_Bones, 2)
+
+    def forward(self, x):
+        """
+        Args:
+            x: Raw landmarks (Batch, Time, 1659)
+        Returns:
+            Enhanced features (Batch, Time, New_Dim)
+        """
+        B, T, D = x.shape
+        
+        # 1. Reshape to (Batch, Time, 553, 3)
+        # We assume standard 1659 input. If padding was used, this might need safety checks.
+        landmarks_3d = x.view(B, T, 553, 3)
+        
+        features = [x] # Start with raw
+        
+        # 2. Velocity
+        # (B, T, 553, 3)
+        velocity = torch.zeros_like(landmarks_3d)
+        velocity[:, 1:] = (landmarks_3d[:, 1:] - landmarks_3d[:, :-1]) * 25.0 # FPS
+        features.append(velocity.view(B, T, -1))
+        
+        # 3. Acceleration (Optional)
+        if self.include_accel:
+            accel = torch.zeros_like(velocity)
+            accel[:, 1:] = (velocity[:, 1:] - velocity[:, :-1]) * 25.0
+            features.append(accel.view(B, T, -1))
+            
+        # 4. Bones (Optional)
+        if self.include_bones:
+            # Gather parent/child points: (Num_Bones, 2) -> (B, T, Num_Bones, 3)
+            parents = landmarks_3d[:, :, self.bone_pairs[:, 0]]
+            children = landmarks_3d[:, :, self.bone_pairs[:, 1]]
+            
+            # Compute vectors
+            bone_vecs = children - parents
+            
+            # Normalize direction (unit vectors)
+            bone_lens = torch.norm(bone_vecs, dim=-1, keepdim=True).clamp(min=1e-6)
+            unit_bones = bone_vecs / bone_lens
+            
+            # Flatten
+            features.append(unit_bones.view(B, T, -1))
+            
+            # Bone Velocity (Optional)
+            if self.include_bone_velocity:
+                bone_vel = torch.zeros_like(unit_bones)
+                bone_vel[:, 1:] = (unit_bones[:, 1:] - unit_bones[:, :-1]) * 25.0
+                features.append(bone_vel.view(B, T, -1))
+
+        # 5. Hand Distances (Simple summary feature)
+        # Left Hand Center (0-21), Right Hand Center (21-42)
+        lh_center = landmarks_3d[:, :, 0:21].mean(dim=2)
+        rh_center = landmarks_3d[:, :, 21:42].mean(dim=2)
+        hand_dist = torch.norm(lh_center - rh_center, dim=-1, keepdim=True) # (B, T, 1)
+        features.append(hand_dist)
+
+        # Concatenate all
+        return torch.cat(features, dim=-1)
 
 
 def main():
@@ -2052,7 +2167,7 @@ def main():
     AUGMENT_PROBABILITY = 0.75  # Increased from 0.7 for more augmentation
 
     # FEATURE ENGINEERING SETTINGS (NEW)
-    USE_ENHANCED_FEATURES = True  # Toggle feature engineering
+    USE_ENHANCED_FEATURES = False  # Toggle feature engineering
     INCLUDE_ACCELERATION = False  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True

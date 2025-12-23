@@ -1141,7 +1141,7 @@ class SignLanguageDataset(Dataset):
                 self.skeletal_augmentation = SkeletalAugmentation(
                     sigma=skeletal_sigma,
                     probability=skeletal_probability,
-                    preserve_bones=True,
+                    preserve_bones=False,
                     num_iterations=3
                 )
             else:
@@ -2496,9 +2496,10 @@ def main():
                     batch_size=BATCH_SIZE,
                     sampler=train_sampler,
                     collate_fn=PadCollate(),
-                    num_workers=0,
+                    num_workers=6,
                     pin_memory=True,
-                    #persistent_workers=True
+                    prefetch_factor=4,
+                    persistent_workers=True
                 )
             else:
                 train_subset = OversampledDataset(dataset_train, train_indices, old_to_new_idx, oversample_config=OVERSAMPLE_CONFIG)
@@ -2509,10 +2510,10 @@ def main():
                     batch_size=BATCH_SIZE,
                     shuffle=True,
                     collate_fn=PadCollate(),
-                    num_workers=0,
+                    num_workers=6,
                     pin_memory=True,
-                    #prefetch_factor=4,
-                    #persistent_workers=True
+                    prefetch_factor=4,
+                    persistent_workers=True
                 )
 
             val_loader = DataLoader(
@@ -2520,10 +2521,10 @@ def main():
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 collate_fn=PadCollate(),
-                num_workers=0,
+                num_workers=6,
                 pin_memory=True,
-                #prefetch_factor=4,
-                #persistent_workers=True
+                prefetch_factor=4,
+                persistent_workers=True
             )
 
             # STEP 6: Build model

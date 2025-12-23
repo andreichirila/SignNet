@@ -2001,11 +2001,11 @@ def main():
     BATCH_SIZE = 64
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = MAIN_MODEL_CONFIG['hidden_size']
-    DROPOUT_RATE = 0.65  # Increased from 0.60 to reduce 7% train-val gap
+    DROPOUT_RATE = 0.5
     NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
     NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
     ATTENTION_DROPOUT = 0.2  # Increased from 0.30 for stronger regularization
-    WEIGHT_DECAY = 1e-3  # Keep strong L2 regularization
+    WEIGHT_DECAY = 1e-2
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.75  # Increased from 0.7 for more augmentation
 
@@ -2040,7 +2040,7 @@ def main():
     NUM_EPOCHS = 2000
     BASE_LR = 1e-4
     MIN_LR = 1e-7         # Lower floor for long training
-    T_0 = 100             # Longer first cycle for 4000 epochs
+    T_0 = 200
     T_MULT = 2            # Multiply cycle length after each restart
 
     # Check if we are in expert training mode

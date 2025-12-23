@@ -3,11 +3,11 @@
 # ==================== MODEL CONFIGURATIONS ====================
 # Must match your training config exactly
 MAIN_MODEL_CONFIG = {
-    'input_size': 1659,
-    'hidden_size': 256,  # Compact: reduced from 512 to prevent overfitting
-    'num_layers': 4,     # Compact: reduced from 6
-    'num_heads': 8,      # 32 dims per head (256/8)
-    'dim_feedforward': 1024  # 4x hidden_size
+    'input_size': 3469,      # (Auto-calculated, but good to note)
+    'hidden_size': 384,      # Increase from 256 (Relieves the bottleneck)
+    'num_layers': 6,         # Increase from 4 (Better temporal reasoning)
+    'num_heads': 8,          # Keep 8 (48 dims per head is healthy)
+    'dim_feedforward': 1536  # 4x hidden_size (Standard Transformer ratio)
 }
 
 EXPERT_MODEL_CONFIG = {

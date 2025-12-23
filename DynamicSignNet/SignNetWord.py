@@ -2005,7 +2005,7 @@ def main():
     NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
     NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
     ATTENTION_DROPOUT = 0.2  # Increased from 0.30 for stronger regularization
-    WEIGHT_DECAY = 1e-2
+    WEIGHT_DECAY = 0.05
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.75  # Increased from 0.7 for more augmentation
 
@@ -2394,7 +2394,7 @@ def main():
             print(f"\n[STEP 7] Setting up training...")
 
             criterion = SignLoss(
-                label_smoothing=0.05,
+                label_smoothing=0.15,
                 use_focal=(USE_FOCAL_LOSS and not USE_BALANCED_SOFTMAX),
                 class_weights=(class_weights if USE_CLASS_WEIGHTS and not USE_BALANCED_SOFTMAX else None),
                 use_balanced_softmax=USE_BALANCED_SOFTMAX,
@@ -2437,7 +2437,7 @@ def main():
             )
 
             early_stopping = EarlyStopping(
-                patience=15,
+                patience=100,
                 min_delta=0.0005,
                 metric="val_acc",
                 mode="max"

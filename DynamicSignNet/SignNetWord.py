@@ -2079,7 +2079,7 @@ def main():
     USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 20
-    NUM_EPOCHS = 500
+    NUM_EPOCHS = 2000
     BASE_LR = 1e-4
     MIN_LR = 1e-7         # Lower floor for long training
     T_0 = 100             # Longer first cycle for 4000 epochs
@@ -2377,7 +2377,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     sampler=train_sampler,
                     collate_fn=PadCollate(),
-                    num_workers=4,
+                    num_workers=6,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2391,7 +2391,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     shuffle=True,
                     collate_fn=PadCollate(),
-                    num_workers=4,
+                    num_workers=6,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2402,7 +2402,7 @@ def main():
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 collate_fn=PadCollate(),
-                num_workers=4,
+                num_workers=6,
                 pin_memory=True,
                 prefetch_factor=4,
                 persistent_workers=True

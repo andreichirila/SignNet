@@ -2543,9 +2543,13 @@ def main():
                 debug=True
             ).to(DEVICE)
 
-            if hasattr(torch, 'compile'):
-                print("Compiling model with torch.compile...")
-                model = torch.compile(model_raw, mode='max-autotune-no-cudagraphs', dynamic=True)
+            # if hasattr(torch, 'compile'):
+            #     print("Compiling model with torch.compile...")
+            #     model = torch.compile(model_raw, ...) 
+            # ---------------------------------------
+
+            # Use the raw model directly
+            model = model_raw
 
             # STEP 7: Setup training
             print(f"\n[STEP 7] Setting up training...")

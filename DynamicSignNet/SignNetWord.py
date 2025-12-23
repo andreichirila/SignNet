@@ -2034,10 +2034,10 @@ def main():
     MIRROR_PROBABILITY = 0.3  # 30% of samples get horizontal flip (reduced from 0.5)
 
     # LR SCHEDULER SETTINGS
-    USE_EARLY_STOPPING = False
+    USE_EARLY_STOPPING = True
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
     WARMUP_EPOCHS = 20
-    NUM_EPOCHS = 2000
+    NUM_EPOCHS = 600
     BASE_LR = 1e-4
     MIN_LR = 1e-7         # Lower floor for long training
     T_0 = 200
@@ -2423,11 +2423,10 @@ def main():
                     eta_min=MIN_LR
                 )
             else:
-                restart_scheduler = CosineAnnealingWarmRestarts(
+                restart_scheduler = CosineAnnealingLR(
                     optimizer,
-                    T_0=T_0,              # First cycle: 25 epochs
-                    T_mult=T_MULT,        # Next cycles: 40, 80, ... epochs
-                    eta_min=MIN_LR        # Minimum LR at cycle end
+                    T_max=NUM_EPOCHS - WARMUP_EPOCHS, 
+                    eta_min=MIN_LR
                 )
 
             from torch.optim.lr_scheduler import SequentialLR
@@ -2438,7 +2437,7 @@ def main():
             )
 
             early_stopping = EarlyStopping(
-                patience=35,
+                patience=15,
                 min_delta=0.0005,
                 metric="val_acc",
                 mode="max"

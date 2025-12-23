@@ -2379,7 +2379,7 @@ def main():
                     collate_fn=PadCollate(),
                     num_workers=0,
                     pin_memory=True,
-                    prefetch_factor=4,
+                    prefetch_factor=None,
                     persistent_workers=True
                 )
             else:
@@ -2393,7 +2393,7 @@ def main():
                     collate_fn=PadCollate(),
                     num_workers=0,
                     pin_memory=True,
-                    prefetch_factor=4,
+                    prefetch_factor=None,
                     persistent_workers=True
                 )
 
@@ -2404,7 +2404,7 @@ def main():
                 collate_fn=PadCollate(),
                 num_workers=0,
                 pin_memory=True,
-                prefetch_factor=4,
+                prefetch_factor=None,
                 persistent_workers=True
             )
 

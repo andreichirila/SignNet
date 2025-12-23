@@ -2046,25 +2046,25 @@ def main():
     DROPOUT_RATE = 0.65  # Increased from 0.60 to reduce 7% train-val gap
     NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
     NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
-    ATTENTION_DROPOUT = 0.35  # Increased from 0.30 for stronger regularization
-    WEIGHT_DECAY = 1e-2  # Keep strong L2 regularization
+    ATTENTION_DROPOUT = 0.2  # Increased from 0.30 for stronger regularization
+    WEIGHT_DECAY = 1e-3  # Keep strong L2 regularization
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.75  # Increased from 0.7 for more augmentation
 
     # FEATURE ENGINEERING SETTINGS (NEW)
-    USE_ENHANCED_FEATURES = False  # Toggle feature engineering
-    INCLUDE_ACCELERATION = True  # Toggle acceleration features
+    USE_ENHANCED_FEATURES = True  # Toggle feature engineering
+    INCLUDE_ACCELERATION = False  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True
     if USE_BALANCED_SOFTMAX:
         USE_WEIGHTED_SAMPLER = False
         USE_CLASS_WEIGHTS = False
-    INCLUDE_BONES = False                 # NEW
+    INCLUDE_BONES = True                 # NEW
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
     # SKELETAL AUGMENTATION SETTINGS
-    USE_SKELETAL_AUGMENTATION = False
-    SKELETAL_SIGMA = 0.025          # Increased from 0.015 (more noise)
+    USE_SKELETAL_AUGMENTATION = True
+    SKELETAL_SIGMA = 0.015          # Increased from 0.015 (more noise)
     SKELETAL_PROBABILITY = 0.7      # Increased from 0.5 (more samples augmented)
 
     # OCCLUSION AUGMENTATION SETTINGS (NEW)

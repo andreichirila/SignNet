@@ -2380,7 +2380,7 @@ def main():
                     num_workers=0,
                     pin_memory=True,
                     prefetch_factor=None,
-                    persistent_workers=True
+                    persistent_workers=False
                 )
             else:
                 train_subset = OversampledDataset(dataset_train, train_indices, old_to_new_idx, oversample_config=OVERSAMPLE_CONFIG)
@@ -2394,7 +2394,7 @@ def main():
                     num_workers=0,
                     pin_memory=True,
                     prefetch_factor=None,
-                    persistent_workers=True
+                    persistent_workers=False
                 )
 
             val_loader = DataLoader(
@@ -2405,7 +2405,7 @@ def main():
                 num_workers=0,
                 pin_memory=True,
                 prefetch_factor=None,
-                persistent_workers=True
+                persistent_workers=False
             )
 
             # STEP 6: Build model

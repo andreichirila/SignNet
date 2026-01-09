@@ -1,9 +1,30 @@
 \chapter{Einleitung}
+
 \section{Thematik und Relevanz}
-Die Kommunikation zwischen Gehörlosen und Hörenden stellt im Alltag oft eine Barriere dar, da nur ein Bruchteil der hörenden Bevölkerung die Gebärdensprache beherrscht. Automatische Gebärdenspracherkennung (Automatic Sign Language Recognition, ASLR) bietet das Potenzial, diese Lücke durch Echtzeit-Übersetzungssysteme zu schließen.
+Gebärdensprachen sind vollwertige, natürliche Sprachen mit eigener Grammatik und Syntax, die von Millionen gehörloser und schwerhöriger Menschen weltweit als primäres Kommunikationsmittel verwendet werden. Die Kommunikation zwischen Gehörlosen und Hörenden stellt jedoch im Alltag oft eine erhebliche Barriere dar, da nur ein Bruchteil der hörenden Bevölkerung die Gebärdensprache beherrscht. Trotz der signifikanten Anzahl an Gebärdensprachnutzern fehlt es an barrierefreien Kommunikationslösungen in vielen Bereichen des täglichen Lebens – von öffentlichen Einrichtungen über Gesundheitswesen bis hin zu Bildungseinrichtungen.
+
+Die automatische Erkennung von Gebärdensprach-Glossen (Automatic Sign Language Recognition, ASLR) bietet das Potenzial, diese Kommunikationslücke durch technologiegestützte Übersetzungssysteme zu schließen. Fortschritte in den Bereichen Computer Vision und Deep Learning haben in den letzten Jahren neue Möglichkeiten eröffnet, visuelle Informationen aus Videosequenzen zu extrahieren und zu klassifizieren.
 
 \section{Problemstellung}
-Die Komplexität der Gebärdensprache liegt in ihrer Multimodalität: Informationen werden simultan über Handbewegungen, Handformen, Körperhaltung und Mimik übertragen. Technisch resultiert dies in hochdimensionalen Datenströmen. Zudem leiden aktuelle Datensätze wie WLASL unter einer "Long-Tail"-Verteilung, bei der wenige Begriffe sehr häufig und die Mehrheit der Begriffe nur sehr selten vorkommen, was das Training tiefer neuronaler Netze erschwert.
+Die Komplexität der Gebärdensprache liegt in ihrer Multimodalität: Informationen werden simultan über Handbewegungen, Handformen, Körperhaltung und Mimik übertragen. Eine einzelne Gebärde kann aus der Kombination von bis zu fünf simultanen Parametern bestehen – Handform, Handstellung, Ausführungsstelle, Bewegung und non-manuelle Komponenten wie Gesichtsausdruck.
+
+Technisch resultiert dies in hochdimensionalen, zeitlich variablen Datenströmen. Die Extraktion relevanter Merkmale aus Videosequenzen erfordert sowohl räumliche als auch temporale Modellierung. Während ein einzelnes Videoframe bereits hunderte von Landmark-Koordinaten (Hände, Körper, Gesicht) enthält, müssen diese über variable Sequenzlängen hinweg analysiert werden.
+
+Zudem leiden aktuelle Datensätze unter einer ausgeprägten \textit{Long-Tail}-Verteilung: Wenige häufige Begriffe dominieren, während die Mehrheit der Gebärden nur selten vorkommt. Diese Klassenungleichheit erschwert das Training tiefer neuronaler Netze erheblich, da Modelle dazu tendieren, seltene Klassen zu vernachlässigen.
+
+Ein weiteres Problem ist die hohe Ähnlichkeit zwischen bestimmten Gebärdengruppen. Richtungsangaben (Nord, Süd, Ost, West) oder semantisch verwandte Begriffe (verschiedene Wetterphänomene) unterscheiden sich oft nur in subtilen Bewegungsdetails, was zu systematischen Verwechslungen führt.
 
 \section{Zielsetzung}
-Das Hauptziel dieser Arbeit ist die Implementierung und Evaluation des "SignNet"-Systems. Dabei soll geprüft werden, inwieweit eine hierarchische Architektur (Inference-Routing zu Experten-Modellen) die Verwechslungsgefahr zwischen ähnlichen Gebärden (z.B. Richtungsangaben oder Wetterbegriffe) reduzieren kann. Es soll eine Lösung entwickelt werden, die technologische Komplexität mit praktischer Anwendbarkeit verbindet.
+Das Hauptziel dieser Arbeit ist die Entwicklung, Implementierung und Evaluation des \textit{SignNet}-Systems zur Erkennung von Gebärdensprach-Glossen. Im Zentrum steht die Frage, ob ein hierarchisches Klassifikationsverfahren die Erkennungsgenauigkeit gegenüber einem monolithischen Ansatz verbessern kann.
+
+Konkret werden folgende Ziele verfolgt:
+
+\begin{itemize}
+    \item \textbf{Entwicklung einer robusten Feature-Extraction-Pipeline}: Extraktion von Körper-, Hand- und Gesichtslandmarks mittels MediaPipe und deren Aufbereitung für maschinelles Lernen.
+    \item \textbf{Implementierung eines Transformer-basierten Klassifikators}: Nutzung von Attention-Mechanismen zur Modellierung temporaler Abhängigkeiten in Gebärdensequenzen.
+    \item \textbf{Hierarchische Expertenmodelle}: Entwicklung spezialisierter Submodelle für systematisch verwechselte Gebärdengruppen (z.B. Richtungsangaben, Wetterbegriffe).
+    \item \textbf{Umgang mit Klassenungleichheit}: Evaluation verschiedener Strategien wie Focal Loss, Balanced Softmax und Oversampling.
+    \item \textbf{Evaluation auf dem Phoenix-Datensatz}: Quantitative Bewertung der Erkennungsleistung auf einem etablierten Benchmark für Deutsche Gebärdensprache.
+\end{itemize}
+
+Die Arbeit soll demonstrieren, inwieweit aktuelle Deep-Learning-Methoden für die praktische Anwendung in der Gebärdenerkennung geeignet sind und welche architektonischen Entscheidungen die Klassifikationsgenauigkeit beeinflussen.

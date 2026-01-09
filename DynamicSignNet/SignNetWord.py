@@ -2001,7 +2001,7 @@ def main():
     BATCH_SIZE = 64
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = MAIN_MODEL_CONFIG['hidden_size']
-    DROPOUT_RATE = 0.6
+    DROPOUT_RATE = 0.5
     NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
     NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
     ATTENTION_DROPOUT = 0.2  # Increased from 0.30 for stronger regularization
@@ -2022,7 +2022,7 @@ def main():
 
     # SKELETAL AUGMENTATION SETTINGS
     USE_SKELETAL_AUGMENTATION = True
-    SKELETAL_SIGMA = 0.025          # Increased from 0.015 (more noise)
+    SKELETAL_SIGMA = 0.02          # Increased from 0.015 (more noise)
     SKELETAL_PROBABILITY = 0.8      # Increased from 0.5 (more samples augmented)
 
     # OCCLUSION AUGMENTATION SETTINGS (NEW)
@@ -2346,7 +2346,7 @@ def main():
             print(f"\n[STEP 7] Setting up training...")
 
             criterion = SignLoss(
-                label_smoothing=0.2,
+                label_smoothing=0.1,
                 use_focal=(USE_FOCAL_LOSS and not USE_BALANCED_SOFTMAX),
                 class_weights=(class_weights if USE_CLASS_WEIGHTS and not USE_BALANCED_SOFTMAX else None),
                 use_balanced_softmax=USE_BALANCED_SOFTMAX,

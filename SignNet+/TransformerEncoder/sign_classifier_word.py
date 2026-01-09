@@ -1765,7 +1765,7 @@ def main():
 
     USE_EARLY_STOPPING = True  # Enable early stopping for smaller model
     WARMUP_EPOCHS = 10
-    NUM_EPOCHS = 1000  # Reduced from 400 (smaller model converges faster)
+    NUM_EPOCHS = 1000
     BASE_LR = 1e-4
     MIN_LR = 1e-6
     T_0 = 20  # Adjusted for shorter training

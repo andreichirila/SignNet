@@ -1,0 +1,22 @@
+\chapter{Fazit und Ausblick}
+\label{ch:conclusion}
+
+\section{Zusammenfassung der Ergebnisse}
+Das Ziel dieser Arbeit war die Entwicklung und Evaluation eines robusten Systems zur isolierten Gebärdenspracherkennung unter Berücksichtigung extremer Klassenimbalance und visueller Ähnlichkeit. Mit dem Entwurf des \textit{SignNet}-Frameworks wurde eine Architektur implementiert, die einen Transformer-Encoder mit einem hierarchischen Experten-System kombiniert. Die Ergebnisse zeigen, dass die Basis-Genauigkeit von 52,34\,\% durch das gezielte Routing an spezialisierte Experten-Modelle auf 54,82\,\% gesteigert werden konnte. Dies belegt, dass eine hierarchische Unterteilung des Vokabulars in Konfusionsgruppen ein effektives Mittel zur Disambiguierung visuell ähnlicher Gebärden darstellt.
+
+\section{Technische Würdigung}
+Die technische Komplexität der Arbeit lag insbesondere in der Verarbeitung hochdimensionaler Landmark-Daten und der Bekämpfung von Overfitting bei gleichzeitigem Vorliegen eines "Long-Tail"-Datensatzes.
+\begin{itemize}
+    \item \textbf{Feature Engineering:} Die explizite Modellierung von Geschwindigkeit und Knochenvektoren erwies sich als entscheidend, um über statische Posen hinausgehende Bewegungsmuster zu erfassen.
+    \item \textbf{Imbalance-Handling:} Durch den Einsatz von \textit{Balanced Softmax Loss} und \textit{Oversampling}-Strategien konnte eine stabilere Klassifizierung seltener Klassen erreicht werden, obgleich die Dominanz der "Head-Klassen" eine fundamentale Herausforderung bleibt.
+    \item \textbf{Hierarchische Inferenz:} Das entwickelte System zur Inferenz-Steuerung erlaubt eine granulare Kontrolle über die Vorhersagequalität, stößt jedoch bei der automatischen Trigger-Logik ohne dediziertes Gating-Netzwerk an Effizienzgrenzen.
+\end{itemize}
+
+\section{Ausblick}
+Zukünftige Forschungsansätze sollten die Integration von multimodalen Datenströmen (z.\,B. Kombination von Skelett-Daten mit optischem Fluss aus RGB-Videos) untersuchen, um die Erkennungsrate weiter zu stabilisieren. Zudem bietet die Erweiterung des hierarchischen Systems um ein lernbares Gating-Modell das Potenzial, die Routing-Präzision zu erhöhen und so die theoretische Performance der Experten-Modelle voll auszuschöpfen.
+
+\section{Persönliches Fazit}
+\label{sec:personal_conclusion}
+Der Prozess der Erarbeitung dieser Abschlussarbeit war geprägt von der Auseinandersetzung mit realen, unvollständigen Daten. Eine zentrale Erkenntnis war, dass die Qualität der Vorverarbeitung (Landmark-Extraktion und Ausrichtung) oft einen größeren Einfluss auf die finale Accuracy hat als die bloße Komplexität der Modellarchitektur.
+
+Besonders lehrreich war die Implementierung des \textit{MisclassificationAnalyzer}, der ein tiefes Verständnis für die semantische und visuelle Nähe von Gebärden ermöglichte. Im Rückblick würde ich der initialen Datenbereinigung und der Korrektur von Gloss-Label-Inkonsistenzen noch mehr Zeit widmen, da diese, wie auch in der Literatur beschrieben, die Basis für jede erfolgreiche Klassifizierung bilden. Die Arbeit mit modernen Deep-Learning-Frameworks und die Optimierung von Transformer-Modellen haben meine technischen Kompetenzen im Bereich \textit{Computer Vision} und \textit{Sequence Modeling} maßgeblich erweitert.

@@ -1,0 +1,28 @@
+\chapter{Stand der Technik}
+\label{ch:state_of_the_art}
+
+Die automatische Gebärdenspracherkennung (Isolated Sign Recognition) hat in den letzten Jahrzehnten eine signifikante Entwicklung durchlaufen, die von handgesteuerten statistischen Modellen hin zu komplexen Deep-Learning-Architekturen reicht \cite{1}.
+
+\section{Traditionelle Methoden und frühes Machine Learning}
+Vor dem Aufkommen von Deep Learning basierten Systeme primär auf handgefertigten Merkmalen (Hand-crafted Features), wie etwa relativen Handpositionen oder Distanzen zwischen Händen und spezifischen Körperteilen \cite{46}. Zur Klassifizierung dieser raumzeitlichen Informationen wurden klassische Algorithmen wie Hidden Markov Models (HMMs), Conditional Random Fields (CRFs), Support Vector Machines (SVMs) und k-Nearest Neighbors (kNNs) eingesetzt \cite{35, 46}. Ein wesentlicher Nachteil dieser Ansätze war jedoch ihre begrenzte Generalisierungsfähigkeit und Skalierbarkeit aufgrund der zugrunde liegenden Gaußschen Verteilungsannahmen \cite{47}.
+
+\section{RGB-basierte Deep-Learning-Ansätze}
+Mit dem Durchbruch neuronaler Netze verschob sich der Fokus auf die Extraktion von Merkmalen direkt aus Videodaten.
+
+\subsection{CNN-RNN Architekturen}
+Frühe Deep-Learning-Modelle kombinierten Convolutional Neural Networks (CNNs) zur Extraktion räumlicher Merkmale in jedem Frame mit rekurrenten Netzwerken wie LSTMs oder Bidirectional LSTMs (Bi-LSTMs), um die zeitliche Dynamik der Gebärden zu erfassen \cite{53, 69}.
+
+\subsection{3D-CNNs und zeitliche Modellierung}
+Um kurzfristige zeitliche Abhängigkeiten besser abzubilden, wurden 3D-CNNs eingeführt, wobei das Inflated 3D-CNN (I3D) zu einer der am häufigsten verwendeten Architekturen wurde \cite{55, 57}. Diese Modelle verbessern das Lernen zeitlicher Merkmale, weisen jedoch Schwächen bei der Erfassung langfristiger Abhängigkeiten auf, da diese oft auf die finale globale Durchschnittspooling-Stufe beschränkt sind \cite{58}.
+
+\subsection{Transformer und Attention-Mechanismen}
+In jüngster Zeit werden vermehrt Transformer-Modelle eingesetzt, die den Self-Attention-Mechanismus nutzen \cite{61}. Diese haben den Vorteil, raumzeitliche Abhängigkeiten über das gesamte Video hinweg zu erfassen \cite{63}. Ein kritischer Faktor bleibt hierbei jedoch der hohe Bedarf an großen Mengen an Trainingsdaten, die in der Gebärdensprachforschung oft nur begrenzt zur Verfügung stehen \cite{64}.
+
+\section{Skelettbasierte Ansätze}
+Anstatt rohe RGB-Frames zu verwenden, nutzen skelettbasierte Methoden extrahierte Keypoints von Gelenken, um das Lernen auf relevante Bewegungsinformationen zu fokussieren und Hintergrundrauschen zu eliminieren \cite{66, 67}.
+
+\subsection{Graph Convolutional Networks (GCN)}
+Das Spatial-Temporal Graph Convolutional Network (ST-GCN) markierte einen wichtigen Fortschritt bei der Modellierung der raumzeitlichen Dynamik von Skeletten \cite{71}. Frühe GCN-Modelle verarbeiteten Informationen jedoch oft nur entlang der natürlichen biologischen Verbindungen des menschlichen Körpers, wodurch Interaktionen zwischen nicht direkt verbundenen Punkten (z. B. zwischen den beiden Händen) weitgehend ignoriert wurden \cite{72, 73}. Neuere Ansätze versuchen dies durch adaptive Graphen oder Multi-Stream-Modelle zu kompensieren \cite{75, 76}.
+
+\section{Multimodale Fusion und aktuelle Entwicklungen}
+Der aktuelle Stand der Technik wird durch die Kombination mehrerer Merkmalsströme (Multi-feature Combination) definiert. Hierbei werden Informationen aus RGB-Videos, extrahierten 2D/3D-Skeletten, optischem Fluss und Tiefendaten fusioniert \cite{81, 83}. Moderne Frameworks erreichen so Top-1-Genauigkeiten von über 77\% auf modifizierten WLASL-Datensätzen, indem sie bidirektionale Datenströme und eine explizite Erkennung der Start- und Endframes von Gebärden nutzen \cite{15, 16, 39, 40}. Insbesondere die Konsistenz der Gloss-Labeling-Konventionen (1-zu-1-Korrespondenz zwischen Gebärde und Textlabel) hat sich als entscheidend für die Leistungsfähigkeit der Modelle erwiesen \cite{14, 95}.

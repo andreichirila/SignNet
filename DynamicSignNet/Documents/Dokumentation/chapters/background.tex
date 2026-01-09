@@ -1,0 +1,51 @@
+\chapter{Hintergrund}
+\label{ch:background}
+
+Dieses Kapitel beschreibt die theoretischen Grundlagen der Landmark-basierten Merkmalsrepräsentation sowie die mathematischen Herausforderungen des verwendeten Datensatzes.
+
+\section{Geometrische Repräsentation der Landmarks}
+Die Grundlage der Merkmalsextraktion bildet das \textit{MediaPipe Holistic} Framework. Jeder Videoframe wird in eine Menge von $N$ Schlüsselpunkten (Landmarks) transformiert. Ein einzelner Landmark $\mathbf{p}_i$ wird im dreidimensionalen Raum wie folgt repräsentiert:
+
+\begin{equation}
+    \mathbf{p}_i = (x_i, y_i, z_i)
+\end{equation}
+
+Hierbei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die Tiefe relativ zum Hüftmittelpunkt darstellt. Die Gesamtzahl der Features pro Frame ergibt sich aus der Summe der Landmarks für Gesicht ($478$), Pose ($33$) und beide Hände ($2 \times 21$):
+
+\begin{equation}
+    F_{\text{total}} = (478 + 33 + 42) \cdot 3 = 1659
+\end{equation}
+
+
+
+\section{Skelett-Geometrie und Bone-Vektoren}
+Um die Handform und Körperhaltung unabhängig von der absoluten Position im Kamerabild zu beschreiben, werden \textit{Bone-Vektoren} berechnet. Ein Bone-Vektor $\vec{b}_{ij}$ beschreibt die Verbindung zwischen zwei anatomisch benachbarten Landmarks $i$ und $j$:
+
+\begin{equation}
+    \vec{b}_{ij} = \mathbf{p}_j - \mathbf{p}_i = (x_j - x_i, y_j - y_i, z_j - z_i)
+\end{equation}
+
+
+
+Diese Vektoren bilden die Grundlage für die Berechnung von Gelenkwinkeln $\theta$, die besonders robust gegenüber Skalierung (z.\,B. unterschiedliche Abstände zur Kamera) sind. Der Winkel zwischen zwei verbundenen Knochensegmenten $\vec{u}$ and $\vec{v}$ wird über das Skalarprodukt bestimmt:
+
+\begin{equation}
+    \theta = \arccos\left( \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\| \|\vec{v}\|} \right)
+\end{equation}
+
+\section{Statistische Analyse der Datenverteilung}
+Ein zentrales Problem der Gebärdenspracherkennung ist die Modellierung seltener Begriffe. Der verwendete Phoenix-Datensatz folgt einer \textit{Power-Law}-Verteilung (Long-Tail).
+
+\subsection{Klassenimbalance und Gini-Koeffizient}
+Die Ungleichverteilung der Stichproben pro Klasse lässt sich durch den Gini-Koeffizienten $G$ quantifizieren. Für eine Menge von $n$ Klassen mit den jeweiligen Stichprobenanzahlen $x_i$ gilt:
+
+\begin{equation}
+    G = \frac{\sum_{i=1}^n \sum_{j=1}^n |x_i - x_j|}{2n \sum_{i=1}^n x_i}
+\end{equation}
+
+In den vorliegenden Daten wurde ein Gini-Koeffizient von $1,350$ ermittelt. Ein Wert $> 1$ in dieser spezifischen Metrik-Variante deutet auf eine extreme Konzentration der Daten auf wenige "Head-Klassen" hin, während die Mehrheit der Klassen ("Tail") unterrepräsentiert ist.
+
+
+
+\subsection{Visuelle Konfusion}
+Zusätzlich zur statistischen Imbalance erschwert die \textit{phonologische Ähnlichkeit} die Klassifikation. Viele Gebärden unterscheiden sich lediglich in einem der Parameter (Handform, Ort, Bewegung). In dieser Arbeit werden solche Gruppen als \textit{Konfusionscluster} definiert, welche die Implementierung der hierarchischen Experten-Modelle in \texttt{SignNetInference.py} motivieren.

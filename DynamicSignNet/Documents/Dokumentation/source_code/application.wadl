@@ -1,0 +1,639 @@
+<application xmlns="http://wadl.dev.java.net/2009/02">
+    <doc xmlns:jersey="http://jersey.java.net/"
+        jersey:generatedBy="Jersey: 1.12 02/15/2012 04:51 PM"/>
+    <grammars>
+        <include href="application.wadl/xsd0.xsd">
+            <doc title="Generated" xml:lang="en"/>
+        </include>
+    </grammars>
+    <resources base="http://localhost:9090/eHealthServer/resources/">
+        <resource path="/patients/{pid}/medicalrecord">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="pid" style="template"
+                type="xs:int"/>
+            <method id="getMedicalRecordXML" name="GET">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getMedicalRecordHTML" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="setMedicalRecordURL" name="PUT">
+                <request>
+                    <representation mediaType="application/x-www-form-urlencoded">
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="age" style="query"
+                            type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="weight"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="drugs"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="alcohol"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="nicotin"
+                            style="query" type="xs:string"/>
+                    </representation>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="setMedicalRecordXML" name="PUT">
+                <request>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="text/xml"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="/patients/{pid}/medicalrecord/preconditions">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="pid" style="template"
+                type="xs:int"/>
+            <method id="getListOfPreconditionsXML" name="GET">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getListOfPreconditionsHTML" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="addPreconditionURL" name="POST">
+                <request>
+                    <representation mediaType="application/x-www-form-urlencoded">
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="type" style="query"
+                            type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="start"
+                            style="query" type="xs:string"/>
+                    </representation>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="addPreconditionXML" name="POST">
+                <request>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="text/xml"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="delPrecondition" name="DELETE">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="type" style="query"
+                        type="xs:string"/>
+                </request>
+                <response>
+                    <representation mediaType="text/plain"/>
+                </response>
+            </method>
+            <method id="delPreconditionXML" name="DELETE">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="type" style="query"
+                        type="xs:string"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:precondition"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="/patients/{pid}/medicalrecord/consultations/{consultationID}">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="pid" style="template"
+                type="xs:int"/>
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="consultationID"
+                style="template" type="xs:string"/>
+            <method id="getConsultationXML" name="GET">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getConsultationHTML" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="delConsultation" name="DELETE">
+                <response>
+                    <representation mediaType="text/plain"/>
+                </response>
+            </method>
+            <method id="delConsultationXML" name="DELETE">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="/patients/{pid}/medicalrecord/medications">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="pid" style="template"
+                type="xs:int"/>
+            <method id="getMedicationXML" name="GET">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getMedicationURL" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="addMedicationURL" name="POST">
+                <request>
+                    <representation mediaType="application/x-www-form-urlencoded">
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="typeOfMedication"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="unitOfMeasure"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="quantity"
+                            style="query" type="xs:double"/>
+                    </representation>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="addMedicationXML" name="POST">
+                <request>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="text/xml"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="delMedication" name="DELETE">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="type" style="query"
+                        type="xs:string"/>
+                </request>
+                <response>
+                    <representation mediaType="text/plain"/>
+                </response>
+            </method>
+            <method id="delMedicationXML" name="DELETE">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="type" style="query"
+                        type="xs:string"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medication"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="/caregivers">
+            <method id="getListOfCaregiverXML" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName" style="query"
+                        type="xs:string" default=""/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                        style="query" type="xs:string" default=""/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getListOfCaregiverHTML" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName" style="query"
+                        type="xs:string" default=""/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                        style="query" type="xs:string" default=""/>
+                </request>
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="addCaregiverURL" name="POST">
+                <request>
+                    <representation mediaType="application/x-www-form-urlencoded">
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="speciality"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="username"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="password"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="monthsOfExperience"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="street"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="streetNumber"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="city" style="query"
+                            type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="zip" style="query"
+                            type="xs:string"/>
+                    </representation>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="addCaregiverXML" name="POST">
+                <request>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="text/xml"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="/caregivers/{cid}">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="cid" style="template"
+                type="xs:int"/>
+            <method id="getCaregiverXML" name="GET">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getCareGiverHTML" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="setCaregiverURL" name="PUT">
+                <request>
+                    <representation mediaType="application/x-www-form-urlencoded">
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="speciality"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="monthsOfExperience"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="street"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="streetNumber"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="city" style="query"
+                            type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="zip" style="query"
+                            type="xs:string"/>
+                    </representation>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="setCaregiverXML" name="PUT">
+                <request>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="text/xml"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:caregiver"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="delCaregiver" name="DELETE">
+                <response>
+                    <representation mediaType="text/plain"/>
+                </response>
+            </method>
+            <method id="delCaregiverXML" name="DELETE">
+                <response>
+                    <representation mediaType="application/xml"/>
+                    <representation mediaType="application/json"/>
+                    <representation mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+<resource path="/">
+    <method id="getOverviewXML" name="GET">
+        <response>
+            <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem" mediaType="application/xml"/>
+            <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem" mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getOverviewHTML" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+    </method>
+</resource>
+        <resource path="/patients">
+            <method id="getListOfPatientsXML" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName" style="query"
+                        type="xs:string" default=""/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                        style="query" type="xs:string" default=""/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:healthSystem"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getListOfPatientsHTML" name="GET">
+                <request>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName" style="query"
+                        type="xs:string" default=""/>
+                    <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                        style="query" type="xs:string" default=""/>
+                </request>
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="addPatientURL" name="POST">
+                <request>
+                    <representation mediaType="application/x-www-form-urlencoded">
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="gender"
+                            style="query" type="xs:string" default="unknown"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="insuranceCompany"
+                            style="query" type="xs:int" default="0"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="street"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="streetNumber"
+                            style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="city" style="query"
+                            type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="zip" style="query"
+                            type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="age" style="query"
+                            type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="weight"
+                            style="query" type="xs:int"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="drugs"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="alcohol"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="nicotin"
+                            style="query" type="xs:string"/>
+                    </representation>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="addPatientXML" name="POST">
+                <request>
+                    <representation mediaType="multipart/mixed"/>
+                </request>
+                <response>
+                    <representation mediaType="application/xml"/>
+                    <representation mediaType="application/json"/>
+                    <representation mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="/patients/{pid}">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="pid" style="template"
+                type="xs:int"/>
+            <method id="getPatientXML" name="GET">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getPatientHTML" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="setPatientURL" name="PUT">
+                <request>
+                    <representation mediaType="application/x-www-form-urlencoded">
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="firstName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="lastName"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="gender"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="insuranceCompany"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="street"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="streetNumber"
+                            style="query" type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="city" style="query"
+                            type="xs:string"/>
+                        <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="zip" style="query"
+                            type="xs:string"/>
+                    </representation>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="setPatientXML" name="PUT">
+                <request>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="text/xml"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="delPatient" name="DELETE">
+                <response>
+                    <representation mediaType="text/plain"/>
+                </response>
+            </method>
+            <method id="delPatientXML" name="DELETE">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:patient"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+        <resource path="/patients/{pid}/medicalrecord/consultations">
+            <param xmlns:xs="http://www.w3.org/2001/XMLSchema" name="pid" style="template"
+                type="xs:int"/>
+            <method id="getListOfConsultationXML" name="GET">
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:medicalRecord"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+            <method id="getListOfConsultationHTML" name="GET">
+                <response>
+                    <representation mediaType="text/html"/>
+                </response>
+            </method>
+            <method id="addConsultationXML" name="POST">
+                <request>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="text/xml"/>
+                </request>
+                <response>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/xml"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="application/json"/>
+                    <representation xmlns:ns2="http://eHealth" element="ns2:consultation"
+                        mediaType="text/xml"/>
+                </response>
+            </method>
+        </resource>
+    </resources>
+</application>

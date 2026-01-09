@@ -1,0 +1,247 @@
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Préambule LaTeX défiini par Andreas Ruppen pour le groupe Génie Logiciel
+% de l'Université de Fribourg (Suisse).
+% Dernière mise à jour le 13/08/2013
+
+% L'utilisation de ce fichier est autorisée pourvu que l'on mentionne le nom
+% de l'auteur ainsi que les remerciements
+
+% Pour obtenir le document final
+% soit compiler avec latexmk
+% latexmk -pvc -pdf main.tex
+%
+% soit compiler a la main:
+% compiler une fois avec LaTeX
+% compiler une deuxième fois avec LaTeX
+% faire un makeindex
+% faire un bibtex
+% compiler une troisième fois avec LaTeX
+% compiler une quatrième fois avec LaTeX (?)
+% afficher le dvi et éventuellement le transformer en ps et/ou/puis en pdf
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\ProvidesPackage{softeng}
+
+\usepackage[german]{babel}
+\usepackage[utf8x]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[table]{xcolor}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{moreverb}
+\usepackage{longtable}
+\usepackage{shapepar}
+\usepackage{fancybox}
+\usepackage{fancyhdr}
+\usepackage{minitoc}
+\usepackage{patchapter}
+\usepackage{tabularx}
+\usepackage{layout}
+\usepackage{calc}
+\usepackage{ifthen}
+\usepackage{paralist}
+\usepackage{setspace}
+\usepackage{listings}
+\usepackage{color}
+\usepackage{multirow}
+\usepackage{ifpdf}
+\usepackage{amssymb}
+\usepackage{wasysym}
+\usepackage{makeidx}
+\usepackage{dirtree}
+\usepackage{scrhack}
+\usepackage{float}
+\usepackage{acronym}
+\usepackage{multibib}
+
+\let\ifpdf\relax
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% SETTING THE MARGINS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+% Setting the margins manually: top=2.2cm, bottom=3.6cm, right=left=3.2cm
+% reduced to 70% the margins will be: left=right=2.2cm, top=1.5cm, bottom=2.4cm
+\newlength{\mysidemargin} % same at left and right
+\newlength{\mytopmargin}
+\newlength{\mybottommargin}
+
+% Change these settings to change the margins
+\setlength{\mysidemargin}{72pt}   %=2.54cm but gives 2.8cm on the printed paper!!
+\setlength{\mytopmargin}{36pt}    %=1.27cm but gives 2.0cm on the printed paper!!
+\setlength{\mybottommargin}{72pt} %=2.54cm but gives 3.0cm on the printed paper!!
+
+%%% use margin settings to set width variables
+% 72pt = 1inch = 2.54cm
+\setlength{\hoffset}{0pt} \setlength{\marginparsep}{10pt}
+\setlength{\marginparwidth}{\mysidemargin - \marginparsep}
+\setlength{\oddsidemargin}{\mysidemargin - \hoffset - 72pt}
+\setlength{\evensidemargin}{\oddsidemargin}
+\setlength{\textwidth}{\paperwidth -\mysidemargin*2}
+\setlength{\headwidth}{\textwidth}
+
+%%% use margin settings to set height variables
+\setlength{\voffset}{0pt} \setlength{\topmargin}{\mytopmargin -
+\voffset - 72pt}
+\setlength{\textheight}{\paperheight-\mytopmargin-\mybottommargin-\headheight-\headsep}
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%% FONT DEFINITIONS %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+% Choose the font you want like this: \usefont{encoding}{family}{series}{shape}
+\newcommand{\courrier}{\fontfamily{pcr}\selectfont}
+\newcommand{\helv}{\fontfamily{phv}\selectfont}
+\newcommand{\helvbold}{\fontfamily{phv}\fontseries{b}\selectfont}
+%\newcommand{\helv}{\fontfamily{phv}\fontseries{b}\fontsize{9}{11}\selectfont}
+%\newcommand{\helv}{\fontfamily{phv}}\selectfont}
+\newcommand{\palatino}{\fontfamily{ppl}\selectfont}
+\newcommand{\cmdunhill}{\usefont{OT1}{cmdh}{m}{n}} % computer modern dunhill
+
+\newcommand{\workdate}{\workdatemonth~\workdateyear}
+
+\newcommand{\theworktitle}{
+    \begin{huge}
+        \textsf{ \worktitle \\}
+    \end{huge}
+    \vspace{0.2cm}%
+    \ifthenelse{\equal{\worksubtitle}{}}{}{\begin{Large} \textsf{ \worksubtitle} \end{Large}}%
+}
+
+   \newcommand{\titlepagefooterD}{
+    \begin{tabular}{lcr} \hline
+\multirow{5}{*}{\includegraphics[height=1.65cm]{logo_ost}} \\
+& CAS & \\
+& Machine Learning for & \\
+& Software Engineers & \\
+& & \\
+     \end{tabular}
+     }
+
+
+% Redefinition of the Latex url command %
+\renewcommand\url{\begingroup \small \urlstyle{sf}\Url}
+
+% Commands used for printing URLs in the bib files %
+% e.g. \biburl{http://www.unifr.ch/}{11}{January}{2004}
+\newcommand{\lastVisited}[3]{(Letzter Aufruf #2 #1, #3)} % e.g. \lastVisited{11}{January}{2004}
+\newcommand{\biburl}[4]{{\url{#1} \lastVisited{#2}{#3}{#4}}}
+
+% e.g. \biburlarticle{http://www.unifr.ch/article.html}{14}{January}{2004}
+\newcommand{\biburlarticle}[4]{[Erhalten am #3 #2, #4, von {\small\url{#1}}]}
+
+\newcommand{\online}{[online]}
+
+%  Prints your review date and 'Draft Version' (From Josullvn, CS, CMU)
+\newcommand{\reviewtimetoday}[2]{\special{!userdict begin
+/bop-hook{gsave 20 710 translate 45 rotate 0.8 setgray
+/Times-Roman findfont 12 scalefont setfont 0 0   moveto (#1) show
+0 -12 moveto (#2) show grestore}def end}}
+
+% Headers and footers
+\renewcommand{\chaptermark}[1]{  % in order to have Chapter 1. Introduction
+\markboth{\chaptername\
+\thechapter.\ #1}{}}
+
+\renewcommand{\sectionmark}[1]{ % in order to have 1.2. Structure of Document
+\markright{\thesection.\ #1}{}}
+
+\lhead[\fancyplain{} \rmfamily \thepage]{\fancyplain{} \itshape \rightmark}
+\chead{}
+\rhead[\fancyplain{} \itshape \leftmark]{\fancyplain{} \rmfamily \thepage}
+\lfoot{}
+\cfoot{}
+\rfoot{}
+
+% For in-paragraph enumerations, e.g. "there are three possibilities: (i) one (ii) two (iii) three"
+\newenvironment{sinparaenum}%
+{\begin{inparaenum}[\itshape(i)\upshape]}%
+{\end{inparaenum}}
+
+
+% Use this command for inline code: class names, methods,...
+%\newcommand{\src}[1]{\begin{sf}\small{#1}\end{sf}}
+\newcommand\src[1]{{\helv{\footnotesize{#1}}}}           % source code is typeset in Helvetica font
+% A perhaps better solution would be: \newcommand{\src}[1]{\listinline!#1!}
+\newcommand\footsrc[1]{{\helv{\scriptsize{#1}}}}  % source code is typeset in Helvetica font - for use in footnotes
+
+
+
+\newcommand*{\indexsection}[1]{%
+  \ifx\empty#1\empty\else
+  \hspace{0pt plus 2fil}{{\sectfont #1}}\hspace{0pt plus
+    1fil}\nopagebreak
+  \fi
+}
+
+% This command is for putting text between quotes. E.g. \squote{de facto}
+\newcommand{\squote}[1]{``#1''}   
+
+\definecolor{gray}{rgb}{0.4,0.4,0.4}
+\definecolor{darkblue}{rgb}{0.0,0.0,0.6}
+\definecolor{cyan}{rgb}{0.0,0.6,0.6}
+
+% Here we define and configure the listings environment
+\definecolor{commentgreen}{rgb}{0,0.7,0} 
+\lstset {
+showstringspaces=false,
+frame=none,
+columns=fullflexible,
+showstringspaces=false,
+extendedchars=true,
+basicstyle=\ttfamily\footnotesize,
+numbers=left,
+numberstyle=\tiny,
+numbersep=5pt,
+stepnumber=1,
+language=Java,
+breaklines,
+tabsize=4,
+backgroundcolor=\color{lightgray},
+rulecolor=\color{blue},
+linewidth=\linewidth,
+keywordstyle=\bfseries\color{blue},
+captionpos=b,
+abovecaptionskip=\medskipamount,
+belowcaptionskip=\medskipamount,
+commentstyle=\color{gray}\upshape,
+escapeinside={(*@}{@*)},
+}
+
+
+\lstdefinelanguage{XML}
+{
+  morestring=[b]",
+  morestring=[s]{>}{<},
+  morecomment=[s]{<?}{?>},
+  stringstyle=\color{black},
+  identifierstyle=\color{darkblue},
+  keywordstyle=\color{cyan},
+  morekeywords={xmlns,version,type}% list your attributes here
+}
+
+
+%This code allows to compile with latex or pdflatex by changing the filename suffix
+%of the figures appropriately:
+%.eps if latex is used and .pdf, .jpg or .png if pdflatex is used
+\let\ifpdf\relax	
+\newif\ifpdf
+\ifx\pdfoutput\undefined
+\pdffalse % we are not running pdflatex
+\DeclareGraphicsExtensions{.eps} \else
+\pdfoutput=1 % we are running pdflatex
+\pdfcompresslevel=9     % compression level for text and image;
+\pdftrue \DeclareGraphicsExtensions{.pdf,.jpg,.png} \fi
+
+\ifpdf
+
+%%% refs also as links
+%\usepackage[pdftex,pagebackref=true,plainpages=false,colorlinks=false,pdfborder=0]{hyperref}
+\usepackage[pdftex,pagebackref=true,plainpages=false,colorlinks=false,pdfborder={0 0 0},linkcolor=blue, citecolor=blue, urlcolor=blue]{hyperref}
+%plainpages=false: enable links although page numbering is reset after title
+%other options... backref, pagebackref (links back from index to chapter/page) urlcolor=blue,citecolor=red
+
+\else %no pdf
+
+\fi %ifpdf   
+
+% Setting penalty values to avoid orphans and widows
+\clubpenalty=9999
+\widowpenalty=9999

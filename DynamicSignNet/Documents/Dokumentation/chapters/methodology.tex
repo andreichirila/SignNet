@@ -1,0 +1,74 @@
+\chapter{Methodik}
+\label{ch:methodology}
+
+Dieses Kapitel beschreibt die technische Umsetzung des \textit{SignNet}-Systems, wobei der Fokus auf der Transformation hochdimensionaler Landmark-Daten in diskriminative Merkmale liegt.
+
+\section{Vorphase: Statische Buchstabenerkennung (CNN)}
+\label{sec:static_approach}
+Zu Beginn des Projekts wurde ein Modell zur Erkennung des statischen Fingeralphabets (25 Klassen) implementiert, um eine Baseline für die Bildklassifizierung im Kontext der Gebärdensprache zu etablieren.
+
+\subsection{Systemarchitektur}
+In dieser Phase wurde das Skript \texttt{StaticSignNet.py} entwickelt, welches auf einer klassischen \textit{Convolutional Neural Network} (CNN) Architektur basiert. Das Modell besteht aus:
+\begin{itemize}
+    \item \textbf{Feature-Extraktion}: Sechs aufeinanderfolgende Convolutional-Blöcke mit Batch-Normalization und ReLU-Aktivierung zur Extraktion räumlicher Merkmale.
+    \item \textbf{Pooling}: Global Average Pooling (GAP) zur Reduktion der Parameteranzahl und Vermeidung von Overfitting.
+    \item \textbf{Klassifizierung}: Ein vollvernetzter Layer mit Dropout (0,5), der in einen Softmax-Output mündet.
+\end{itemize}
+
+\subsection{Limitationen und Erkenntnisse}
+Obwohl das Modell gute Ergebnisse bei isolierten, statischen Handzeichen lieferte, wurden zwei wesentliche Limitationen identifiziert:
+\begin{enumerate}
+    \item \textbf{Hintergrundempfindlichkeit}: Da das Modell direkt auf RGB-Pixeln operierte, war es anfällig für unterschiedliche Lichtverhältnisse und komplexe Hintergründe.
+    \item \textbf{Mangelnde Dynamik}: Gebärdensprache besteht primär aus Bewegungsabfolgen. Statische CNNs können zeitliche Abhängigkeiten (z.\,B. die Gebärde für „KOMMEN“) nicht erfassen.
+\end{enumerate}
+Diese Erkenntnisse führten zu der Entscheidung, in der Hauptphase auf eine \textbf{Landmark-basierte Transformer-Architektur} umzusteigen, um die Rechenlast zu senken und die zeitliche Dimension explizit abzubilden.
+
+\section{Feature Engineering und Merkmalsextraktion}
+Die Qualität der Gebärdenspracherkennung hängt maßgeblich von der Repräsentation der Eingabedaten ab. Da rohe $x,y,z$-Koordinaten keine expliziten Informationen über die Bewegungsdynamik oder die Skelettgeometrie enthalten, wurde die spezialisierte Klasse \texttt{EnhancedLandmark\-Features} implementiert.
+
+\subsection{Vorverarbeitung und Datenreinigung}
+Bevor komplexe Merkmale berechnet werden, durchlaufen die Daten eine Vorverarbeitungsstufe, um die numerische Stabilität zu gewährleisten:
+\begin{itemize}
+    \item \textbf{Fehlwert-Behandlung}: Aufgrund von Verdeckungen liefert MediaPipe oft unvollständige Daten. In \texttt{SignNetWord.py} werden \texttt{NaN}-Werte (Not a Number) durch Nullen ersetzt.
+    \item \textbf{Händigkeits-Invarianz}: Durch die Nutzung des \texttt{TransformerSignClassifierWithHandedness} wird explizit zwischen aktiver und passiver Hand unterschieden, was die Erkennung unabhängig von der Dominanz des Signers macht.
+\end{itemize}
+
+\subsection{Temporale Merkmale: Kinematik der Gebärden}
+Um die Dynamik der Gebärden abzubilden, berechnet das System zeitliche Ableitungen. Dies ist entscheidend für die Unterscheidung von Gebärden, die identische Handformen, aber unterschiedliche Bewegungsenergien aufweisen.
+
+Die Geschwindigkeit $v$ eines Keypoints zum Zeitpunkt $t$ wird durch die Differenz der Positionen $\mathbf{p}$, multipliziert mit der Bildrate (\textit{fps}), berechnet:
+\begin{equation}
+    \vec{v}_t = (\mathbf{p}_t - \mathbf{p}_{t-1}) \cdot \text{fps}
+\end{equation}
+
+Die Beschleunigung $a$ resultiert entsprechend aus der Änderung der Geschwindigkeit:
+\begin{equation}
+    a_t = (\vec{v}_t - \vec{v}_{t-1}) \cdot \text{fps}
+\end{equation}
+
+\subsection{Skelett-Geometrie: Bone-Vektoren}
+Ein wesentlicher Bestandteil des Feature Engineerings ist die Berechnung von \textit{Bone-Vektoren} (Knochenvektoren). Anstatt die absolute Position im Raum zu betrachten, wird die Relation zwischen anatomisch verbundenen Landmarks berechnet. Ein Bone-Vektor $\vec{b}$ zwischen zwei Gelenken $A$ und $B$ wird definiert als:
+\begin{equation}
+    \vec{b} = \mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}
+\end{equation}
+Diese Vektoren sind invariant gegenüber Translationen des Körpers im Bildraum und erfassen die Handkonfiguration (Handform) präziser als absolute Koordinaten.
+
+\subsection{Spatiale Distanzen und Relationen}
+Zusätzlich werden spezifische skalare Distanzen extrahiert, die linguistisch signifikante Informationen tragen:
+\begin{itemize}
+    \item \textbf{Hand-Gesicht-Distanz}: Viele Gebärden werden in Relation zum Mund oder der Stirn ausgeführt. Die Distanz zwischen den Handgelenks-Landmarks und dem Zentrum des \textit{Face-Meshes} dient hier als Diskriminierungsmerkmal.
+    \item \textbf{Inter-Hand-Distanz}: Bei zweihändigen Gebärden liefert der euklidische Abstand zwischen linker und rechter Hand Informationen über die Symmetrie der Bewegung.
+\end{itemize}
+
+\subsection{Feature-Fusion und Dimensionierung}
+Alle extrahierten Merkmale werden zu einem flachen Vektor konkateniert. Gemäß \texttt{SignNetConfig.py} ergibt sich daraus eine Eingabedimension von $1659$ Features pro Frame. Um variable Videolängen zu verarbeiten, nutzt das System die Klasse \texttt{PadCollate}, welche die Sequenzen auf eine einheitliche Länge auffüllt (Padding), während die tatsächlichen Längen für den Attention-Mechanismus in der Variable \texttt{seq\_lengths} maskiert werden.
+
+\section{Modellarchitektur}
+Das System basiert auf einer Transformer-Encoder-Struktur, die speziell für die Analyse von Landmark-Sequenzen optimiert wurde. Durch den Self-Attention-Mechanismus kann das Modell relevante Bewegungsphasen innerhalb einer Gebärde (z.\,B. den Moment der maximalen Handkrümmung) gewichten und Rauschen in den Übergangsphasen ignorieren.
+
+[Platzhalter für Abbildung der Modellarchitektur]
+
+\section{MediaPipe Landmark-Struktur}
+Die Extraktion nutzt das MediaPipe-Skelettmodell. Die folgende Abbildung illustriert die genutzten Keypoints für Hände, Gesicht und Pose, welche die geometrische Grundlage für unsere Vektorberechnungen bilden.
+
+[Platzhalter für Abbildung der MediaPipe Landmarks]

@@ -1,0 +1,185 @@
+\documentclass[12pt,a4paper,german,titlepage,oneside]{scrbook}
+% ***** BEGIN OF THE LATEX PREAMBLE *****
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{bm} % Optional für fettgedruckte mathematische Symbole
+\usepackage{softeng}
+\usepackage{booktabs} % Ermöglicht \toprule, \midrule, \bottomrule
+
+\makeindex
+
+\definecolor{lightgray}{gray}{0.9}
+
+% Here we define the title of the current thesis in an appropriate variable.
+\newcommand{\worktitle}{SignNet}
+% Here we can define a subtitle for the work. If there is no subtitle let this variable empty.
+\newcommand{\worksubtitle}{Gebärdensprachübersetzung \\ mit Computer Vision und Deep Learning}
+% otherwise you can set any subtitle you want, event long ones by breaking the lines manually:
+%\newcommand{\worksubtitle}{}
+			   
+% This is the name of the author
+\newcommand{\theauthor}{Andrei Chirila \\ Roman Schläpfer}
+
+% This command defines the type of the work: Master Thesis / Bachelor Thesis
+\newcommand{\worktype}{}
+
+% Date of the end (submission) of the work.
+\newcommand{\workdateyear}{2025}
+\newcommand{\workdatemonth}{Dezember}
+\newcommand{\supervisorslabel}{Unter der Aufssicht von}
+
+\newcommand{\worksupervisors}{
+    Martin \textsc{Stypinski}\\
+    Kursleiter CAS ML4SE\\
+}
+
+\newcommand{\titlepagefooter}{\titlepagefooterD}
+
+
+
+% Here you define the labels of figures, tables, listings...
+% English: Figure, Table, Listing (default)
+% German: Abbildung, Tabelle, Listing
+% French: Figure, Table, Listing
+\renewcommand{\figurename}{Abbildung}
+\renewcommand{\tablename}{Tabelle}
+\renewcommand{\lstlistingname}{Listing} % default = Listing
+
+
+% Let us set the path where all the figures have to be.
+\graphicspath{{./figures/}}
+
+% The following command avoids the indentation of the first sentence of each paragraph.
+\parindent=0in
+
+% The following command sets the header and footer style of the pages.
+\pagestyle{fancy}
+
+% The web resources are references in a bibliography apart.
+\newcites{web}{Web Ressourcen}
+
+% It is not mandatory (but suitable) to make an index. If you do not build an index: comment the line below!
+% building the idx index file. This file is then to be compiled with %
+% makeindex in the command line %
+\usepackage{makeidx} \makeindex
+
+% XML LstListing language settings
+
+
+
+
+
+
+
+% ***** END OF THE LATEX PREAMBLE *****
+
+% ***** BEGIN OF THE DOCUMENT *****
+% ----- BEGIN OF THE FRONT STUFF -----
+\begin{document}
+% This line generates mini table of contents (tocs) at the beginning of each chapter, [e] for empty title.
+\dominitoc[e] 
+\pagestyle{empty}
+
+% Here we include the titlepage.
+\include{titlepage}
+
+% The first pages are numbered in roman style.
+\pagenumbering{roman}
+\pagestyle{headings} 
+
+% Now we include the abstract of you work
+%\include{preamble}
+\include{chapters/abstract}
+
+
+% In order to have all references in your bibtex files figuring in the bibliorgraphy you can uncomment following lines.
+% Otherwise, only the cited references will appear in your bibliography.
+\nocite{*}
+\nociteweb{*}
+
+\begin{spacing}{1.2}  % Environment for 1.2 line spacing for contents and lists
+
+% Here comes the table of contents
+% Setting the name of the table of contents
+%\renewcommand{\contentsname}{Table of Contents}  % Original name = Contents
+\tableofcontents    % table of contents (.toc file) -- to rename title \renewcommand{\contentsname}{Table of Contents}
+
+% Here comes the list of figures
+\listoffigures    % list of figures   (.lof file) -- to rename title \renewcommand{\listfigurename}{Figures}
+
+% Here comes the list of tables
+\listoftables    % list of tables    (.lot file) -- to rename title \renewcommand{\listtablename}{Tables}
+
+% Here comes the list of listings/code extracts
+% Setting the name of the table of listings
+\lstlistoflistings    % list of listings    (.lol file) -- to rename title \renewcommand{\listtablename}{Tables}
+
+\end{spacing}  % Environment for 1.2 line spacing for contents and lists
+
+% ----- END OF THE FRONT STUFF -----
+
+% ----- BEGIN OF THE MAIN BODY OF THE DOCUMENT -----
+
+% Page numbering will now be arabic.
+\pagenumbering{arabic}
+
+\addtolength{\parskip}{0.25\baselineskip} % paragraph spacing
+
+%\include{chapters/abstract}
+\include{chapters/introduction}
+\include{chapters/state_of_the_art}
+\include{chapters/background}
+\include{chapters/methodology}
+\include{chapters/results}
+\include{chapters/discussion}
+\include{chapters/conclusion}
+
+% You can divide your thesis into parts. If you want to, uncomment this line for the first part.
+%\part{Einleitung}\label{partIntro}
+
+
+% You can divide your thesis into parts. If you want to, uncomment this line for another part.
+%\part{Tutorial}\label{partTutorial}
+
+
+
+
+% ----- END OF THE MAIN BODY OF THE DOCUMENT -----
+
+% ----- BEGIN OF THE APPENDICES -----
+\appendix
+
+
+% First we enumerate the most often used acronyms
+\include{appendix/acronyms}
+\renewcommand*{\acsfont}[1]{\textbf{#1}}
+
+% Here we include the licence of the paper. It is always the GNU Free Documentation License.
+\include{appendix/licence}
+
+% This appendix gives the URL of the official web page of the present project
+\include{appendix/website}
+
+% This appendix contains the CDROM and briefly describes its content
+\include{appendix/CD-Rom}
+
+% The bibliography comes here, in alpha style.
+% The title of bibliography is changed. Force it to be "References" instead of "Bibliography".
+%\renewcommand{\bibname}{References}
+\addcontentsline{toc}{chapter}{Literaturverzeichnis}
+\bibliographystyle{plain}
+\bibliography{mainbib}
+
+\renewcommand{\bibname}{Web Ressourcen}
+\addcontentsline{toc}{chapter}{Web Resourcen}
+\bibliographystyleweb{plain}
+\bibliographyweb{webbib}
+
+\pagestyle{empty}
+\printindex
+
+% ----- END OF THE APPENDICES -----
+
+\end{document}
+% ***** END OF THE DOCUMENT *****

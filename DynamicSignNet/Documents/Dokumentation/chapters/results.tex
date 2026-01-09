@@ -1,0 +1,62 @@
+\chapter{Resultate}
+\label{ch:results}
+
+\section{Quantitative Ergebnisse}
+Das Hauptmodell erreichte auf einem Vokabular von 300 Klassen eine Top-1-Genauigkeit von 52,34\,\%. Durch die Aktivierung des hierarchischen Inferenz-Systems in \texttt{SignNetInference.py} konnte dieser Wert auf 54,82\,\% gesteigert werden.
+
+\begin{table}[h]
+\centering
+\caption{Ergebnisse der Klassifizierung}
+\label{tab:results}
+\begin{tabular}{lr}
+\toprule
+Metrik & Wert \\
+\midrule
+Top-1 Genauigkeit (Baseline) & 52,34\,\% \\
+Top-1 Genauigkeit (Hierarchisch) & 54,82\,\% \\
+Top-5 Genauigkeit & 79,42\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Fehleranalyse}
+Besonders häufig traten Verwechslungen bei Gebärden auf, die sich nur durch minimale Richtungsänderungen unterscheiden.
+
+
+
+Beispielsweise wurden die Gebärden \texttt{NORD} und \texttt{loc-NORD} oft konfundiert, was die Notwendigkeit noch präziserer Expertenmodelle unterstreicht.
+
+
+--- LaTeX Code für Global Metrics ---
+\begin{table}[h]
+\centering
+\caption{Globale Performance-Metriken des SignNet-Systems}
+\label{tab:global_performance}
+\begin{tabular}{lr}
+\toprule
+Metrik & Wert \\
+\midrule
+Top-1 Accuracy & 52.34\,\% \\
+Top-3 Accuracy & 71.15\,\% \\
+Top-5 Accuracy & 79.42\,\% \\
+Weighted F1-Score & 51.89\,\% \\
+Durchschnittliche Konfidenz & 68.42\,\% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+--- LaTeX Code für Expert Comparison ---
+\begin{table}[h]
+\centering
+\caption{Vergleich der Genauigkeit: Hauptmodell vs. Experten-Modelle}
+\label{tab:expert_comparison}
+\begin{tabular}{lccc}
+\toprule
+Expertengruppe & Baseline & Experte & Gewinn \\
+\midrule
+Direction Expert & 45.8\% & 64.2\% & \textbf{+18.4\%} \\
+Kommen Expert & 51.2\% & 63.6\% & \textbf{+12.4\%} \\
+Weather Expert & 48.5\% & 57.0\% & \textbf{+8.5\%} \\
+\bottomrule
+\end{tabular}
+\end{table}

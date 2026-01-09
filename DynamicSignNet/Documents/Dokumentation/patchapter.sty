@@ -1,0 +1,51 @@
+
+\font\thebig=cmss17 scaled 5000
+
+
+\def\@makechapterhead#1{ \vspace*{2pt} { \parindent 0pt
+  \begin{flushright}\thebig\thechapter\vspace*{8pt}\\
+\fontfamily{cmss}\fontseries{bx}\Huge #1\end{flushright}\par
+  \nobreak \vskip 50pt }  }
+
+
+\def\@makeschapterhead#1{ \vspace*{67pt} { \parindent 0pt
+  \begin{flushright}\fontfamily{cmss}\fontseries{bx}\Huge #1\end{flushright}\par
+  \nobreak \vskip 50pt } }
+
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+
+\def\myheadstyle{\itshape\small}
+
+\def\ps@headings{%
+       \let\@oddfoot\@empty\let\@evenfoot\@empty
+ 
+\def\@evenhead{\makebox[0pt][l]{\rule[-0.15cm]{\textwidth}{0.1mm}}\hbox{}% 
+
+                 \thepage\hfil\myheadstyle\leftmark}%
+       \def\@oddhead{\makebox[0pt][l]{\rule[-0.15cm]{\textwidth}{0.1mm}}\hbox{}%
+                 {\myheadstyle\rightmark}\hfil\thepage}%
+       \let\@mkboth\markboth
+     \def\chaptermark##1{%
+       \markboth {{%
+         \ifnum \c@secnumdepth >\m@ne
+           \if@mainmatter
+             \@chapapp\ \thechapter. \ %
+           \fi
+         \fi
+         ##1}}{}}%
+     \def\sectionmark##1{%
+       \markright {{%
+         \ifnum \c@secnumdepth >\z@
+           \thesection. \ %
+         \fi
+         ##1}}}
+
+    \def\@makefntext##1{%    
+        \parindent 0em%
+        \parskip 1.3ex plus 0.3ex minus 0.2ex%
+        \noindent
+        \hb@xt@0em{\hss\@makefnmark}##1} %1.8em ersetzt durch 0em
+      }
+      
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%

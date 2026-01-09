@@ -2043,39 +2043,6 @@ def main():
     T_0 = 200
     T_MULT = 2            # Multiply cycle length after each restart
 
-    # Check if we are in expert training mode
-    if args.expert_name:
-        print(f"\n{'='*80}")
-        print(f"===== EXPERT TRAINING MODE: {args.expert_name} =====")
-        print(f"{'='*80}\n")
-
-        # Override hyperparameters for the smaller, focused model
-        # FORCE SMALLER ARCHITECTURE: 128h/3L is too big. We need 64h/2L.    
-        HIDDEN_SIZE = EXPERT_MODEL_CONFIG['hidden_size']
-        NUM_LAYERS = EXPERT_MODEL_CONFIG['num_layers']
-        NUM_HEADS = EXPERT_MODEL_CONFIG['num_heads']
-        
-        # === CRITICAL FIXES FOR SMALL DATASETS ===
-        # 1. Stability: Lower LR and Batch Size to prevent overshooting
-        BATCH_SIZE = 32          
-        LEARNING_RATE = 3e-5     
-        
-        # 2. Disable "Big Data" Imbalance Tricks
-        USE_BALANCED_SOFTMAX = False
-        USE_FOCAL_LOSS = False
-        USE_CLASS_WEIGHTS = False
-        USE_WEIGHTED_SAMPLER = False
-        
-        # 3. Regularization - TUNED (Relaxed slightly to cure underfitting)
-        DROPOUT_RATE = 0.5       # Reduced from 0.6 -> 0.5
-        WEIGHT_DECAY = 0.02      # Reduced from 0.05 -> 0.02
-        ATTENTION_DROPOUT = 0.3  # Reduced from 0.4 -> 0.3
-        
-        # 4. Training Duration & Augmentation
-        NUM_EPOCHS = 120         
-        WARMUP_EPOCHS = 5
-        AUGMENT_PROBABILITY = 0.5 
-
     number_of_classes = 300
 
     NPZ_DIR = NPZ_DIR = args.data_dir
@@ -2087,8 +2054,6 @@ def main():
 
 
     run_name = f"{dataset_name}_Transformer_{HIDDEN_SIZE}h_{NUM_LAYERS}L"
-    if args.expert_name:
-        run_name = f"expert_{args.expert_name}_{run_name}"
     try:
         run = mlflow.start_run(log_system_metrics=True, run_name=run_name)
 
@@ -2174,24 +2139,14 @@ def main():
             else:
                 print(f"  ERROR: No npz_files found!")
 
-            if args.expert_name:
-                print(f"[VOCABULARY] Using pre-defined expert vocabulary for '{args.expert_name}'")
-                top_k_words = HIERARCHY_CONFIG[args.expert_name]
-                print(f"  Training on {len(top_k_words)} specific classes.")
-
-                # We don't have 'all_counts' in this mode, so create a dummy one
-                class_counts_analysis = Counter(word for f in npz_files for word in [Path(f).stem.split('_')[0]] if word in top_k_words)
-                all_counts = class_counts_analysis
-
-            else:
-                # This is your original code for training the main model
-                print("\n[VOCABULARY] Building vocabulary from dataset stats...")
-                top_k_words, all_counts = build_topk_vocabulary(
-                    npz_files,
-                    K=number_of_classes,
-                    min_samples=MIN_SAMPLES_PER_CLASS,
-                    debug=True
-                )
+            # This is your original code for training the main model
+            print("\n[VOCABULARY] Building vocabulary from dataset stats...")
+            top_k_words, all_counts = build_topk_vocabulary(
+                npz_files,
+                K=number_of_classes,
+                min_samples=MIN_SAMPLES_PER_CLASS,
+                debug=True
+            )
 
             if not top_k_words:
                 print("[ERROR] Vocabulary is empty! Check MIN_SAMPLES_PER_CLASS or expert class names.")
@@ -2237,10 +2192,7 @@ def main():
             }
 
             # Save to file
-            if args.expert_name:
-                vocab_filename = f'{args.expert_name}_vocab.json'
-            else:
-                vocab_filename = 'main_vocab.json'
+            vocab_filename = 'main_vocab.json'
 
             with open(vocab_filename, 'w') as f:
                 json.dump(vocab_dict, f, indent=2)
@@ -2415,19 +2367,11 @@ def main():
                 total_iters=WARMUP_EPOCHS
             )
 
-            # CHANGE: Use smooth decay for experts to avoid restart shocks
-            if args.expert_name:
-                restart_scheduler = CosineAnnealingLR(
-                    optimizer,
-                    T_max=NUM_EPOCHS - WARMUP_EPOCHS,
-                    eta_min=MIN_LR
-                )
-            else:
-                restart_scheduler = CosineAnnealingLR(
-                    optimizer,
-                    T_max=NUM_EPOCHS - WARMUP_EPOCHS, 
-                    eta_min=MIN_LR
-                )
+            restart_scheduler = CosineAnnealingLR(
+                optimizer,
+                T_max=NUM_EPOCHS - WARMUP_EPOCHS, 
+                eta_min=MIN_LR
+            )
 
             from torch.optim.lr_scheduler import SequentialLR
             scheduler = SequentialLR(

@@ -1,51 +1,163 @@
 \chapter{Hintergrund}
 \label{ch:background}
 
-Dieses Kapitel beschreibt die theoretischen Grundlagen der Landmark-basierten Merkmalsrepräsentation sowie die mathematischen Herausforderungen des verwendeten Datensatzes.
+Dieses Kapitel führt in die theoretischen Grundlagen ein, die für das Verständnis der vorliegenden Arbeit notwendig sind. Zunächst wird die Gebärdensprache als linguistisches System vorgestellt, gefolgt von den technischen Grundlagen der verwendeten Deep-Learning-Architektur und der Merkmalsextraktion.
 
-\section{Geometrische Repräsentation der Landmarks}
-Die Grundlage der Merkmalsextraktion bildet das \textit{MediaPipe Holistic} Framework. Jeder Videoframe wird in eine Menge von $N$ Schlüsselpunkten (Landmarks) transformiert. Ein einzelner Landmark $\mathbf{p}_i$ wird im dreidimensionalen Raum wie folgt repräsentiert:
+\section{Gebärdensprache als linguistisches System}
+
+Gebärdensprachen sind vollwertige, natürliche Sprachen mit eigener Grammatik, Syntax und Morphologie. Im Gegensatz zu weit verbreiteten Missverständnissen handelt es sich nicht um eine visuelle Kodierung gesprochener Sprache oder um Pantomime, sondern um eigenständige linguistische Systeme \cite{stokoe1960}.
+
+\subsection{Phonologie der Gebärdensprache}
+
+William Stokoe legte 1960 den Grundstein für die linguistische Analyse von Gebärdensprachen, indem er nachwies, dass Gebärden – analog zu gesprochenen Wörtern – aus kleineren, bedeutungsunterscheidenden Einheiten bestehen. Diese Einheiten werden als \textit{Cheremes} (in Anlehnung an Phoneme) oder heute häufiger als \textit{Parameter} bezeichnet.
+
+Eine Gebärde setzt sich aus fünf simultanen Parametern zusammen:
+
+\begin{itemize}
+    \item \textbf{Handform}: Die Konfiguration der Finger (z.B. flache Hand, Faust, ausgestreckter Zeigefinger). Die Deutsche Gebärdensprache (DGS) verwendet etwa 30 distinktive Handformen.
+    \item \textbf{Handstellung (Orientierung)}: Die Ausrichtung der Handfläche und Finger relativ zum Körper (z.B. Handfläche nach oben, nach unten, zum Körper).
+    \item \textbf{Ausführungsort}: Die Position im Gebärdenraum, an der die Gebärde ausgeführt wird (z.B. vor der Brust, am Kopf, im neutralen Raum).
+    \item \textbf{Bewegung}: Die Art und Richtung der Handbewegung (z.B. linear, kreisförmig, wiederholend).
+    \item \textbf{Non-manuelle Komponenten}: Mimik, Mundbild, Kopf- und Körperhaltung, die grammatische oder lexikalische Informationen tragen.
+\end{itemize}
+
+Diese Simultaneität unterscheidet Gebärdensprachen fundamental von sequentiell aufgebauten Lautsprachen und stellt besondere Anforderungen an maschinelle Erkennungssysteme.
+
+\subsection{Glossennotation}
+
+In der Gebärdensprachforschung werden Gebärden typischerweise durch \textit{Glossen} repräsentiert – konventionalisierte Bezeichnungen in Großbuchstaben, die auf der Bedeutung der Gebärde basieren. Die Glosse \texttt{HAUS} bezeichnet beispielsweise die Gebärde für das Konzept "Haus", unabhängig von der spezifischen Ausführungsform. Diese Notation ermöglicht die Annotation von Videodaten und bildet die Grundlage für überwachtes maschinelles Lernen.
+
+\subsection{Isolierte vs. kontinuierliche Gebärdenerkennung}
+
+Man unterscheidet zwei Hauptaufgaben in der automatischen Gebärdenerkennung:
+
+\begin{itemize}
+    \item \textbf{Isolierte Gebärdenerkennung (Isolated Sign Language Recognition, ISLR)}: Klassifikation einzelner, segmentierter Gebärden. Der Anfang und das Ende der Gebärde sind bekannt.
+    \item \textbf{Kontinuierliche Gebärdenerkennung (Continuous Sign Language Recognition, CSLR)}: Erkennung von Gebärdensequenzen ohne vorgegebene Segmentierung, analog zur Spracherkennung.
+\end{itemize}
+
+Die vorliegende Arbeit fokussiert sich auf die isolierte Gebärdenerkennung, bei der vorgeschnittene Videosequenzen einzelnen Glossen zugeordnet werden.
+
+\section{Transformer-Architektur}
+
+Die Transformer-Architektur \cite{vaswani2017} hat sich als dominantes Paradigma für die Verarbeitung sequentieller Daten etabliert. Im Gegensatz zu rekurrenten Netzwerken (RNNs, LSTMs) verarbeitet der Transformer die gesamte Sequenz parallel und modelliert Abhängigkeiten durch einen Attention-Mechanismus.
+
+\subsection{Self-Attention}
+
+Der Kern des Transformers ist der \textit{Self-Attention}-Mechanismus, der es jedem Element einer Sequenz ermöglicht, Informationen von allen anderen Elementen zu aggregieren. Für eine Eingabesequenz $\mathbf{X} \in \mathbb{R}^{T \times d}$ mit $T$ Zeitschritten und Dimension $d$ werden drei Projektionen berechnet:
+
+\begin{align}
+    \mathbf{Q} &= \mathbf{X} \mathbf{W}^Q \quad \text{(Queries)} \\
+    \mathbf{K} &= \mathbf{X} \mathbf{W}^K \quad \text{(Keys)} \\
+    \mathbf{V} &= \mathbf{X} \mathbf{W}^V \quad \text{(Values)}
+\end{align}
+
+Die Attention-Gewichte werden durch Skalierung des Skalarprodukts zwischen Queries und Keys berechnet:
+
+\begin{equation}
+    \text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right) \mathbf{V}
+\end{equation}
+
+Durch diesen Mechanismus kann jeder Frame einer Gebärdensequenz Informationen von allen anderen Frames berücksichtigen, was besonders für die Erfassung globaler Bewegungsmuster relevant ist.
+
+\subsection{Positional Encoding}
+
+Da der Transformer keine inhärente Sequenzordnung besitzt, muss die zeitliche Position explizit kodiert werden. Dies geschieht durch \textit{Positional Encodings}, die zur Eingabe addiert werden. In dieser Arbeit werden \textit{lernbare} Positional Embeddings verwendet, die während des Trainings optimiert werden:
+
+\begin{equation}
+    \mathbf{X}' = \mathbf{X} + \mathbf{E}_{\text{pos}}
+\end{equation}
+
+wobei $\mathbf{E}_{\text{pos}} \in \mathbb{R}^{T_{\max} \times d}$ eine trainierbare Embedding-Matrix ist.
+
+\subsection{Vorteile gegenüber rekurrenten Architekturen}
+
+Transformer bieten mehrere Vorteile für die Gebärdenerkennung:
+
+\begin{itemize}
+    \item \textbf{Parallelisierung}: Alle Positionen werden gleichzeitig verarbeitet, was das Training beschleunigt.
+    \item \textbf{Lange Abhängigkeiten}: Direkte Verbindungen zwischen beliebigen Positionen vermeiden das Problem verschwindender Gradienten bei langen Sequenzen.
+    \item \textbf{Interpretierbarkeit}: Attention-Gewichte können visualisiert werden, um zu verstehen, welche Frames für die Klassifikation relevant sind.
+\end{itemize}
+
+\section{MediaPipe Holistic}
+
+\textit{MediaPipe} \cite{lugaresi2019} ist ein von Google entwickeltes Framework für die Echtzeit-Verarbeitung von Mediendaten. Die \textit{Holistic}-Pipeline kombiniert drei spezialisierte Modelle zur gleichzeitigen Extraktion von Körper-, Hand- und Gesichtslandmarks.
+
+\subsection{Landmark-Extraktion}
+
+Die Holistic-Pipeline extrahiert pro Frame insgesamt 543 Schlüsselpunkte (Landmarks):
+
+\begin{itemize}
+    \item \textbf{Pose}: 33 Körpergelenke (Schultern, Ellbogen, Handgelenke, Hüfte, Knie, etc.)
+    \item \textbf{Hände}: 21 Landmarks pro Hand (Fingerspitzen, Gelenke, Handfläche) $\times$ 2
+    \item \textbf{Gesicht}: 478 Landmarks (Augenbrauen, Augen, Nase, Mund, Gesichtskontur)
+\end{itemize}
+
+\subsection{Geometrische Repräsentation}
+
+Jeder Landmark $\mathbf{p}_i$ wird im dreidimensionalen Raum repräsentiert:
 
 \begin{equation}
     \mathbf{p}_i = (x_i, y_i, z_i)
 \end{equation}
 
-Hierbei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die Tiefe relativ zum Hüftmittelpunkt darstellt. Die Gesamtzahl der Features pro Frame ergibt sich aus der Summe der Landmarks für Gesicht ($478$), Pose ($33$) und beide Hände ($2 \times 21$):
+Hierbei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die geschätzte Tiefe relativ zur Kamera darstellt. Die Gesamtzahl der Features pro Frame ergibt sich aus:
 
 \begin{equation}
-    F_{\text{total}} = (478 + 33 + 42) \cdot 3 = 1659
+    F_{\text{total}} = (478 + 33 + 42) \times 3 = 1659
 \end{equation}
 
+Die Verwendung von Landmark-Koordinaten anstelle von Rohbildern bietet erhebliche Vorteile: Robustheit gegenüber Hintergrundvariationen, Beleuchtungsänderungen und Kleidung, sowie eine drastische Reduktion der Eingabedimensionalität.
 
+\section{Feature Engineering}
 
-\section{Skelett-Geometrie und Bone-Vektoren}
-Um die Handform und Körperhaltung unabhängig von der absoluten Position im Kamerabild zu beschreiben, werden \textit{Bone-Vektoren} berechnet. Ein Bone-Vektor $\vec{b}_{ij}$ beschreibt die Verbindung zwischen zwei anatomisch benachbarten Landmarks $i$ und $j$:
+Neben den rohen Landmark-Koordinaten werden zusätzliche Merkmale berechnet, um die Gebärdenstruktur besser zu erfassen.
+
+\subsection{Bone-Vektoren}
+
+\textit{Bone-Vektoren} beschreiben die Verbindung zwischen anatomisch benachbarten Landmarks und sind invariant gegenüber der absoluten Position im Bild:
 
 \begin{equation}
     \vec{b}_{ij} = \mathbf{p}_j - \mathbf{p}_i = (x_j - x_i, y_j - y_i, z_j - z_i)
 \end{equation}
 
-
-
-Diese Vektoren bilden die Grundlage für die Berechnung von Gelenkwinkeln $\theta$, die besonders robust gegenüber Skalierung (z.\,B. unterschiedliche Abstände zur Kamera) sind. Der Winkel zwischen zwei verbundenen Knochensegmenten $\vec{u}$ and $\vec{v}$ wird über das Skalarprodukt bestimmt:
+Diese Vektoren ermöglichen die Berechnung von Gelenkwinkeln $\theta$ über das Skalarprodukt:
 
 \begin{equation}
     \theta = \arccos\left( \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\| \|\vec{v}\|} \right)
 \end{equation}
 
-\section{Statistische Analyse der Datenverteilung}
-Ein zentrales Problem der Gebärdenspracherkennung ist die Modellierung seltener Begriffe. Der verwendete Phoenix-Datensatz folgt einer \textit{Power-Law}-Verteilung (Long-Tail).
+Gelenkwinkel sind besonders robust gegenüber Skalierungsunterschieden (z.B. unterschiedliche Abstände zur Kamera).
 
-\subsection{Klassenimbalance und Gini-Koeffizient}
-Die Ungleichverteilung der Stichproben pro Klasse lässt sich durch den Gini-Koeffizienten $G$ quantifizieren. Für eine Menge von $n$ Klassen mit den jeweiligen Stichprobenanzahlen $x_i$ gilt:
+\subsection{Velocity Features}
+
+Die zeitliche Ableitung der Landmark-Positionen – die \textit{Velocity} – erfasst die Bewegungsdynamik:
+
+\begin{equation}
+    \mathbf{v}_i^{(t)} = \mathbf{p}_i^{(t)} - \mathbf{p}_i^{(t-1)}
+\end{equation}
+
+Diese Merkmale sind besonders wichtig für die Unterscheidung von Gebärden, die sich primär durch ihre Bewegungscharakteristik unterscheiden.
+
+\section{Herausforderungen des Datensatzes}
+
+\subsection{Long-Tail-Verteilung}
+
+Ein zentrales Problem der Gebärdenspracherkennung ist die ungleiche Verteilung der Trainingsbeispiele. Der verwendete Phoenix-Datensatz folgt einer \textit{Power-Law}-Verteilung: Wenige häufige Gebärden (z.B. \texttt{REGION}, \texttt{MORGEN}) dominieren, während die Mehrheit der Klassen nur selten vorkommt.
+
+\subsection{Gini-Koeffizient}
+
+Die Ungleichverteilung lässt sich durch den Gini-Koeffizienten $G$ quantifizieren. Für $n$ Klassen mit den jeweiligen Stichprobenanzahlen $x_i$ gilt:
 
 \begin{equation}
     G = \frac{\sum_{i=1}^n \sum_{j=1}^n |x_i - x_j|}{2n \sum_{i=1}^n x_i}
 \end{equation}
 
-In den vorliegenden Daten wurde ein Gini-Koeffizient von $1,350$ ermittelt. Ein Wert $> 1$ in dieser spezifischen Metrik-Variante deutet auf eine extreme Konzentration der Daten auf wenige "Head-Klassen" hin, während die Mehrheit der Klassen ("Tail") unterrepräsentiert ist.
-
-
+Ein hoher Gini-Koeffizient deutet auf eine extreme Konzentration der Daten auf wenige "Head-Klassen" hin, während die Mehrheit der Klassen ("Tail") unterrepräsentiert ist. Dies erfordert spezielle Trainingsstrategien wie Focal Loss, Class-Balanced Loss oder Oversampling.
 
 \subsection{Visuelle Konfusion}
-Zusätzlich zur statistischen Imbalance erschwert die \textit{phonologische Ähnlichkeit} die Klassifikation. Viele Gebärden unterscheiden sich lediglich in einem der Parameter (Handform, Ort, Bewegung). In dieser Arbeit werden solche Gruppen als \textit{Konfusionscluster} definiert, welche die Implementierung der hierarchischen Experten-Modelle in \texttt{SignNetInference.py} motivieren.
+
+Zusätzlich zur statistischen Imbalance erschwert die \textit{phonologische Ähnlichkeit} die Klassifikation. Viele Gebärden unterscheiden sich lediglich in einem Parameter – beispielsweise unterscheiden sich die Gebärden für Himmelsrichtungen (\texttt{NORD}, \texttt{SUED}, \texttt{OST}, \texttt{WEST}) primär durch die Bewegungsrichtung bei ansonsten identischer Handform und -position.
+
+Solche systematisch verwechselten Gruppen werden in dieser Arbeit als \textit{Konfusionscluster} bezeichnet. Sie motivieren die Implementierung hierarchischer Expertenmodelle, die auf die Unterscheidung innerhalb spezifischer Cluster spezialisiert sind.

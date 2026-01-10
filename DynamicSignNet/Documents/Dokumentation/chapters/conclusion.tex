@@ -17,6 +17,43 @@ Zukünftige Forschungsansätze sollten die Integration von multimodalen Datenstr
 
 \section{Persönliches Fazit}
 \label{sec:personal_conclusion}
-Der Prozess der Erarbeitung dieser Abschlussarbeit war geprägt von der Auseinandersetzung mit realen, unvollständigen Daten. Eine zentrale Erkenntnis war, dass die Qualität der Vorverarbeitung (Landmark-Extraktion und Ausrichtung) oft einen größeren Einfluss auf die finale Accuracy hat als die bloße Komplexität der Modellarchitektur.
+Der Prozess der Erarbeitung dieser Abschlussarbeit war geprägt von der Auseinandersetzung mit realen, unvollständigen Daten und bot zahlreiche Lernmöglichkeiten. Im Folgenden reflektiere ich die Stärken, Verbesserungspotenziale und gewonnenen Erkenntnisse dieser Arbeit.
 
-Besonders lehrreich war die Implementierung des \textit{MisclassificationAnalyzer}, der ein tiefes Verständnis für die semantische und visuelle Nähe von Gebärden ermöglichte. Im Rückblick würde ich der initialen Datenbereinigung und der Korrektur von Gloss-Label-Inkonsistenzen noch mehr Zeit widmen, da diese, wie auch in der Literatur beschrieben, die Basis für jede erfolgreiche Klassifizierung bilden. Die Arbeit mit modernen Deep-Learning-Frameworks und die Optimierung von Transformer-Modellen haben meine technischen Kompetenzen im Bereich \textit{Computer Vision} und \textit{Sequence Modeling} maßgeblich erweitert.
+\subsection{Was habe ich gut gemacht?}
+Die Projektarbeit hat mir gezeigt, dass systematisches Vorgehen der Schlüssel zum Erfolg ist. Besonders stolz bin ich auf die methodische Evolution des Projekts: Der Übergang vom statischen Fingeralphabet (99,6\,\% Accuracy auf 24 Gesten) zur kontinuierlichen Gebärdenerkennung auf dem RWTH-PHOENIX-2014 Datensatz war technisch anspruchsvoll, aber durch schrittweises Vorgehen beherrschbar.
+
+Die \textbf{Datenanalyse vor architektonischen Entscheidungen} hat sich als goldrichtig erwiesen. Die systematische Untersuchung der MediaPipe-Landmarks zeigte beispielsweise, dass die Z-Koordinaten zu 80--98\,\% nahezu Nullwerte enthielten -- diese Erkenntnis ermöglichte eine Reduktion der Feature-Dimensionalität von 1'659 auf 1'086 Features ohne Performanceverlust.
+
+Ein weiterer Erfolg war der \textbf{Umgang mit der extremen Klassenimbalance} (593:1 Ratio zwischen häufigster und seltenster Klasse). Die Implementierung von Balanced Softmax Loss in Kombination mit strategischem Oversampling für unterrepräsentierte Klassen führte zu einer Gesamtverbesserung von 11,4\,\% (67,16\,\% auf 78,54\,\% Accuracy). Besonders beeindruckend war die 18,2\,\%-Verbesserung bei Klassen mit weniger als 100 Samples.
+
+Die Entwicklung eines \textbf{Bucket-basierten Evaluationssystems} -- inspiriert durch Feedback von Martin -- ermöglichte eine differenzierte Analyse der Modellperformance über verschiedene Sample-Strata hinweg. Dies half, gezielt Schwachstellen zu identifizieren und zu adressieren.
+
+Schliesslich war die \textbf{konsequente Nutzung von MLflow} für Experiment-Tracking wertvoll. Die Dokumentation aller Hyperparameter, Metriken und Modell-Artefakte ermöglichte nicht nur Reproduzierbarkeit, sondern auch fundierte Entscheidungen für Folge-Experimente.
+
+\subsection{Was würde ich anders machen?}
+Die grösste Lektion kam durch einen schmerzhaften \textbf{Train/Inference-Mismatch}: Der Landmark-Extraktor für das Training nutzte separate MediaPipe-Modelle (Hands, Face, Pose) mit expliziter Handedness-Erkennung (LEFT immer auf Index 0--62, RIGHT auf 63--125), während die GUI-Demo MediaPipe Holistic mit einfacher Enumeration verwendete. Dieser fundamentale Unterschied führte dazu, dass das Modell im Demo-Modus praktisch blind war -- teilweise nur 14 von 94 Frames korrekt verarbeitete. Rückblickend hätte ich von Anfang an auf \textbf{konsistente Pipelines} zwischen Training und Inference achten müssen. Die Handedness-Erkennung hätte bereits in der ersten Iteration implementiert werden sollen, nicht erst nach Diagnose des Mismatch-Problems.
+
+Auch beim Modell-Training gab es Lernmomente: Ein erster Optimierungsversuch mit erhöhter Regularisierung (Dropout 0,5, niedrige Learning Rate $5 \cdot 10^{-5}$) führte zu \textbf{Underfitting} statt der erhofften besseren Generalisierung -- der Validation Loss stieg von 2,89 auf 4,88. Die Balance zwischen Regularisierung und Model Capacity erfordert sorgfältige Abstimmung.
+
+Im Rückblick würde ich der \textbf{initialen Datenbereinigung} und der Korrektur von Gloss-Label-Inkonsistenzen noch mehr Zeit widmen, da diese, wie auch in der Literatur beschrieben, die Basis für jede erfolgreiche Klassifizierung bilden. Eine zentrale Erkenntnis war, dass die Qualität der Vorverarbeitung (Landmark-Extraktion und Ausrichtung) oft einen grösseren Einfluss auf die finale Accuracy hat als die blosse Komplexität der Modellarchitektur.
+
+Bei der \textbf{Dokumentation} hätte ich früher und kontinuierlicher arbeiten sollen. Die Thesis war zwar zu 70--80\,\% strukturiert, enthielt aber inkonsistente Accuracy-Zahlen zwischen verschiedenen Abschnitten -- ein Hinweis darauf, dass paralleles Schreiben und Experimentieren ohne strikte Synchronisation zu Inkonsistenzen führt.
+
+\subsection{Was habe ich gelernt?}
+
+\paragraph{Technisch}
+Die Arbeit mit dem RWTH-PHOENIX-Datensatz vermittelte tiefgreifendes Verständnis für die Herausforderungen bei realen, unbalancierten Datensätzen. \textit{Balanced Softmax Loss} erwies sich als deutlich effektiver als simple Oversampling-Strategien allein -- die Kombination beider Techniken war der Schlüssel zum Erfolg.
+
+MediaPipe ist ein mächtiges Tool, aber seine Nuancen -- insbesondere die unterschiedliche Handhabung von Handedness zwischen Holistic- und separaten Hand-Modellen -- erfordern genaues Studium. Die Erkenntnis, dass LEFT-Hände konsistent an definierten Indizes gespeichert werden müssen, war entscheidend für reproduzierbare Ergebnisse.
+
+Die Transformer-Architektur mit 256 Hidden Units, 4 Layern und 4 Attention Heads ($\sim$4M Parameter) erwies sich als guter Kompromiss zwischen Performance und Overfitting-Risiko. Das ursprüngliche, grössere Modell (512h/6L/8heads, $\sim$21M Parameter) zeigte einen 16\,\%-Train/Validation-Gap.
+
+Besonders lehrreich war zudem die Implementierung des \textit{MisclassificationAnalyzer}, der ein tiefes Verständnis für die semantische und visuelle Nähe von Gebärden ermöglichte.
+
+\paragraph{Prozessbezogen}
+Der wissenschaftliche Iterationsprozess -- Hypothese aufstellen, Experiment durchführen, Ergebnisse analysieren, Schlüsse ziehen -- ist keine abstrakte Methodik, sondern praktische Notwendigkeit. Die \glqq gescheiterten\grqq{} Experimente (V1 mit Overfitting, V2 mit Underfitting) waren keine Rückschläge, sondern lieferten wertvolle Erkenntnisse für die finale V3-Konfiguration.
+
+Cross-Platform-Entwicklung zwischen Windows (Entwicklung) und Linux (vast.ai Training) erfordert sorgfältige Abstraktion von Pfaden und Konfiguration. Die Verwendung von \texttt{pathlib} und environment-aware Config-Klassen sparte später viel Debugging-Zeit.
+
+\paragraph{Persönlich}
+Das Projekt hat mir gezeigt, dass Machine Learning zu 80\,\% Data Engineering und Pipeline-Konsistenz ist, und nur zu 20\,\% Modell-Architektur. Diese Lektion werde ich in jedem zukünftigen ML-Projekt beherzigen.

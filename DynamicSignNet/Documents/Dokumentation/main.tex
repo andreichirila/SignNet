@@ -1,4 +1,4 @@
-\documentclass[12pt,a4paper,german,titlepage,oneside]{scrbook}
+\documentclass[11pt,a4paper,german,titlepage,oneside]{scrbook}
 % ***** BEGIN OF THE LATEX PREAMBLE *****
 
 \usepackage{amsmath}
@@ -98,7 +98,7 @@
 \nocite{*}
 \nociteweb{*}
 
-\begin{spacing}{1.2}  % Environment for 1.2 line spacing for contents and lists
+\begin{spacing}{1.0}  % Environment for 1.2 line spacing for contents and lists
 
 % Here comes the table of contents
 % Setting the name of the table of contents
@@ -106,14 +106,14 @@
 \tableofcontents    % table of contents (.toc file) -- to rename title \renewcommand{\contentsname}{Table of Contents}
 
 % Here comes the list of figures
-\listoffigures    % list of figures   (.lof file) -- to rename title \renewcommand{\listfigurename}{Figures}
+% \listoffigures    % list of figures   (.lof file) -- to rename title \renewcommand{\listfigurename}{Figures}
 
 % Here comes the list of tables
-\listoftables    % list of tables    (.lot file) -- to rename title \renewcommand{\listtablename}{Tables}
+% \listoftables    % list of tables    (.lot file) -- to rename title \renewcommand{\listtablename}{Tables}
 
 % Here comes the list of listings/code extracts
 % Setting the name of the table of listings
-\lstlistoflistings    % list of listings    (.lol file) -- to rename title \renewcommand{\listtablename}{Tables}
+% \lstlistoflistings    % list of listings    (.lol file) -- to rename title \renewcommand{\listtablename}{Tables}
 
 \end{spacing}  % Environment for 1.2 line spacing for contents and lists
 
@@ -124,7 +124,7 @@
 % Page numbering will now be arabic.
 \pagenumbering{arabic}
 
-\addtolength{\parskip}{0.25\baselineskip} % paragraph spacing
+\addtolength{\parskip}{0.1\baselineskip} % paragraph spacing
 
 %\include{chapters/abstract}
 \include{chapters/introduction}
@@ -152,17 +152,17 @@
 
 
 % First we enumerate the most often used acronyms
-\include{appendix/acronyms}
-\renewcommand*{\acsfont}[1]{\textbf{#1}}
+%\include{appendix/acronyms}
+%\renewcommand*{\acsfont}[1]{\textbf{#1}}
 
 % Here we include the licence of the paper. It is always the GNU Free Documentation License.
-\include{appendix/licence}
+%\include{appendix/licence}
 
 % This appendix gives the URL of the official web page of the present project
-\include{appendix/website}
+%\include{appendix/website}
 
 % This appendix contains the CDROM and briefly describes its content
-\include{appendix/CD-Rom}
+%\include{appendix/CD-Rom}
 
 % The bibliography comes here, in alpha style.
 % The title of bibliography is changed. Force it to be "References" instead of "Bibliography".

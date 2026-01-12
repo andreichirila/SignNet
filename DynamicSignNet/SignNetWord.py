@@ -513,34 +513,195 @@ class TemporalAugmentation:
 
 class SkeletalAugmentation:
     """
-    Vectorized Skeletal Augmentation (High Speed).
-    Applies noise to the entire sequence array at once, skipping empty (zero) frames.
+    Skeleton-Based Augmentation with Bone Length Preservation.
+    
+    Applies Gaussian noise to joint positions while maintaining anatomically
+    correct bone lengths through kinematic constraints.
+    
+    Expected input layout from landmark_extraction.py:
+    [hands (126), face (1434), pose (99)] = 1659 features
+    - Hands: 2 hands × 21 landmarks × 3 coords = 126
+    - Face: 478 landmarks × 3 coords = 1434
+    - Pose: 33 landmarks × 3 coords = 99
     """
-    def __init__(self, sigma=0.015, probability=0.5, preserve_bones=False, num_iterations=0):
-        # Note: preserve_bones and num_iterations are kept in __init__ for 
-        # backward compatibility with your existing code calls, but they are 
-        # ignored in this fast implementation to ensure speed.
-        self.sigma = sigma
-        self.probability = probability
-
-    def __call__(self, landmarks):
+    
+    # Hand bone connections (landmark indices within a 21-point hand)
+    HAND_BONES = [
+        # Thumb
+        (0, 1), (1, 2), (2, 3), (3, 4),
+        # Index finger
+        (0, 5), (5, 6), (6, 7), (7, 8),
+        # Middle finger
+        (0, 9), (9, 10), (10, 11), (11, 12),
+        # Ring finger
+        (0, 13), (13, 14), (14, 15), (15, 16),
+        # Pinky
+        (0, 17), (17, 18), (18, 19), (19, 20)
+    ]
+    
+    # Pose bone connections (upper body - indices within 33-point pose)
+    POSE_BONES = [
+        # Torso
+        (11, 12),  # Shoulders
+        (11, 23), (12, 24),  # Shoulder to hip
+        (23, 24),  # Hips
+        # Left arm
+        (11, 13), (13, 15),  # Shoulder -> Elbow -> Wrist
+        # Right arm
+        (12, 14), (14, 16),  # Shoulder -> Elbow -> Wrist
+    ]
+    
+    # Flat feature offsets matching landmark_extraction.py layout
+    # Layout: [hands (126), face (1434), pose (99)]
+    LEFT_HAND_OFFSET = 0       # Left hand: features 0-62 (21 landmarks × 3)
+    RIGHT_HAND_OFFSET = 63     # Right hand: features 63-125 (21 landmarks × 3)
+    FACE_OFFSET = 126          # Face: features 126-1559 (478 landmarks × 3)
+    POSE_OFFSET = 1560         # Pose: features 1560-1658 (33 landmarks × 3)
+    
+    def __init__(self, 
+                 sigma: float = 0.015, 
+                 probability: float = 0.5,
+                 preserve_bones: bool = True,
+                 num_iterations: int = 3):
         """
         Args:
-            landmarks: (T, F) np.ndarray
+            sigma: Standard deviation of Gaussian noise (0.01-0.02 recommended)
+            probability: Probability of applying augmentation
+            preserve_bones: Whether to enforce bone length constraints after perturbation
+            num_iterations: Number of iterations for bone length correction
+        """
+        self.sigma = sigma
+        self.probability = probability
+        self.preserve_bones = preserve_bones
+        self.num_iterations = num_iterations
+    
+    def _extract_landmarks_3d(self, frame: np.ndarray, offset: int, num_landmarks: int) -> np.ndarray:
+        """Extract landmarks as (num_landmarks, 3) from flat feature vector."""
+        start = offset
+        end = offset + num_landmarks * 3
+        if end > len(frame):
+            return np.zeros((num_landmarks, 3), dtype=frame.dtype)
+        return frame[start:end].reshape(num_landmarks, 3)
+    
+    def _insert_landmarks_3d(self, frame: np.ndarray, landmarks_3d: np.ndarray, offset: int) -> np.ndarray:
+        """Insert (num_landmarks, 3) back into flat feature vector."""
+        num_landmarks = landmarks_3d.shape[0]
+        start = offset
+        end = offset + num_landmarks * 3
+        if end <= len(frame):
+            frame[start:end] = landmarks_3d.flatten()
+        return frame
+    
+    def _compute_bone_lengths(self, landmarks: np.ndarray, bone_connections: list) -> dict:
+        """Compute original bone lengths for preservation."""
+        bone_lengths = {}
+        for i, (start_idx, end_idx) in enumerate(bone_connections):
+            if start_idx < len(landmarks) and end_idx < len(landmarks):
+                bone_vec = landmarks[end_idx] - landmarks[start_idx]
+                bone_lengths[i] = np.linalg.norm(bone_vec)
+        return bone_lengths
+    
+    def _apply_bone_length_constraints(self, 
+                                        landmarks: np.ndarray, 
+                                        original_lengths: dict, 
+                                        bone_connections: list) -> np.ndarray:
+        """
+        Iteratively adjust joint positions to preserve bone lengths.
+        Uses a simple relaxation approach (FABRIK-inspired).
+        """
+        landmarks = landmarks.copy()
+        
+        for _ in range(self.num_iterations):
+            for bone_idx, (start_idx, end_idx) in enumerate(bone_connections):
+                if bone_idx not in original_lengths:
+                    continue
+                if start_idx >= len(landmarks) or end_idx >= len(landmarks):
+                    continue
+                    
+                target_length = original_lengths[bone_idx]
+                if target_length < 1e-6:  # Skip zero-length bones
+                    continue
+                
+                # Current bone vector
+                bone_vec = landmarks[end_idx] - landmarks[start_idx]
+                current_length = np.linalg.norm(bone_vec)
+                
+                if current_length < 1e-6:
+                    continue
+                
+                # Scale factor to restore original length
+                scale = target_length / current_length
+                
+                # Adjust both points symmetrically
+                correction = bone_vec * (scale - 1.0) * 0.5
+                landmarks[start_idx] -= correction
+                landmarks[end_idx] += correction
+        
+        return landmarks
+    
+    def _perturb_landmarks(self, landmarks: np.ndarray, bone_connections: list) -> np.ndarray:
+        """Apply Gaussian perturbation and optionally preserve bone lengths."""
+        if len(landmarks) == 0:
+            return landmarks
+        
+        # Store original bone lengths
+        original_lengths = self._compute_bone_lengths(landmarks, bone_connections)
+        
+        # Apply Gaussian noise
+        noise = np.random.normal(0, self.sigma, landmarks.shape).astype(landmarks.dtype)
+        perturbed = landmarks + noise
+        
+        # Restore bone lengths if enabled
+        if self.preserve_bones and len(original_lengths) > 0:
+            perturbed = self._apply_bone_length_constraints(
+                perturbed, original_lengths, bone_connections
+            )
+        
+        return perturbed
+    
+    def __call__(self, landmarks: np.ndarray) -> np.ndarray:
+        """
+        Apply skeletal augmentation to a sequence of landmarks.
+        
+        Args:
+            landmarks: Shape (T, F) where T is time and F is flattened features (1659)
+                       Layout: [hands (126), face (1434), pose (99)]
+        
+        Returns:
+            Augmented landmarks with same shape
         """
         if np.random.random() > self.probability:
             return landmarks
-
-        # Create a mask for non-zero values (so we don't add noise to missing data/padding)
-        # We assume if a coordinate is exactly 0.0, it's missing/padded.
-        mask = (landmarks != 0.0)
         
-        # Generate noise for the whole matrix at once (The "Vectorized" part)
-        noise = np.random.normal(0, self.sigma, landmarks.shape).astype(np.float32)
+        landmarks = landmarks.copy()
+        T, F = landmarks.shape
         
-        # Apply noise only where data exists
-        # In-place modification is fastest
-        landmarks[mask] += noise[mask]
+        # Only process if we have the expected feature size
+        if F < 1659:
+            return landmarks
+        
+        for t in range(T):
+            frame = landmarks[t].copy()
+            
+            # Process left hand (21 landmarks starting at offset 0)
+            left_hand = self._extract_landmarks_3d(frame, self.LEFT_HAND_OFFSET, 21)
+            if not np.allclose(left_hand, 0):  # Only if hand detected
+                left_perturbed = self._perturb_landmarks(left_hand, self.HAND_BONES)
+                frame = self._insert_landmarks_3d(frame, left_perturbed, self.LEFT_HAND_OFFSET)
+            
+            # Process right hand (21 landmarks starting at offset 63)
+            right_hand = self._extract_landmarks_3d(frame, self.RIGHT_HAND_OFFSET, 21)
+            if not np.allclose(right_hand, 0):  # Only if hand detected
+                right_perturbed = self._perturb_landmarks(right_hand, self.HAND_BONES)
+                frame = self._insert_landmarks_3d(frame, right_perturbed, self.RIGHT_HAND_OFFSET)
+            
+            # Process pose (33 landmarks starting at offset 1560)
+            pose = self._extract_landmarks_3d(frame, self.POSE_OFFSET, 33)
+            if not np.allclose(pose, 0):  # Only if pose detected
+                pose_perturbed = self._perturb_landmarks(pose, self.POSE_BONES)
+                frame = self._insert_landmarks_3d(frame, pose_perturbed, self.POSE_OFFSET)
+            
+            landmarks[t] = frame
         
         return landmarks
     
@@ -948,15 +1109,15 @@ class MirrorAugmentation:
 
 class SignLanguageDataset(Dataset):
     """
-    RAM-Cached Dataset for high-speed training.
-    Loads all .npz files into memory at startup to eliminate disk I/O bottlenecks.
+    Load preprocessed landmarks from NPZ files for sign language classification.
+    Supports enhanced features, skeletal/occlusion/mirror augmentations.
     """
     def __init__(self, npz_dir, word_to_idx=None, debug=True, augment=False, augment_prob=0.7,
                  use_enhanced_features=False, include_accel=False,
                  include_bones=True, include_bone_velocity=False, class_counts=None,
                  use_skeletal_augmentation=True, skeletal_sigma=0.015, skeletal_probability=0.5,
                  use_occlusion_augmentation=True, occlusion_probability=0.3,
-                 use_mirror_augmentation=True, mirror_probability=0.5):
+                 use_mirror_augmentation=True, mirror_probability=0.5):  # MIRROR AUGMENTATION
         self.npz_dir = Path(npz_dir)
         self.npz_files = sorted(self.npz_dir.glob("*.npz"))
         self.debug = debug
@@ -968,7 +1129,6 @@ class SignLanguageDataset(Dataset):
         self.include_bone_velocity = include_bone_velocity
         self.class_counts = class_counts
 
-        # --- AUGMENTATION SETUP ---
         if augment:
             self.augmentation = TemporalAugmentation(
                 class_counts=class_counts,
@@ -976,28 +1136,31 @@ class SignLanguageDataset(Dataset):
                 strength=0.5,
                 prob=augment_prob
             )
+            # Initialize skeletal augmentation with configurable parameters
             if use_skeletal_augmentation:
                 self.skeletal_augmentation = SkeletalAugmentation(
                     sigma=skeletal_sigma,
                     probability=skeletal_probability,
-                    preserve_bones=False,
+                    preserve_bones=True,
                     num_iterations=3
                 )
             else:
                 self.skeletal_augmentation = None
             
+            # NEW: Initialize occlusion augmentation
             if use_occlusion_augmentation:
                 self.occlusion_augmentation = LandmarkOcclusionAugmentation(
-                    region_dropout_prob=0.20,
-                    temporal_dropout_prob=0.15,
-                    max_temporal_dropout_frames=7,
-                    sub_region_dropout_prob=0.25,
+                    region_dropout_prob=0.20,  # Increased from 0.15 for stronger augmentation
+                    temporal_dropout_prob=0.15,  # Increased from 0.10
+                    max_temporal_dropout_frames=7,  # Increased from 5
+                    sub_region_dropout_prob=0.25,  # Increased from 0.20
                     use_realistic_patterns=True,
                     probability=occlusion_probability
                 )
             else:
                 self.occlusion_augmentation = None
             
+            # NEW: Initialize mirror augmentation
             if use_mirror_augmentation:
                 self.mirror_augmentation = MirrorAugmentation(
                     probability=mirror_probability
@@ -1009,88 +1172,77 @@ class SignLanguageDataset(Dataset):
             self.occlusion_augmentation = None
             self.mirror_augmentation = None
 
-        # --- VOCABULARY SETUP ---
+        if debug:
+            print(f"\n[DEBUG] SignLanguageDataset.__init__")
+            print(f"  NPZ directory: {self.npz_dir}")
+            print(f"  Total NPZ files found: {len(self.npz_files)}")
+            print(f"  Enhanced features: {use_enhanced_features}")
+            print(f"  Include acceleration: {include_accel}")
+            print(f"  Skeletal augmentation: {use_skeletal_augmentation if augment else 'N/A (augment=False)'}")
+            if use_skeletal_augmentation and augment:
+                print(f"    Sigma: {skeletal_sigma}, Probability: {skeletal_probability}")
+            print(f"  Occlusion augmentation: {use_occlusion_augmentation if augment else 'N/A (augment=False)'}")  # NEW
+            if use_occlusion_augmentation and augment:
+                print(f"    Probability: {occlusion_probability}")
+
         if word_to_idx is None:
             self.word_to_idx = {}
-            # We will build vocab during the caching loop to avoid double-reading files
-            build_vocab = True
-        else:
-            self.word_to_idx = word_to_idx
-            build_vocab = False
-
-        # --- RAM CACHING LOOP ---
-        self.data_cache = []
-        print(f"\n[DATASET] Caching {len(self.npz_files)} files to RAM...")
-        
-        # Use tqdm to show progress
-        for npz_file in tqdm(self.npz_files, desc="Loading Data"):
-            try:
-                data = np.load(npz_file, allow_pickle=True)
-                
-                # Extract and cast to float32 immediately to save memory
-                landmarks = data["landmarks"].astype(np.float32)
-                
-                # Extract gloss
-                glosses = data["glosses"]
-                if len(glosses) > 0:
-                    gloss_item = glosses[0]
-                    if isinstance(gloss_item, (np.ndarray, np.str_, bytes)):
-                        gloss = str(gloss_item)
-                    else:
-                        gloss = gloss_item
-                else:
-                    gloss = "UNKNOWN"
-                
-                # Build vocab if needed
-                if build_vocab:
+            for npz_file in self.npz_files:
+                try:
+                    data = np.load(npz_file, allow_pickle=True)
+                    gloss = data["glosses"][0]
                     if gloss not in self.word_to_idx:
                         self.word_to_idx[gloss] = len(self.word_to_idx)
-                
-                label = self.word_to_idx.get(gloss, 0)
-                
-                # Store lightweight tuple in list
-                self.data_cache.append({
-                    "landmarks": landmarks,
-                    "label": label,
-                    "gloss": gloss
-                })
-                
-            except Exception as e:
-                print(f"  [WARNING] Skipping corrupt file {npz_file}: {e}")
+                except Exception as e:
+                    print(f"  [WARNING] Error loading {npz_file}: {e}")
+        else:
+            self.word_to_idx = word_to_idx
 
         self.idx_to_word = {v: k for k, v in self.word_to_idx.items()}
 
         if debug:
-            print(f"\n[DEBUG] Dataset Loaded")
-            print(f"  Cached samples: {len(self.data_cache)}")
-            print(f"  Vocabulary size: {len(self.word_to_idx)}")
+            print(f"  Total unique words: {len(self.word_to_idx)}")
+            print(f"  Word vocabulary: {list(self.word_to_idx.keys())[:10]}...")
 
     def __len__(self):
-        return len(self.data_cache)
+        return len(self.npz_files)
 
     def __getitem__(self, idx):
-        # FAST: Retrieve from RAM
-        item = self.data_cache[idx]
-        
-        # We must copy() because augmentations modify data in-place
-        # and we don't want to corrupt the cached original version
-        landmarks = item["landmarks"].copy()
-        label = item["label"]
-        gloss = item["gloss"]
+        npz_file = self.npz_files[idx]
+        data = np.load(npz_file, allow_pickle=True)
 
-        # 1. Skeletal Augmentation (modifies raw coordinates)
+        # Load landmarks
+        landmarks = data["landmarks"].astype(np.float32)
+
+        # Load gloss and convert to string CORRECTLY
+        glosses = data["glosses"]
+        if len(glosses) > 0:
+            gloss_item = glosses[0]
+            if isinstance(gloss_item, (np.ndarray, np.str_, bytes)):
+                gloss = str(gloss_item)
+            else:
+                gloss = gloss_item
+        else:
+            gloss = "UNKNOWN"
+
+        label = self.word_to_idx.get(gloss, 0)
+
+        # Apply skeletal augmentation BEFORE feature engineering
+        # This perturbs raw landmarks while preserving bone lengths
         if self.augment and self.skeletal_augmentation is not None:
             landmarks = self.skeletal_augmentation(landmarks)
 
-        # 2. Occlusion Augmentation (masks raw coordinates)
+        # NEW: Apply occlusion augmentation BEFORE feature engineering
+        # This simulates real-world tracking failures
         if self.augment and self.occlusion_augmentation is not None:
             landmarks = self.occlusion_augmentation(landmarks)
 
-        # 3. Mirror Augmentation (flips raw coordinates)
+        # Apply mirror augmentation BEFORE feature engineering
+        # This flips the sign horizontally (swaps left/right hands)
         if self.augment and self.mirror_augmentation is not None:
             landmarks, _ = self.mirror_augmentation(landmarks, return_applied=True)
 
-        # 4. Feature Engineering (calculates velocity/bones from modified landmarks)
+        # APPLY FEATURE ENGINEERING IF ENABLED (with is_train flag)
         if self.use_enhanced_features:
             landmarks = EnhancedLandmarkFeatures.extract_all_features(
                 landmarks,
@@ -1101,7 +1253,7 @@ class SignLanguageDataset(Dataset):
                 include_bone_velocity=self.include_bone_velocity
             )
 
-        # 5. Temporal Augmentation (modifies final feature vector)
+        # Apply temporal augmentation AFTER feature engineering (class-aware)
         if self.augment:
             landmarks = self.augmentation(landmarks, class_label=gloss)
 
@@ -1199,28 +1351,8 @@ class TransformerSignClassifier(nn.Module):
         self.num_classes = num_classes
         self.debug = debug
 
-        # --- 1. Internal Feature Extractor (GPU Optimized) ---
-        # We hardcode these to match your main() settings for consistency
-        self.feature_extractor = GPUFeatureExtractor(
-            include_accel=False, 
-            include_bones=True, 
-            include_bone_velocity=False
-        )
-        
-        # --- 2. Auto-Calculate Input Size ---
-        # Run a dummy forward pass to see how big the features actually are
-        # (Raw 1659 + Velocity 1659 + Bones 150 + HandDist 1 = 3469)
-        with torch.no_grad():
-            dummy = torch.zeros(1, 10, input_size)
-            out_dummy = self.feature_extractor(dummy)
-            real_input_size = out_dummy.shape[-1]
-            
-        if debug:
-            print(f"[MODEL] Auto-calculated input size: {input_size} -> {real_input_size}")
-
-        # --- 3. Project to Hidden Size ---
-        # CRITICAL FIX: Use real_input_size (3469), not input_size (1659)
-        self.input_proj = nn.Linear(real_input_size, hidden_size)
+        # Project input features to model dimension (hidden_size)
+        self.input_proj = nn.Linear(input_size, hidden_size)
 
         # Positional encoding (learned)
         self.pos_embedding = nn.Parameter(torch.zeros(1, 2048, hidden_size))  # max_len=2048
@@ -1246,7 +1378,7 @@ class TransformerSignClassifier(nn.Module):
 
         if debug:
             print(f"[DEBUG] TransformerSignClassifier initialized")
-            print(f"  Input size: {input_size} (Expanded to {real_input_size})")
+            print(f"  Input size: {input_size}")
             print(f"  Hidden size: {hidden_size}")
             print(f"  Num classes: {num_classes}")
             print(f"  Num heads: {num_heads}")
@@ -1265,11 +1397,8 @@ class TransformerSignClassifier(nn.Module):
         """
         B, T, D = landmarks.shape
 
-        # 1. Extract Features on GPU (1659 -> 3469)
-        x = self.feature_extractor(landmarks)
-
-        # 2. Project to hidden_size (3469 -> hidden)
-        x = self.input_proj(x)  # (B, T, hidden)
+        # Project to hidden_size
+        x = self.input_proj(landmarks)  # (B, T, hidden)
 
         # Add positional embeddings (crop to current length)
         if T > self.pos_embedding.size(1):
@@ -1294,6 +1423,7 @@ class TransformerSignClassifier(nn.Module):
         sign_logits = self.fc_sign(pooled)
 
         return sign_logits
+
 
 
 class PadCollate:
@@ -1710,7 +1840,7 @@ def log_class_metrics_to_mlflow(class_metrics, epoch):
     with open(metrics_json_path, 'w') as f:
         json.dump(class_metrics_table, f, indent=2)
 
-    # mlflow.log_artifact(metrics_json_path)
+    mlflow.log_artifact(metrics_json_path)
     os.remove(metrics_json_path)
 
     print(f"✓ Logged per-class metrics for epoch {epoch}")
@@ -1865,103 +1995,6 @@ def load_data_by_type(args, base_dataset, top_k_words, old_to_new_idx,
         return train_indices, val_indices, test_indices, dataset_train, dataset_val, dataset_test
 
 
-class GPUFeatureExtractor(nn.Module):
-    """
-    Computes enhanced features (Velocity, Bones) on the GPU batch-wise.
-    Replaces the CPU-based EnhancedLandmarkFeatures.
-    """
-    def __init__(self, include_accel=False, include_bones=True, include_bone_velocity=False):
-        super().__init__()
-        self.include_accel = include_accel
-        self.include_bones = include_bones
-        self.include_bone_velocity = include_bone_velocity
-        
-        # Pre-compute edges for bones (same as before)
-        self.register_buffer('bone_pairs', self._get_bone_pairs())
-
-    def _get_bone_pairs(self):
-        """Standard MediaPipe connections translated to tensor indices"""
-        # Hand edges
-        hand_chains = [
-            [0, 1, 2, 3, 4], [0, 5, 6, 7, 8], [0, 9, 10, 11, 12], 
-            [0, 13, 14, 15, 16], [0, 17, 18, 19, 20]
-        ]
-        edges = []
-        # Left Hand (0-20) & Right Hand (21-41)
-        for base in [0, 21]:
-            for chain in hand_chains:
-                for a, b in zip(chain[:-1], chain[1:]):
-                    edges.append([base + a, base + b])
-        
-        # Pose edges (offset 520)
-        pose_base = 520
-        pose_pairs = [
-            (11, 13), (13, 15), (12, 14), (14, 16), (11, 12),
-            (11, 23), (12, 24), (23, 24), (0, 11), (0, 12)
-        ]
-        for a, b in pose_pairs:
-            edges.append([pose_base + a, pose_base + b])
-            
-        return torch.tensor(edges, dtype=torch.long) # (Num_Bones, 2)
-
-    def forward(self, x):
-        """
-        Args:
-            x: Raw landmarks (Batch, Time, 1659)
-        Returns:
-            Enhanced features (Batch, Time, New_Dim)
-        """
-        B, T, D = x.shape
-        
-        # 1. Reshape to (Batch, Time, 553, 3)
-        # We assume standard 1659 input. If padding was used, this might need safety checks.
-        landmarks_3d = x.view(B, T, 553, 3)
-        
-        features = [x] # Start with raw
-        
-        # 2. Velocity
-        # (B, T, 553, 3)
-        velocity = torch.zeros_like(landmarks_3d)
-        velocity[:, 1:] = (landmarks_3d[:, 1:] - landmarks_3d[:, :-1]) * 25.0 # FPS
-        features.append(velocity.view(B, T, -1))
-        
-        # 3. Acceleration (Optional)
-        if self.include_accel:
-            accel = torch.zeros_like(velocity)
-            accel[:, 1:] = (velocity[:, 1:] - velocity[:, :-1]) * 25.0
-            features.append(accel.view(B, T, -1))
-            
-        # 4. Bones (Optional)
-        if self.include_bones:
-            # Gather parent/child points: (Num_Bones, 2) -> (B, T, Num_Bones, 3)
-            parents = landmarks_3d[:, :, self.bone_pairs[:, 0]]
-            children = landmarks_3d[:, :, self.bone_pairs[:, 1]]
-            
-            # Compute vectors
-            bone_vecs = children - parents
-            
-            # Normalize direction (unit vectors)
-            bone_lens = torch.norm(bone_vecs, dim=-1, keepdim=True).clamp(min=1e-6)
-            unit_bones = bone_vecs / bone_lens
-            
-            # Flatten
-            features.append(unit_bones.view(B, T, -1))
-            
-            # Bone Velocity (Optional)
-            if self.include_bone_velocity:
-                bone_vel = torch.zeros_like(unit_bones)
-                bone_vel[:, 1:] = (unit_bones[:, 1:] - unit_bones[:, :-1]) * 25.0
-                features.append(bone_vel.view(B, T, -1))
-
-        # 5. Hand Distances (Simple summary feature)
-        # Left Hand Center (0-21), Right Hand Center (21-42)
-        lh_center = landmarks_3d[:, :, 0:21].mean(dim=2)
-        rh_center = landmarks_3d[:, :, 21:42].mean(dim=2)
-        hand_dist = torch.norm(lh_center - rh_center, dim=-1, keepdim=True) # (B, T, 1)
-        features.append(hand_dist)
-
-        # Concatenate all
-        return torch.cat(features, dim=-1)
 
 
 def main():
@@ -1998,31 +2031,31 @@ def main():
     USE_WEIGHTED_SAMPLER = True
     WEIGHT_BETA = 0.9999
 
-    BATCH_SIZE = 64
+    BATCH_SIZE = 512   # Large batch for compact model
     LEARNING_RATE = 1e-4  # Reduced from 3e-4
     HIDDEN_SIZE = MAIN_MODEL_CONFIG['hidden_size']
-    DROPOUT_RATE = 0.5
+    DROPOUT_RATE = 0.65  # Increased from 0.60 to reduce 7% train-val gap
     NUM_HEADS = MAIN_MODEL_CONFIG['num_heads']
     NUM_LAYERS = MAIN_MODEL_CONFIG['num_layers']
-    ATTENTION_DROPOUT = 0.2  # Increased from 0.30 for stronger regularization
-    WEIGHT_DECAY = 0.05
+    ATTENTION_DROPOUT = 0.35  # Increased from 0.30 for stronger regularization
+    WEIGHT_DECAY = 1e-2  # Keep strong L2 regularization
     AUGMENT = True
     AUGMENT_PROBABILITY = 0.75  # Increased from 0.7 for more augmentation
 
     # FEATURE ENGINEERING SETTINGS (NEW)
     USE_ENHANCED_FEATURES = False  # Toggle feature engineering
-    INCLUDE_ACCELERATION = False  # Toggle acceleration features
+    INCLUDE_ACCELERATION = True  # Toggle acceleration features
     USE_FOCAL_LOSS = True  # Use Focal Loss
     USE_BALANCED_SOFTMAX = True
     if USE_BALANCED_SOFTMAX:
         USE_WEIGHTED_SAMPLER = False
         USE_CLASS_WEIGHTS = False
-    INCLUDE_BONES = True                 # NEW
+    INCLUDE_BONES = False                 # NEW
     INCLUDE_BONE_VELOCITY = False        # NEW (turn on later if memory allows)
 
     # SKELETAL AUGMENTATION SETTINGS
-    USE_SKELETAL_AUGMENTATION = True
-    SKELETAL_SIGMA = 0.015          # Increased from 0.015 (more noise)
+    USE_SKELETAL_AUGMENTATION = False
+    SKELETAL_SIGMA = 0.025          # Increased from 0.015 (more noise)
     SKELETAL_PROBABILITY = 0.7      # Increased from 0.5 (more samples augmented)
 
     # OCCLUSION AUGMENTATION SETTINGS (NEW)
@@ -2036,11 +2069,11 @@ def main():
     # LR SCHEDULER SETTINGS
     USE_EARLY_STOPPING = False
     PLATEAU_PATIENCE = 5  # Adaptive reduction trigger
-    WARMUP_EPOCHS = 20
-    NUM_EPOCHS = 600
+    WARMUP_EPOCHS = 30    # Longer warmup for 4000 epochs
+    NUM_EPOCHS = 4000     # Extended training
     BASE_LR = 1e-4
     MIN_LR = 1e-7         # Lower floor for long training
-    T_0 = 200
+    T_0 = 100             # Longer first cycle for 4000 epochs
     T_MULT = 2            # Multiply cycle length after each restart
 
     # Check if we are in expert training mode
@@ -2335,7 +2368,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     sampler=train_sampler,
                     collate_fn=PadCollate(),
-                    num_workers=6,
+                    num_workers=4,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2349,7 +2382,7 @@ def main():
                     batch_size=BATCH_SIZE,
                     shuffle=True,
                     collate_fn=PadCollate(),
-                    num_workers=6,
+                    num_workers=4,
                     pin_memory=True,
                     prefetch_factor=4,
                     persistent_workers=True
@@ -2360,7 +2393,7 @@ def main():
                 batch_size=BATCH_SIZE,
                 shuffle=False,
                 collate_fn=PadCollate(),
-                num_workers=6,
+                num_workers=4,
                 pin_memory=True,
                 prefetch_factor=4,
                 persistent_workers=True
@@ -2382,19 +2415,15 @@ def main():
                 debug=True
             ).to(DEVICE)
 
-            # if hasattr(torch, 'compile'):
-            #     print("Compiling model with torch.compile...")
-            #     model = torch.compile(model_raw, ...) 
-            # ---------------------------------------
-
-            # Use the raw model directly
-            model = model_raw
+            if hasattr(torch, 'compile'):
+                print("Compiling model with torch.compile...")
+                model = torch.compile(model_raw, mode='max-autotune-no-cudagraphs', dynamic=True)
 
             # STEP 7: Setup training
             print(f"\n[STEP 7] Setting up training...")
 
             criterion = SignLoss(
-                label_smoothing=0.15,
+                label_smoothing=0.05,
                 use_focal=(USE_FOCAL_LOSS and not USE_BALANCED_SOFTMAX),
                 class_weights=(class_weights if USE_CLASS_WEIGHTS and not USE_BALANCED_SOFTMAX else None),
                 use_balanced_softmax=USE_BALANCED_SOFTMAX,
@@ -2423,10 +2452,11 @@ def main():
                     eta_min=MIN_LR
                 )
             else:
-                restart_scheduler = CosineAnnealingLR(
+                restart_scheduler = CosineAnnealingWarmRestarts(
                     optimizer,
-                    T_max=NUM_EPOCHS - WARMUP_EPOCHS, 
-                    eta_min=MIN_LR
+                    T_0=T_0,              # First cycle: 25 epochs
+                    T_mult=T_MULT,        # Next cycles: 40, 80, ... epochs
+                    eta_min=MIN_LR        # Minimum LR at cycle end
                 )
 
             from torch.optim.lr_scheduler import SequentialLR
@@ -2437,7 +2467,7 @@ def main():
             )
 
             early_stopping = EarlyStopping(
-                patience=100,
+                patience=35,
                 min_delta=0.0005,
                 metric="val_acc",
                 mode="max"
@@ -2497,7 +2527,7 @@ def main():
                     best_epoch = epoch
                     best_model_path = os.path.join(MODEL_SAVE_DIR, "sign_classifier_best_enhanced.pth")
                     torch.save(model.state_dict(), best_model_path)
-                    # log_class_metrics_to_mlflow(class_metrics, epoch)
+                    log_class_metrics_to_mlflow(class_metrics, epoch)
 
                 train_losses.append(train_loss)
                 val_losses.append(val_loss)

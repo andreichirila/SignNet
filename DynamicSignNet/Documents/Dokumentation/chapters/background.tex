@@ -80,66 +80,6 @@ Transformer bieten mehrere Vorteile für die Gebärdenerkennung:
     \item \textbf{Interpretierbarkeit}: Attention-Gewichte können visualisiert werden, um zu verstehen, welche Frames für die Klassifikation relevant sind.
 \end{itemize}
 
-\section{MediaPipe Holistic}
-
-\textit{MediaPipe} \cite{lugaresi2019} ist ein von Google entwickeltes Framework für die Echtzeit-Verarbeitung von Mediendaten. Die \textit{Holistic}-Pipeline kombiniert drei spezialisierte Modelle zur gleichzeitigen Extraktion von Körper-, Hand- und Gesichtslandmarks.
-
-\subsection{Landmark-Extraktion}
-
-Die Holistic-Pipeline extrahiert pro Frame insgesamt 543 Schlüsselpunkte (Landmarks):
-
-\begin{itemize}
-    \item \textbf{Pose}: 33 Körpergelenke (Schultern, Ellbogen, Handgelenke, Hüfte, Knie, etc.)
-    \item \textbf{Hände}: 21 Landmarks pro Hand (Fingerspitzen, Gelenke, Handfläche) $\times$ 2
-    \item \textbf{Gesicht}: 478 Landmarks (Augenbrauen, Augen, Nase, Mund, Gesichtskontur)
-\end{itemize}
-
-\subsection{Geometrische Repräsentation}
-
-Jeder Landmark $\mathbf{p}_i$ wird im dreidimensionalen Raum repräsentiert:
-
-\begin{equation}
-    \mathbf{p}_i = (x_i, y_i, z_i)
-\end{equation}
-
-Hierbei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die geschätzte Tiefe relativ zur Kamera darstellt. Die Gesamtzahl der Features pro Frame ergibt sich aus:
-
-\begin{equation}
-    F_{\text{total}} = (478 + 33 + 42) \times 3 = 1659
-\end{equation}
-
-Die Verwendung von Landmark-Koordinaten anstelle von Rohbildern bietet erhebliche Vorteile: Robustheit gegenüber Hintergrundvariationen, Beleuchtungsänderungen und Kleidung, sowie eine drastische Reduktion der Eingabedimensionalität.
-
-\section{Feature Engineering}
-
-Neben den rohen Landmark-Koordinaten werden zusätzliche Merkmale berechnet, um die Gebärdenstruktur besser zu erfassen.
-
-\subsection{Bone-Vektoren}
-
-\textit{Bone-Vektoren} beschreiben die Verbindung zwischen anatomisch benachbarten Landmarks und sind invariant gegenüber der absoluten Position im Bild:
-
-\begin{equation}
-    \vec{b}_{ij} = \mathbf{p}_j - \mathbf{p}_i = (x_j - x_i, y_j - y_i, z_j - z_i)
-\end{equation}
-
-Diese Vektoren ermöglichen die Berechnung von Gelenkwinkeln $\theta$ über das Skalarprodukt:
-
-\begin{equation}
-    \theta = \arccos\left( \frac{\vec{u} \cdot \vec{v}}{\|\vec{u}\| \|\vec{v}\|} \right)
-\end{equation}
-
-Gelenkwinkel sind besonders robust gegenüber Skalierungsunterschieden (z.B. unterschiedliche Abstände zur Kamera).
-
-\subsection{Velocity Features}
-
-Die zeitliche Ableitung der Landmark-Positionen – die \textit{Velocity} – erfasst die Bewegungsdynamik:
-
-\begin{equation}
-    \mathbf{v}_i^{(t)} = \mathbf{p}_i^{(t)} - \mathbf{p}_i^{(t-1)}
-\end{equation}
-
-Diese Merkmale sind besonders wichtig für die Unterscheidung von Gebärden, die sich primär durch ihre Bewegungscharakteristik unterscheiden.
-
 \section{Herausforderungen des Datensatzes}
 
 \subsection{Long-Tail-Verteilung}

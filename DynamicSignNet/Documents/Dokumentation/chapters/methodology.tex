@@ -1,74 +1,143 @@
 \chapter{Methodik}
 \label{ch:methodology}
 
-Dieses Kapitel beschreibt die technische Umsetzung des \textit{SignNet}-Systems, wobei der Fokus auf der Transformation hochdimensionaler Landmark-Daten in diskriminative Merkmale liegt.
+Dieses Kapitel beschreibt die technische Umsetzung und den iterativen Forschungsprozess des \textit{SignNet}-Systems. Im Fokus steht die Begründung der Design-Entscheidungen, die auf Basis von fünf aufeinanderfolgenden Entwicklungsphasen getroffen wurden, um eine robuste, dynamische Gebärdenspracherkennung zu realisieren.
 
-\section{Vorphase: Statische Buchstabenerkennung (CNN)}
-\label{sec:static_approach}
-Zu Beginn des Projekts wurde ein Modell zur Erkennung des statischen Fingeralphabets (25 Klassen) implementiert, um eine Baseline für die Bildklassifizierung im Kontext der Gebärdensprache zu etablieren.
+\section{Datengrundlage und Klassenwahl}
+Als Basis für die dynamische Erkennung dient der \textit{Phoenix}-Datensatz, der ursprünglich über 1200 verschiedene Gebärden (Glossen) umfasst. 
 
-\subsection{Systemarchitektur}
-In dieser Phase wurde das Skript \texttt{StaticSignNet.py} entwickelt, welches auf einer klassischen \textit{Convolutional Neural Network} (CNN) Architektur basiert. Das Modell besteht aus:
+\subsection{Filterkriterien und Stichprobenumfang}
+Aufgrund der extremen Klassenimbalance (Long-Tail-Verteilung) wurde eine bewusste Einschränkung des Vokabulars vorgenommen, um die Robustheit des Trainings zu erhöhen:
 \begin{itemize}
-    \item \textbf{Feature-Extraktion}: Sechs aufeinanderfolgende Convolutional-Blöcke mit Batch-Normalization und ReLU-Aktivierung zur Extraktion räumlicher Merkmale.
-    \item \textbf{Pooling}: Global Average Pooling (GAP) zur Reduktion der Parameteranzahl und Vermeidung von Overfitting.
-    \item \textbf{Klassifizierung}: Ein vollvernetzter Layer mit Dropout (0,5), der in einen Softmax-Output mündet.
+    \item \textbf{Mindestanforderung}: Es wurden nur Klassen berücksichtigt, die über eine Mindestanzahl von \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} verfügen.
+    \item \textbf{Resultat}: Aus der Filterung resultieren \textbf{146 Klassen}, die für die finale Klassifizierung verwendet wurden.
+    \item \textbf{Begründung}: Diese Entscheidung stellt sicher, dass dem Modell pro Gebärde genügend Varianz zur Verfügung steht, um verallgemeinerbare Merkmale statt bloßer Auswendiglernen (Overfitting) zu entwickeln.
 \end{itemize}
 
-\subsection{Limitationen und Erkenntnisse}
-Obwohl das Modell gute Ergebnisse bei isolierten, statischen Handzeichen lieferte, wurden zwei wesentliche Limitationen identifiziert:
-\begin{enumerate}
-    \item \textbf{Hintergrundempfindlichkeit}: Da das Modell direkt auf RGB-Pixeln operierte, war es anfällig für unterschiedliche Lichtverhältnisse und komplexe Hintergründe.
-    \item \textbf{Mangelnde Dynamik}: Gebärdensprache besteht primär aus Bewegungsabfolgen. Statische CNNs können zeitliche Abhängigkeiten (z.\,B. die Gebärde für „KOMMEN“) nicht erfassen.
-\end{enumerate}
-Diese Erkenntnisse führten zu der Entscheidung, in der Hauptphase auf eine \textbf{Landmark-basierte Transformer-Architektur} umzusteigen, um die Rechenlast zu senken und die zeitliche Dimension explizit abzubilden.
+\subsection{Merkmalsextraktion mit MediaPipe}
 
-\section{Feature Engineering und Merkmalsextraktion}
-Die Qualität der Gebärdenspracherkennung hängt maßgeblich von der Repräsentation der Eingabedaten ab. Da rohe $x,y,z$-Koordinaten keine expliziten Informationen über die Bewegungsdynamik oder die Skelettgeometrie enthalten, wurde die spezialisierte Klasse \texttt{EnhancedLandmark\-Features} implementiert.
+Um die Komplexität der rohen Videodaten zu reduzieren und das System robust gegenüber variierenden Hintergründen und Lichtverhältnissen zu machen, wurde die \textit{MediaPipe-Pipeline} eingesetzt\cite{lugaresi2019}. Anstatt das Modell direkt auf Pixelebene trainieren zu lassen, extrahiert diese Pipeline anatomisch relevante 3D-Landmarks aus jedem Frame der Videosequenz.
 
-\subsection{Vorverarbeitung und Datenreinigung}
-Bevor komplexe Merkmale berechnet werden, durchlaufen die Daten eine Vorverarbeitungsstufe, um die numerische Stabilität zu gewährleisten:
+Die Extraktion erfolgt dabei in drei spezialisierten Sub-Modellen, die zu einem kombinierten Merkmalsvektor zusammengefasst werden:
+
 \begin{itemize}
-    \item \textbf{Fehlwert-Behandlung}: Aufgrund von Verdeckungen liefert MediaPipe oft unvollständige Daten. In \texttt{SignNetWord.py} werden \texttt{NaN}-Werte (Not a Number) durch Nullen ersetzt.
-    \item \textbf{Händigkeits-Invarianz}: Durch die Nutzung des \texttt{TransformerSignClassifierWithHandedness} wird explizit zwischen aktiver und passiver Hand unterschieden, was die Erkennung unabhängig von der Dominanz des Signers macht.
+    \item \textbf{Face-Mesh}: Extraktion von 478 Landmarks für mimische Details und Mundbilder.
+    \item \textbf{Hand-Tracking}: Erfassung von 21 Landmarks pro Hand (insgesamt 42 Punkte), um die präzise Fingerstellung abzubilden.
+    \item \textbf{Pose-Modell}: Extraktion von 33 Landmarks zur Definition der Oberkörper-Position.
 \end{itemize}
 
-\subsection{Temporale Merkmale: Kinematik der Gebärden}
-Um die Dynamik der Gebärden abzubilden, berechnet das System zeitliche Ableitungen. Dies ist entscheidend für die Unterscheidung von Gebärden, die identische Handformen, aber unterschiedliche Bewegungsenergien aufweisen.
+Jeder dieser 553 Punkte wird durch ein Koordinatentripel $(x, y, z)$ repräsentiert, was zu einer Eingabedimension von 1659 Merkmalen pro Frame führt. Dieser flache Merkmalsvektor dient als Grundlage für das anschließende Feature Engineering, wie die Berechnung von Geschwindigkeiten und Knochenvektoren.
+Hierbei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die geschätzte Tiefe relativ zur Kamera darstellt.
 
-Die Geschwindigkeit $v$ eines Keypoints zum Zeitpunkt $t$ wird durch die Differenz der Positionen $\mathbf{p}$, multipliziert mit der Bildrate (\textit{fps}), berechnet:
-\begin{equation}
-    \vec{v}_t = (\mathbf{p}_t - \mathbf{p}_{t-1}) \cdot \text{fps}
-\end{equation}
+\section{Iterativer Forschungsansatz und Versuchsaufbau}
+Wir haben das finale System nicht in einem Rutsch gebaut, sondern uns in fünf Etappen an die beste Lösung herangetastet. Dabei war jeder Schritt eine Reaktion auf das, was in der vorherigen Runde noch nicht optimal funktioniert hat.
 
-Die Beschleunigung $a$ resultiert entsprechend aus der Änderung der Geschwindigkeit:
+\subsection{Phase 1: Statische Baseline (CNN) – Fingeralphabet}
+In der Initialphase wurde die Erkennung des statischen Fingeralphabets (25 Klassen) mittels Bilddaten evaluiert.
+\begin{itemize}
+    \item \textbf{Design-Entscheidung}: Implementierung eines \textit{Convolutional Neural Networks} (CNN) zur direkten Merkmalsextraktion aus Pixeldaten.
+    \item \textbf{Ergebnis}: Das Modell erreichte eine herausragende \textbf{Test-Genauigkeit von 99,6\,\%}.
+    \item \textbf{Erkenntnis}: Trotz der nahezu fehlerfreien Klassifizierung statischer Bilder wurde deutlich, dass dieser Ansatz die linguistische Essenz der Gebärdensprache – die zeitliche Dynamik – nicht erfassen kann.
+\end{itemize}
+
+\subsection{Phase 2: Erste dynamische Klassifizierung (150 Klassen)}
+Die Erweiterung auf 150 dynamische Glossen erforderte den Wechsel von Einzelbildern zu Videosequenzen.
+\begin{itemize}
+    \item \textbf{Technischer Aufbau}: Nutzung von Landmark-Extraktionen zur Reduktion der Datenkomplexität.
+    \item \textbf{Ergebnis}: Die Validierungs-Genauigkeit lag bei \textbf{53,9\,\%}. Es wurde ersichtlich, dass herkömmliche Modelle bei steigender Klassenanzahl und zeitlicher Varianz an ihre Kapazitätsgrenzen stoßen.
+\end{itemize}
+
+\subsection{Phase 3: Skelettbasierte Graph-Experimente}
+Es wurde versucht, die anatomischen Relationen der Hand-Landmarks explizit durch skelettale Graph-Strukturen abzubilden.
+\begin{itemize}
+    \item \textbf{Ergebnis}: Die Validierungs-Genauigkeit sank massiv auf \textbf{31,6\,\%}.
+    \item \textbf{Design-Entscheidung}: Die Ergebnisse zeigten, dass starre skelettbasierte Graphen die hohe individuelle Variabilität in der Gebärdenausführung nicht ausreichend generalisieren konnten. Dies führte zur Entscheidung für eine flexiblere, auf Aufmerksamkeit basierende Architektur: den Transformer.
+\end{itemize}
+
+\subsection{Phase 4: Einführung der Transformer-Architektur}
+Der Wechsel auf einen Transformer-Encoder markierte den technologischen Durchbruch für das Projekt.
+\begin{itemize}
+    \item \textbf{Konzept}: Implementierung eines \textit{Self-Attention}-Mechanismus, um zeitliche Abhängigkeiten über die gesamte Sequenz hinweg zu lernen.
+    \item \textbf{Ergebnis}: Die Validierungs-Genauigkeit stieg signifikant auf \textbf{66,6\,\%}.
+\end{itemize}
+
+\subsection{Phase 5: Finales optimiertes Modell}
+Durch intensives Hyperparameter-Tuning und die Verfeinerung des Feature Engineerings wurde der aktuelle Bestwert realisiert.
+\begin{itemize}
+    \item \textbf{Optimierung}: Einführung von \textit{Label Smoothing} und optimierten kinematischen Features.
+    \item \textbf{Resultat}: Das System erreichte eine finale \textbf{Validierungs-Genauigkeit von 73,15\,\%} sowie eine \textbf{Top-5 Accuracy von 92,05\,\%}.
+\end{itemize}
+
+\section{Vorverarbeitung und Datenreinigung}
+Ein robuster Umgang mit instabilen Datenquellen war essenziell für die Modellstabilität.
+
+\subsection{Umgang mit Fehlwerten und Verdeckungen (Occlusion)}
+Die Landmark-Extraktion mittels MediaPipe ist anfällig für Verdeckungen, etwa wenn eine Hand die andere überschneidet.
+\begin{itemize}
+    \item \textbf{Numerische Stabilität}: Resultierende \texttt{NaN}-Werte werden in der Vorverarbeitung konsequent durch $0.0$ ersetzt, um Berechnungsfehler in den Transformer-Layern zu vermeiden.
+    \item \textbf{Händigkeits-Invarianz}: Der \texttt{TransformerSignClassifierWithHandedness} erkennt explizit die dominante Hand, um die Vorhersage unabhängig von der Händigkeit des Unterzeichners zu machen.
+\end{itemize}
+
+\section{Datenaugmentation}
+Um dem \textit{Long-Tail}-Problem des Datensatzes zu begegnen, wurde eine mehrstufige Augmentation implementiert.
+
+\subsection{Spatiale und Temporale Transformationen}
+\begin{itemize}
+    \item \textbf{Geometrischer Shift}: Zufällige Rotationen bis zu 5 Grad und Skalierungen zwischen $0,9$ und $1,1$ simulieren variierende Kamerapositionen.
+    \item \textbf{Temporaler Shift}: Sequenzen werden zufällig zeitlich verschoben, um die Invarianz gegenüber unterschiedlichen Startzeitpunkten einer Gebärde zu erhöhen.
+\end{itemize}
+
+\subsection{Landmark-Occlusion-Augmentation}
+Zur aktiven Verbesserung der Robustheit gegenüber Verdeckungen wurde ein spezifisches Fehler-Modell integriert:
+\begin{itemize}
+    \item \textbf{Gaussian Noise}: Den Koordinaten wird ein normalverteiltes Rauschen ($\sigma = 0,005$) hinzugefügt.
+    \item \textbf{Simulation von Jitter}: Dieses Rauschen simuliert die Instabilität der Keypoints, die typischerweise bei teilweisen Verdeckungen auftritt.
+    \item \textbf{Lerneffekt}: Das Modell wird gezwungen, robuste Bewegungsmuster statt präziser Einzelpunkte zu lernen.
+\end{itemize}
+
+
+
+\section{Feature Engineering: Kinematik und Geometrie}
+Die Klasse \texttt{EnhancedLandmarkFeatures} transformiert statische Punkte in einen dynamischen Merkmalsraum.
+
+\subsection{Kinematische Ableitungen}
+Die Bewegung wird durch Geschwindigkeit $\vec{v}_t$ und Beschleunigung $\vec{a}_t$ beschrieben, normiert durch die Bildrate (\textit{fps}):
 \begin{equation}
-    a_t = (\vec{v}_t - \vec{v}_{t-1}) \cdot \text{fps}
+    \vec{v}_t = (\mathbf{p}_t - \mathbf{p}_{t-1}) \cdot \text{fps} \quad , \quad \vec{a}_t = (\vec{v}_t - \vec{v}_{t-1}) \cdot \text{fps}
 \end{equation}
 
 \subsection{Skelett-Geometrie: Bone-Vektoren}
-Ein wesentlicher Bestandteil des Feature Engineerings ist die Berechnung von \textit{Bone-Vektoren} (Knochenvektoren). Anstatt die absolute Position im Raum zu betrachten, wird die Relation zwischen anatomisch verbundenen Landmarks berechnet. Ein Bone-Vektor $\vec{b}$ zwischen zwei Gelenken $A$ und $B$ wird definiert als:
+Um die Handform präzise abzubilden, werden Vektoren zwischen anatomisch verbundenen Gelenken berechnet:
 \begin{equation}
     \vec{b} = \mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}
 \end{equation}
-Diese Vektoren sind invariant gegenüber Translationen des Körpers im Bildraum und erfassen die Handkonfiguration (Handform) präziser als absolute Koordinaten.
+Diese Vektoren sind invariant gegenüber Translationen und erfassen die geometrische Konfiguration der Hand unabhängig von der Position im Bild.
 
-\subsection{Spatiale Distanzen und Relationen}
-Zusätzlich werden spezifische skalare Distanzen extrahiert, die linguistisch signifikante Informationen tragen:
+
+
+\section{Modellarchitektur: Transformer-Encoder}
+Die Wahl des Transformers begründet sich durch seine Fähigkeit, globale Abhängigkeiten effizient zu modellieren. 
 \begin{itemize}
-    \item \textbf{Hand-Gesicht-Distanz}: Viele Gebärden werden in Relation zum Mund oder der Stirn ausgeführt. Die Distanz zwischen den Handgelenks-Landmarks und dem Zentrum des \textit{Face-Meshes} dient hier als Diskriminierungsmerkmal.
-    \item \textbf{Inter-Hand-Distanz}: Bei zweihändigen Gebärden liefert der euklidische Abstand zwischen linker und rechter Hand Informationen über die Symmetrie der Bewegung.
+    \item \textbf{Self-Attention}: Der Mechanismus erlaubt es dem Modell, irrelevante Phasen (z.\,B. das Heben der Hände) automatisch auszublenden und sich auf die linguistischen Kernbewegungen zu fokussieren.
+    \item \textbf{Padding-Masking}: Mittels \texttt{PadCollate} und \texttt{seq\_lengths} werden variable Videolängen einheitlich verarbeitet, ohne dass Padding-Werte die Berechnung beeinflussen.
 \end{itemize}
 
-\subsection{Feature-Fusion und Dimensionierung}
-Alle extrahierten Merkmale werden zu einem flachen Vektor konkateniert. Gemäß \texttt{SignNetConfig.py} ergibt sich daraus eine Eingabedimension von $1659$ Features pro Frame. Um variable Videolängen zu verarbeiten, nutzt das System die Klasse \texttt{PadCollate}, welche die Sequenzen auf eine einheitliche Länge auffüllt (Padding), während die tatsächlichen Längen für den Attention-Mechanismus in der Variable \texttt{seq\_lengths} maskiert werden.
+\subsection{Spezifikation der Transformer-Architektur}
+Um der Gefahr des Overfittings entgegenzuwirken, wurde für das finale Modell eine kompakte Transformer-Konfiguration gewählt. Die Modellgröße wurde gezielt reduziert, um eine bessere Generalisierung auf dem Validierungs-Set zu erreichen.
 
-\section{Modellarchitektur}
-Das System basiert auf einer Transformer-Encoder-Struktur, die speziell für die Analyse von Landmark-Sequenzen optimiert wurde. Durch den Self-Attention-Mechanismus kann das Modell relevante Bewegungsphasen innerhalb einer Gebärde (z.\,B. den Moment der maximalen Handkrümmung) gewichten und Rauschen in den Übergangsphasen ignorieren.
-
-[Platzhalter für Abbildung der Modellarchitektur]
-
-\section{MediaPipe Landmark-Struktur}
-Die Extraktion nutzt das MediaPipe-Skelettmodell. Die folgende Abbildung illustriert die genutzten Keypoints für Hände, Gesicht und Pose, welche die geometrische Grundlage für unsere Vektorberechnungen bilden.
-
-[Platzhalter für Abbildung der MediaPipe Landmarks]
+\begin{table}[h]
+\centering
+\caption{Hyperparameter der Transformer-Architektur (Phase 5)}
+\label{tab:model_config}
+\begin{tabular}{llp{7cm}}
+\toprule
+Parameter & Wert & Begründung \\
+\midrule
+\texttt{input\_size} & 1659 & Resultiert aus 553 Landmarks mit jeweils 3 Koordinaten ($x, y, z$). \\
+\texttt{hidden\_size} & 256 & Reduktion von 512 auf 256 zur Vermeidung von Overfitting bei begrenzter Datenmenge. \\
+\texttt{num\_layers} & 4 & Optimale Balance zwischen Rechentiefe und Trainingsstabilität (reduziert von 6 Layern). \\
+\texttt{num\_heads} & 8 & Ermöglicht 8 parallele Attention-Heads mit jeweils 32 Dimensionen pro Head. \\
+\texttt{dim\_feedforward} & 1024 & Entspricht dem 4-fachen der \texttt{hidden\_size} für ausreichende Kapazität im MLP-Block. \\
+\bottomrule
+\end{tabular}
+\end{table}

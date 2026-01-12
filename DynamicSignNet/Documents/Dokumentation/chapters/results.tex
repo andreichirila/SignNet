@@ -1,62 +1,107 @@
 \chapter{Resultate}
 \label{ch:results}
 
+In diesem Kapitel werden die quantitativen Ergebnisse der fünf Entwicklungsphasen präsentiert. Die Daten basieren auf den Aufzeichnungen des MLflow-Tracking-Systems sowie den Evaluierungsläufen der jeweiligen Modellinstanzen.
+
+\section{Vergleich der Entwicklungsphasen}
+Die Performance der verschiedenen Architekturen wurde über den Projektverlauf hinweg systematisch erfasst. \autoref{tab:phase_accuracy} zeigt die Entwicklung der Genauigkeit (Accuracy) von der statischen Vorphase bis zum finalen Transformer-Modell.
+
+\begin{table}[h]
+\centering
+\caption{Übersicht der erreichten Genauigkeiten pro Phase}
+\label{tab:phase_accuracy}
+\begin{tabular}{cllr}
+\toprule
+Phase & Architektur & Fokus & Validierungsgüte \\
+\midrule
+1 & CNN & Statisches Alphabet (25 Klassen) & 99,60 \% \\
+2 & Transformer v1 & Dynamische Gebärden (146 Klassen) & 53,94 \% \\
+3 & Skeleton-Graph & Anatomische Graphen-Pipeline & 31,56 \% \\
+4 & Transformer v2 & Self-Attention Baseline & 66,61 \% \\
+5 & Transformer Final & Optimiertes Feature Engineering & 73,15 \% \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Analyse des Trainingsverlaufs}
+Um die Stabilität und Konvergenz des finalen Modells (Phase 5) zu bewerten, wurden die Loss- und Accuracy-Metriken während des Trainingsprozesses aufgezeichnet. 
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/loss_plot_final.png}
+    \caption{Verlauf des Training- und Validation-Loss: Die stetige Abnahme beider Kurven ohne Divergenz deutet auf eine erfolgreiche Generalisierung hin.}
+    \label{fig:loss_plot}
+\end{figure}
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=0.85\textwidth]{figures/accuracy_plot_final.png}
+    \caption{Entwicklung der Training- und Validation-Accuracy über die Trainingsschritte.}
+    \label{fig:accuracy_plot}
+\end{figure}
+
+Wie in \autoref{fig:loss_plot} ersichtlich, konvergieren Trainings- und Validierungsverlust stabil. Die Accuracy (\autoref{fig:accuracy_plot}) zeigt einen parallelen Anstieg, wobei die geringe Differenz zwischen den Kurven die Wirksamkeit der gewählten Regularisierungsmaßnahmen (Dropout 0,65) unterstreicht.
+
 \section{Quantitative Ergebnisse}
-Das Hauptmodell erreichte auf einem Vokabular von 300 Klassen eine Top-1-Genauigkeit von 52,34\,\%. Durch die Aktivierung des hierarchischen Inferenz-Systems in \texttt{SignNetInference.py} konnte dieser Wert auf 54,82\,\% gesteigert werden.
+Die Leistungsfähigkeit des Modells wurde primär anhand der Top-1 und Top-5 Accuracy gemessen. Bei einem Vokabular von 146 Klassen wurden folgende Werte erreicht:
 
 \begin{table}[h]
 \centering
-\caption{Ergebnisse der Klassifizierung}
-\label{tab:results}
+\caption{Globale Klassifikationsergebnisse (Phase 5)}
+\label{tab:globale_ergebnisse}
 \begin{tabular}{lr}
 \toprule
 Metrik & Wert \\
 \midrule
-Top-1 Genauigkeit (Baseline) & 52,34\,\% \\
-Top-1 Genauigkeit (Hierarchisch) & 54,82\,\% \\
-Top-5 Genauigkeit & 79,42\,\% \\
+Top-1 Accuracy & \textbf{74,01 \%} \\
+Top-5 Accuracy & \textbf{91,76 \%} \\
+Anzahl Test-Samples & 4.489 \\
+Klassenanzahl ($N \ge 70$) & 146 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\section{Fehleranalyse}
-Besonders häufig traten Verwechslungen bei Gebärden auf, die sich nur durch minimale Richtungsänderungen unterscheiden.
+Die hohe Top-5 Genauigkeit von über 91\,\% belegt, dass das System in der überwiegenden Mehrheit der Fälle die korrekte Gebärde unter den wahrscheinlichsten Kandidaten identifiziert. Dies ist besonders für die praktische Anwendung in interaktiven Übersetzungssystemen relevant.
 
+\section{Konfidenz-Analyse und Kalibrierung}
+Zur Bewertung der Zuverlässigkeit der Vorhersagen wurde die Softmax-Konfidenz analysiert. Die Ergebnisse zeigen eine signifikante Trennung zwischen Wissen und Unsicherheit des Modells:
 
-
-Beispielsweise wurden die Gebärden \texttt{NORD} und \texttt{loc-NORD} oft konfundiert, was die Notwendigkeit noch präziserer Expertenmodelle unterstreicht.
-
-
---- LaTeX Code für Global Metrics ---
 \begin{table}[h]
 \centering
-\caption{Globale Performance-Metriken des SignNet-Systems}
-\label{tab:global_performance}
+\caption{Statistische Auswertung der Modell-Konfidenz}
+\label{tab:konfidenz_stats}
 \begin{tabular}{lr}
 \toprule
-Metrik & Wert \\
+Kategorie & Durchschnittliche Konfidenz \\
 \midrule
-Top-1 Accuracy & 52.34\,\% \\
-Top-3 Accuracy & 71.15\,\% \\
-Top-5 Accuracy & 79.42\,\% \\
-Weighted F1-Score & 51.89\,\% \\
-Durchschnittliche Konfidenz & 68.42\,\% \\
+Korrekte Vorhersagen & \textbf{87,37 \%} \\
+Fehlklassifikationen & \textbf{57,19 \%} \\
+\midrule
+Anteil „Sichere Fehler“ (Konfidenz $> 0,8$) & 5,30 \% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
---- LaTeX Code für Expert Comparison ---
-\begin{table}[h]
-\centering
-\caption{Vergleich der Genauigkeit: Hauptmodell vs. Experten-Modelle}
-\label{tab:expert_comparison}
-\begin{tabular}{lccc}
-\toprule
-Expertengruppe & Baseline & Experte & Gewinn \\
-\midrule
-Direction Expert & 45.8\% & 64.2\% & \textbf{+18.4\%} \\
-Kommen Expert & 51.2\% & 63.6\% & \textbf{+12.4\%} \\
-Weather Expert & 48.5\% & 57.0\% & \textbf{+8.5\%} \\
-\bottomrule
-\end{tabular}
-\end{table}
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.0\textwidth]{figures/confidence_distribution.png}
+    \caption{Konfidenz-Verteilung der Vorhersagen: Gegenüberstellung von korrekten (grün) und falschen (rot) Klassifizierungen zur Bewertung der Modell-Kalibrierung.}
+    \label{fig:confidence_dist}
+\end{figure}
+
+Die Verteilung in \autoref{fig:confidence_dist} verdeutlicht, dass korrekte Klassifizierungen meist mit einer Konfidenz nahe 1,0 erfolgen, während das Modell bei Fehlern eine deutlich höhere Entropie (Unsicherheit) aufweist.
+
+\section{Detaillierte Fehleranalyse}
+Trotz der robusten Gesamtperformance treten systematische Verwechslungen auf. \autoref{fig:confusion_matrix} listet die häufigsten Fehlklassifikationen auf, die als Basis für die linguistische Diskussion in \autoref{ch:discussion} dienen.
+
+\subsection{Visualisierung der Fehlklassifikationen}
+Ergänzend zur tabellarischen Analyse zeigt \autoref{fig:confusion_matrix} die Konfusionsmatrix für die 10 Klassen mit dem niedrigsten F1-Score. Diese Darstellung verdeutlicht die im vorigen Abschnitt diskutierten Konfusionscluster.
+
+\begin{figure}[htbp]
+    \centering
+    \includegraphics[width=1.0\textwidth]{figures/confusion_matrix_worst10.png}
+    \caption{Konfusionsmatrix der 10 Klassen mit der geringsten Trennschärfe. Die Diagonale repräsentiert korrekte Vorhersagen, während die Nebenwerte die systematischen Verwechslungen innerhalb semantischer Gruppen visualisieren.}
+    \label{fig:confusion_matrix}
+\end{figure}
+
+Die Matrix visualisiert deutlich, dass Fehler nicht zufällig über das gesamte Vokabular verteilt sind, sondern sich auf spezifische Regionen konzentrieren. Besonders auffällig sind die Cluster-Bildungen bei morphologischen Varianten (z.\,B. lokalisatorische Modifikationen), was die Theorie der visuellen Konfusion bei phonologisch ähnlichen Gebärden stützt.

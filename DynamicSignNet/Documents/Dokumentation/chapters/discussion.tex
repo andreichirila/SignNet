@@ -1,39 +1,44 @@
 \chapter{Diskussion}
 \label{ch:discussion}
 
-In diesem Kapitel werden die erzielten Ergebnisse interpretiert und kritisch gewürdigt. Dabei wird insbesondere auf die Wirksamkeit der architektonischen Entscheidungen, die Herausforderungen der Datenqualität und den Vergleich zum aktuellen Stand der Forschung eingegangen.
+In diesem Kapitel werden die in Kapitel \ref{ch:results} präsentierten Ergebnisse kritisch gewürdigt und interpretiert. Es wird aufgezeigt, warum bestimmte Konzepte erfolgreich waren, während andere – wie der skelettbasierte Graphen-Ansatz – an ihre Grenzen stießen.
 
-\section{Einordnung der Klassifizierungsleistung}
-Die erreichte Top-1 Genauigkeit von 52,34\,\% verdeutlicht die Komplexität der isolierten Gebärdenspracherkennung auf einem Vokabular von 300 Klassen. Im Vergleich zu der von Dafnis et al. (2022) berichteten Genauigkeit von 77,43\,\% auf einem modifizierten WLASL-Datensatz liegt das Ergebnis niedriger.
-
-Dieser Unterschied lässt sich primär auf zwei Faktoren zurückführen:
-\begin{itemize}
-    \item \textbf{Vokabular-Komplexität:} Während Spitzenwerte oft auf stark bereinigten oder kleineren Teilmengen erzielt werden, wurde in dieser Arbeit ein breites Spektrum an Klassen beibehalten, um die Realwelt-Performance des Transformer-Modells zu testen.
-    \item \textbf{Long-Tail-Problematik:} Der Datensatz weist eine extreme Imbalance auf (Gini-Koeffizient 1,350), wobei ein Großteil der Videos auf sehr wenige Klassen entfällt. Dies führt dazu, dass das Modell für die Mehrheit der Klassen („Tail-Klassen“) nicht genügend Varianz lernt, um robust zu generalisieren.
-\end{itemize}
-
-\section{Evaluierung des hierarchischen Experten-Ansatzes}
-Die Netto-Verbesserung der Genauigkeit um +2,48\,\% durch das hierarchische System bestätigt die Hypothese, dass spezialisierte Modelle visuell ähnliche Gebärden besser differenzieren können.
-
-\subsection{Potenzial der Experten-Modelle}
-Die \textit{Oracle Diagnostics} zeigen, dass die Experten-Modelle (z.\,B. für Richtungsangaben oder Wetterbegriffe) in ihren Teilbereichen das Hauptmodell deutlich übertreffen. Besonders beim \textit{Direction Expert} konnte eine theoretische Steigerung der Genauigkeit von 45,8\,\% auf 64,2\,\% festgestellt werden.
-
-\subsection{Herausforderungen im Routing-Mechanismus}
-Trotz der hohen Experten-Genauigkeit wird der Gesamtsieg durch das Routing limitiert. Die Entscheidung, Experten nur dann aufzurufen, wenn eine bestimmte „Group Probability“ überschritten wird und das Experten-Modell eine höhere Konfidenz als das Hauptmodell aufweist, ist eine notwendige Sicherheitsmaßnahme. Ohne diese „Confidence-Based Arbitration“ würden schwache Experten-Vorhersagen korrekte Vorhersagen des Hauptmodells überschreiben.
-
-\section{Analyse der Merkmals- und Augmentationsstrategien}
-Die Implementierung der \texttt{EnhancedLandmarkFeatures} (Geschwindigkeit, Beschleunigung und Knochenvektoren) war essenziell, um die zeitliche Dynamik der Gebärden abzubilden.
+\section{Interpretation der Ergebnisse und technologischer Wandel}
+Der deutliche Kontrast zwischen der statischen Genauigkeit von 99,6\,\% in Phase 1 und den 73,15\,\% der dynamischen Phase 5 lässt wichtige Schlüsse auf die Komplexität der Domäne zu.
 
 \begin{itemize}
-    \item \textbf{Temporale Aspekte:} Die Analyse zeigt, dass Sequenzen unter 15 Frames eine signifikant schlechtere Performance aufweisen. Dies deutet darauf hin, dass die berechneten Geschwindigkeitsvektoren eine gewisse zeitliche Ausdehnung benötigen, um diskriminative Muster zu bilden.
-    \item \textbf{Robustheit durch Augmentation:} Der Einsatz von \textit{Landmark Occlusion} und \textit{Skeletal Augmentation} half dabei, die Lücke zwischen Trainings- und Validierungsgenauigkeit zu verringern. Insbesondere die Simulation von Tracking-Verlusten (Occlusion) bereitet das Modell auf unvollständige MediaPipe-Daten vor.
+    \item \textbf{Vom Bild zum Fluss}: Die hohe Genauigkeit in Phase 1 belegt, dass die Klassifizierung isolierter Handformen auf Pixelebene ein weitgehend gelöstes Problem darstellt.
+    \item \textbf{Die Hürde der Dynamik}: Der Rückgang der Top-1-Genauigkeit beim Übergang zu 146 dynamischen Klassen ist keine Verschlechterung der Modellgüte, sondern resultiert aus der Notwendigkeit, zeitliche Abhängigkeiten und Bewegungsenergien zu interpretieren, statt nur statische Muster abzugleichen.
 \end{itemize}
 
-\section{Kritische Würdigung der Imbalance-Strategien}
-Obwohl Strategien wie \textit{Balanced Softmax Loss} und gezieltes \textit{Oversampling} (z.\,B. für die Klassen „ZWEI“ oder „loc-SUED“) implementiert wurden, bleibt die Dominanz der „Head-Klassen“ spürbar. Die Tatsache, dass 80\,\% der Videos nur etwa 10\,\% der Klassen abdecken, stellt eine fundamentale Grenze für rein überwachtes Lernen dar.
+\section{Kritische Würdigung des Konzepts}
+Das finale Konzept basiert auf der Kombination von \textit{MediaPipe Landmarks} und einer \textit{Transformer-Architektur}. Diese Wahl war das Resultat einer gezielten Abkehr von klassischen Ansätzen.
 
-\section{Anomalien in der Klassifizierung}
-Eine auffällige Anomalie ist die Konfusion zwischen absoluten Richtungen (z.\,B. „NORD“) und ihren lokativen Entsprechungen (z.\,B. „loc-NORD“). Da sich diese Gebärden in der Ausführung oft nur minimal unterscheiden, stößt die rein skelettbasierte Analyse hier an ihre Grenzen. Dies unterstreicht die linguistische Erkenntnis, dass Kontextinformationen für eine vollständige Disambiguierung unerlässlich sind.
+\subsection{Warum der Transformer funktioniert}
+Der Erfolg in Phase 4 und 5 (Steigerung auf über 73\,\% Top-1 Accuracy) lässt sich auf den \textit{Self-Attention}-Mechanismus zurückführen.
+\begin{itemize}
+    \item \textbf{Fokussierung}: Im Gegensatz zu RNNs kann der Transformer gleichzeitig alle Frames betrachten und lernen, welche Zeitpunkte (z.\,B. der Apex einer Gebärde) für die Unterscheidung entscheidend sind.
+    \item \textbf{Robustheit}: Das Modell lernte, Pausen am Anfang oder Ende einer Videosequenz durch geringe Gewichtung zu ignorieren, was die Invarianz gegenüber unterschiedlichen Startzeitpunkten massiv erhöhte.
+\end{itemize}
 
-\section{Fazit der Diskussion}
-Zusammenfassend lässt sich sagen, dass die Kombination aus Transformer-Architektur und hierarchischen Experten ein valider Weg zur Skalierung von ASLR-Systemen ist. Während das Feature-Engineering die physikalische Bewegung gut erfasst, bleibt die semantische Unterscheidung sehr ähnlicher Gebärden bei geringer Datenlage die größte technologische Hürde.
+
+
+\subsection{Anomalien: Das Scheitern der GCN-Inspiration}
+Eine signifikante Anomalie im Entwicklungsprozess war Phase 3, in der die Genauigkeit auf 31,6\,\% einbrach. 
+\begin{itemize}
+    \item \textbf{Analyse}: Die skelettbasierten Graphen waren zu restriktiv. Anatomische Regeln (Bones) sind zwar für die Repräsentation hilfreich, als starre Eingabestruktur verhinderten sie jedoch, dass das Modell subtile, individuelle Abweichungen in der Ausführung lernen konnte. 
+    \item \textbf{Konsequenz}: Diese Erkenntnis führte zur Rückkehr zu einem flexibleren Feature-Vektor, der durch \texttt{EnhancedLandmarkFeatures} nur mit den notwendigen physikalischen Ableitungen (Geschwindigkeit) ergänzt wurde.
+\end{itemize}
+
+\section{Scope und praktische Konsequenzen}
+Die Ergebnisse zeigen, dass das System innerhalb eines definierten Scopes (146 Klassen, hohe Probenanzahl) zuverlässig funktioniert.
+
+\begin{itemize}
+    \item \textbf{Einsatzbereich}: Eine Top-5 Accuracy von 92,05\,\% ist für reale Assistenzsysteme ein exzellenter Wert. In einer Benutzeroberfläche würde dies bedeuten, dass die korrekte Gebärde fast immer unter den ersten Vorschlägen erscheint.
+    \item \textbf{Limitationen durch Verdeckungen}: Trotz \texttt{NaN}-Handling und Rausch-Augmentation bleiben Gebärden mit starken Eigenverdeckungen (z.\,B. Handrücken zur Kamera) problematisch. Hier stößt die rein kamerabasierte 2D-Landmark-Extraktion im Vergleich zu spezialisierten 3D-Sensoren (Stand der Technik) an physikalische Grenzen.
+\end{itemize}
+
+
+
+\section{Fazit der Resultate}
+Zusammenfassend lässt sich sagen, dass die Reduktion auf 146 Klassen mit mindestens 70 Stichproben pro Klasse die notwendige Datenbasis schuf, um ein hochperformantes Modell zu trainieren. Die Konsequenz für die Weiterentwicklung ist klar: Während die Architektur (Transformer) steht, liegt der limitierende Faktor für eine Erweiterung des Vokabulars in der Verfügbarkeit von qualitativ hochwertigen, balancierten Trainingsdaten.

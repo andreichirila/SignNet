@@ -1,101 +1,98 @@
 \chapter{Methodik}
 \label{ch:methodology}
 
-Dieses Kapitel beschreibt die technische Umsetzung und den iterativen Forschungsprozess des \textit{SignNet}-Systems. Im Fokus steht die Begründung der Design-Entscheidungen, die auf Basis von fünf aufeinanderfolgenden Entwicklungsphasen getroffen wurden, um eine robuste, dynamische Gebärdenspracherkennung zu realisieren.
+Dieses Kapitel beschreibt die technische Umsetzung und den iterativen Forschungsprozess des \textit{SignNet}-Systems. Im Mittelpunkt steht die Begründung der Designentscheidungen, die in fünf aufeinanderfolgenden Entwicklungsphasen getroffen wurden, um eine robuste und dynamische Gebärdenspracherkennung zu realisieren.
 
 \section{Datengrundlage und Klassenwahl}
-Als Basis für die dynamische Erkennung dient der \textit{Phoenix}-Datensatz, der ursprünglich über 1200 verschiedene Gebärden (Glossen) umfasst. 
+Die Basis für die dynamische Erkennung bildet der \textit{Phoenix}-Datensatz, der ursprünglich über 1200 verschiedene Gebärden (Glossen) umfasst.
 
 \subsection{Filterkriterien und Stichprobenumfang}
-Aufgrund der extremen Klassenimbalance (Long-Tail-Verteilung) wurde eine bewusste Einschränkung des Vokabulars vorgenommen, um die Robustheit des Trainings zu erhöhen:
+Da der Datensatz eine starke Klassenimbalance (Long-Tail-Verteilung) aufweist, wurde das Vokabular bewusst eingeschränkt, um die Robustheit des Trainings zu erhöhen:
+
 \begin{itemize}
-    \item \textbf{Mindestanforderung}: Es wurden nur Klassen berücksichtigt, die über eine Mindestanzahl von \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} verfügen.
-    \item \textbf{Resultat}: Aus der Filterung resultieren \textbf{146 Klassen}, die für die finale Klassifizierung verwendet wurden.
-    \item \textbf{Begründung}: Diese Entscheidung stellt sicher, dass dem Modell pro Gebärde genügend Varianz zur Verfügung steht, um verallgemeinerbare Merkmale statt bloßer Auswendiglernen (Overfitting) zu entwickeln.
+    \item \textbf{Mindestanforderung}: Es wurden nur Klassen berücksichtigt, die mindestens \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} Beispiele enthalten.
+    \item \textbf{Resultat}: Nach der Filterung blieben \textbf{146 Klassen} für die finale Klassifizierung übrig.
+    \item \textbf{Begründung}: Diese Auswahl stellt sicher, dass das Modell pro Gebärde genügend Varianz erhält, um verallgemeinerbare Merkmale zu lernen und nicht nur auswendig zu lernen (Overfitting).
 \end{itemize}
 
 \subsection{Merkmalsextraktion mit MediaPipe}
+Um die Komplexität der Rohvideodaten zu reduzieren und das System robust gegenüber variierenden Hintergründen und Lichtverhältnissen zu machen, wurde die \textit{MediaPipe}-Pipeline eingesetzt \cite{lugaresi2019}. Anstatt das Modell direkt auf Pixelebene zu trainieren, extrahiert diese Pipeline anatomisch relevante 3D-Landmarks aus jedem Frame der Videosequenz.
 
-Um die Komplexität der rohen Videodaten zu reduzieren und das System robust gegenüber variierenden Hintergründen und Lichtverhältnissen zu machen, wurde die \textit{MediaPipe-Pipeline} eingesetzt\cite{lugaresi2019}. Anstatt das Modell direkt auf Pixelebene trainieren zu lassen, extrahiert diese Pipeline anatomisch relevante 3D-Landmarks aus jedem Frame der Videosequenz.
-
-Die Extraktion erfolgt dabei in drei spezialisierten Sub-Modellen, die zu einem kombinierten Merkmalsvektor zusammengefasst werden:
+Die Extraktion erfolgt in drei spezialisierten Submodellen, deren Ergebnisse zu einem kombinierten Merkmalsvektor zusammengefasst werden:
 
 \begin{itemize}
-    \item \textbf{Face-Mesh}: Extraktion von 478 Landmarks für mimische Details und Mundbilder.
-    \item \textbf{Hand-Tracking}: Erfassung von 21 Landmarks pro Hand (insgesamt 42 Punkte), um die präzise Fingerstellung abzubilden.
-    \item \textbf{Pose-Modell}: Extraktion von 33 Landmarks zur Definition der Oberkörper-Position.
+    \item \textbf{Face-Mesh}: 478 Landmarks für mimische Details und Mundbilder.
+    \item \textbf{Hand-Tracking}: 21 Landmarks pro Hand (insgesamt 42 Punkte) für die präzise Fingerstellung.
+    \item \textbf{Pose-Modell}: 33 Landmarks zur Definition der Oberkörperposition.
 \end{itemize}
 
-Jeder dieser 553 Punkte wird durch ein Koordinatentripel $(x, y, z)$ repräsentiert, was zu einer Eingabedimension von 1659 Merkmalen pro Frame führt. Dieser flache Merkmalsvektor dient als Grundlage für das anschließende Feature Engineering, wie die Berechnung von Geschwindigkeiten und Knochenvektoren.
-Hierbei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die geschätzte Tiefe relativ zur Kamera darstellt.
+Insgesamt ergeben sich 553 Punkte, die jeweils durch ein Koordinatentripel $(x, y, z)$ repräsentiert werden. Das führt zu einer Eingabedimension von 1659 Merkmalen pro Frame. Dieser flache Merkmalsvektor dient als Grundlage für das anschließende Feature Engineering, wie die Berechnung von Geschwindigkeiten und Knochenvektoren. Dabei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die geschätzte Tiefe relativ zur Kamera darstellt.
 
 \section{Iterativer Forschungsansatz und Versuchsaufbau}
-Wir haben das finale System nicht in einem Rutsch gebaut, sondern uns in fünf Etappen an die beste Lösung herangetastet. Dabei war jeder Schritt eine Reaktion auf das, was in der vorherigen Runde noch nicht optimal funktioniert hat.
+Das finale System wurde nicht in einem Schritt entwickelt, sondern in fünf Etappen. Jede Phase basierte auf den Erkenntnissen der vorherigen und zielte darauf ab, Schwachstellen zu beheben.
 
 \subsection{Phase 1: Statische Baseline (CNN) – Fingeralphabet}
-In der Initialphase wurde die Erkennung des statischen Fingeralphabets (25 Klassen) mittels Bilddaten evaluiert.
+In der ersten Phase wurde die Erkennung des statischen Fingeralphabets (25 Klassen) anhand von Bilddaten getestet:
 \begin{itemize}
-    \item \textbf{Design-Entscheidung}: Implementierung eines \textit{Convolutional Neural Networks} (CNN) zur direkten Merkmalsextraktion aus Pixeldaten.
-    \item \textbf{Ergebnis}: Das Modell erreichte eine herausragende \textbf{Test-Genauigkeit von 99,6\,\%}.
-    \item \textbf{Erkenntnis}: Trotz der nahezu fehlerfreien Klassifizierung statischer Bilder wurde deutlich, dass dieser Ansatz die linguistische Essenz der Gebärdensprache – die zeitliche Dynamik – nicht erfassen kann.
+    \item \textbf{Designentscheidung}: Einsatz eines \textit{Convolutional Neural Networks} (CNN) zur direkten Merkmalsextraktion aus Pixeldaten.
+    \item \textbf{Ergebnis}: Das Modell erreichte eine \textbf{Testgenauigkeit von 99,6\,\%}.
+    \item \textbf{Erkenntnis}: Trotz der hohen Genauigkeit wurde klar, dass dieser Ansatz die zeitliche Dynamik der Gebärdensprache nicht erfassen kann.
 \end{itemize}
 
 \subsection{Phase 2: Erste dynamische Klassifizierung (150 Klassen)}
-Die Erweiterung auf 150 dynamische Glossen erforderte den Wechsel von Einzelbildern zu Videosequenzen.
+Die Erweiterung auf 150 dynamische Glossen erforderte den Wechsel von Einzelbildern zu Videosequenzen:
 \begin{itemize}
     \item \textbf{Technischer Aufbau}: Nutzung von Landmark-Extraktionen zur Reduktion der Datenkomplexität.
-    \item \textbf{Ergebnis}: Die Validierungs-Genauigkeit lag bei \textbf{53,9\,\%}. Es wurde ersichtlich, dass herkömmliche Modelle bei steigender Klassenanzahl und zeitlicher Varianz an ihre Kapazitätsgrenzen stoßen.
+    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit lag bei \textbf{53,9\,\%}. Dies zeigte, dass herkömmliche Modelle bei steigender Klassenanzahl und zeitlicher Varianz an ihre Grenzen stoßen.
 \end{itemize}
 
 \subsection{Phase 3: Skelettbasierte Graph-Experimente}
-Es wurde versucht, die anatomischen Relationen der Hand-Landmarks explizit durch skelettale Graph-Strukturen abzubilden.
+Es wurde versucht, die anatomischen Relationen der Hand-Landmarks explizit durch skelettale Graphstrukturen abzubilden:
 \begin{itemize}
-    \item \textbf{Ergebnis}: Die Validierungs-Genauigkeit sank massiv auf \textbf{31,6\,\%}.
-    \item \textbf{Design-Entscheidung}: Die Ergebnisse zeigten, dass starre skelettbasierte Graphen die hohe individuelle Variabilität in der Gebärdenausführung nicht ausreichend generalisieren konnten. Dies führte zur Entscheidung für eine flexiblere, auf Aufmerksamkeit basierende Architektur: den Transformer.
+    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit sank deutlich auf \textbf{31,6\,\%}.
+    \item \textbf{Designentscheidung}: Die Ergebnisse zeigten, dass starre skelettbasierte Graphen die hohe individuelle Variabilität in der Gebärdenausführung nicht ausreichend generalisieren konnten. Dies führte zur Entscheidung für eine flexiblere, auf Aufmerksamkeit basierende Architektur: den Transformer.
 \end{itemize}
 
 \subsection{Phase 4: Einführung der Transformer-Architektur}
-Der Wechsel auf einen Transformer-Encoder markierte den technologischen Durchbruch für das Projekt.
+Der Wechsel auf einen Transformer-Encoder markierte den technologischen Durchbruch für das Projekt:
 \begin{itemize}
     \item \textbf{Konzept}: Implementierung eines \textit{Self-Attention}-Mechanismus, um zeitliche Abhängigkeiten über die gesamte Sequenz hinweg zu lernen.
-    \item \textbf{Ergebnis}: Die Validierungs-Genauigkeit stieg signifikant auf \textbf{66,6\,\%}.
+    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit stieg deutlich auf \textbf{66,6\,\%}.
 \end{itemize}
 
 \subsection{Phase 5: Finales optimiertes Modell}
-Durch intensives Hyperparameter-Tuning und die Verfeinerung des Feature Engineerings wurde der aktuelle Bestwert realisiert.
+Durch intensives Hyperparameter-Tuning und die Verfeinerung des Feature Engineerings wurde der aktuelle Bestwert erreicht:
 \begin{itemize}
     \item \textbf{Optimierung}: Einführung von \textit{Label Smoothing} und optimierten kinematischen Features.
-    \item \textbf{Resultat}: Das System erreichte eine finale \textbf{Validierungs-Genauigkeit von 73,15\,\%} sowie eine \textbf{Top-5 Accuracy von 92,05\,\%}.
+    \item \textbf{Resultat}: Das System erzielte eine finale \textbf{Validierungsgenauigkeit von 73,15\,\%} sowie eine \textbf{Top-5 Accuracy von 92,05\,\%}.
 \end{itemize}
 
 \section{Vorverarbeitung und Datenreinigung}
-Ein robuster Umgang mit instabilen Datenquellen war essenziell für die Modellstabilität.
+Ein robuster Umgang mit instabilen Datenquellen war entscheidend für die Modellstabilität.
 
 \subsection{Umgang mit Fehlwerten und Verdeckungen (Occlusion)}
-Die Landmark-Extraktion mittels MediaPipe ist anfällig für Verdeckungen, etwa wenn eine Hand die andere überschneidet.
+Die Landmark-Extraktion mittels MediaPipe ist anfällig für Verdeckungen, etwa wenn eine Hand die andere überschneidet:
 \begin{itemize}
-    \item \textbf{Numerische Stabilität}: Resultierende \texttt{NaN}-Werte werden in der Vorverarbeitung konsequent durch $0.0$ ersetzt, um Berechnungsfehler in den Transformer-Layern zu vermeiden.
+    \item \textbf{Numerische Stabilität}: Auftretende \texttt{NaN}-Werte werden in der Vorverarbeitung konsequent durch $0.0$ ersetzt, um Berechnungsfehler in den Transformer-Layern zu vermeiden.
     \item \textbf{Händigkeits-Invarianz}: Der \texttt{TransformerSignClassifierWithHandedness} erkennt explizit die dominante Hand, um die Vorhersage unabhängig von der Händigkeit des Unterzeichners zu machen.
 \end{itemize}
 
 \section{Datenaugmentation}
 Um dem \textit{Long-Tail}-Problem des Datensatzes zu begegnen, wurde eine mehrstufige Augmentation implementiert.
 
-\subsection{Spatiale und Temporale Transformationen}
+\subsection{Spatiale und temporale Transformationen}
 \begin{itemize}
-    \item \textbf{Geometrischer Shift}: Zufällige Rotationen bis zu 5 Grad und Skalierungen zwischen $0,9$ und $1,1$ simulieren variierende Kamerapositionen.
+    \item \textbf{Geometrischer Shift}: Zufällige Rotationen bis zu 5° und Skalierungen zwischen $0,9$ und $1,1$ simulieren variierende Kamerapositionen.
     \item \textbf{Temporaler Shift}: Sequenzen werden zufällig zeitlich verschoben, um die Invarianz gegenüber unterschiedlichen Startzeitpunkten einer Gebärde zu erhöhen.
 \end{itemize}
 
 \subsection{Landmark-Occlusion-Augmentation}
-Zur aktiven Verbesserung der Robustheit gegenüber Verdeckungen wurde ein spezifisches Fehler-Modell integriert:
+Zur Verbesserung der Robustheit gegenüber Verdeckungen wurde ein spezifisches Fehler-Modell integriert:
 \begin{itemize}
     \item \textbf{Gaussian Noise}: Den Koordinaten wird ein normalverteiltes Rauschen ($\sigma = 0,005$) hinzugefügt.
     \item \textbf{Simulation von Jitter}: Dieses Rauschen simuliert die Instabilität der Keypoints, die typischerweise bei teilweisen Verdeckungen auftritt.
     \item \textbf{Lerneffekt}: Das Modell wird gezwungen, robuste Bewegungsmuster statt präziser Einzelpunkte zu lernen.
 \end{itemize}
-
-
 
 \section{Feature Engineering: Kinematik und Geometrie}
 Die Klasse \texttt{EnhancedLandmarkFeatures} transformiert statische Punkte in einen dynamischen Merkmalsraum.
@@ -113,17 +110,15 @@ Um die Handform präzise abzubilden, werden Vektoren zwischen anatomisch verbund
 \end{equation}
 Diese Vektoren sind invariant gegenüber Translationen und erfassen die geometrische Konfiguration der Hand unabhängig von der Position im Bild.
 
-
-
 \section{Modellarchitektur: Transformer-Encoder}
-Die Wahl des Transformers begründet sich durch seine Fähigkeit, globale Abhängigkeiten effizient zu modellieren. 
+Die Wahl des Transformers begründet sich durch seine Fähigkeit, globale Abhängigkeiten effizient zu modellieren:
 \begin{itemize}
     \item \textbf{Self-Attention}: Der Mechanismus erlaubt es dem Modell, irrelevante Phasen (z.\,B. das Heben der Hände) automatisch auszublenden und sich auf die linguistischen Kernbewegungen zu fokussieren.
     \item \textbf{Padding-Masking}: Mittels \texttt{PadCollate} und \texttt{seq\_lengths} werden variable Videolängen einheitlich verarbeitet, ohne dass Padding-Werte die Berechnung beeinflussen.
 \end{itemize}
 
 \subsection{Spezifikation der Transformer-Architektur}
-Um der Gefahr des Overfittings entgegenzuwirken, wurde für das finale Modell eine kompakte Transformer-Konfiguration gewählt. Die Modellgröße wurde gezielt reduziert, um eine bessere Generalisierung auf dem Validierungs-Set zu erreichen.
+Um Overfitting zu vermeiden, wurde für das finale Modell eine kompakte Transformer-Konfiguration gewählt. Die Modellgröße wurde gezielt reduziert, um eine bessere Generalisierung auf dem Validierungsset zu erreichen.
 
 \begin{table}[h]
 \centering

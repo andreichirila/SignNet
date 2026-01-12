@@ -1,10 +1,10 @@
 \chapter{Resultate}
 \label{ch:results}
 
-In diesem Kapitel werden die quantitativen Ergebnisse der fünf Entwicklungsphasen präsentiert. Die Daten basieren auf den Aufzeichnungen des MLflow-Tracking-Systems sowie den Evaluierungsläufen der jeweiligen Modellinstanzen.
+In diesem Kapitel stellen wir die quantitativen Resultate aus den fünf Entwicklungsphasen vor. Die Daten stammen aus den MLflow-Tracking-Aufzeichnungen sowie den Evaluierungsläufen der jeweiligen Modellvarianten.
 
 \section{Vergleich der Entwicklungsphasen}
-Die Performance der verschiedenen Architekturen wurde über den Projektverlauf hinweg systematisch erfasst. \autoref{tab:phase_accuracy} zeigt die Entwicklung der Genauigkeit (Accuracy) von der statischen Vorphase bis zum finalen Transformer-Modell.
+Über den gesamten Projektverlauf hinweg haben wir die Performance der verschiedenen Modellarchitekturen systematisch erfasst. In \autoref{tab:phase_accuracy} sehen Sie, wie sich die Genauigkeit (Accuracy) von der statischen Vorphase bis hin zum finalen Transformer-Modell entwickelt hat.
 
 \begin{table}[h]
 \centering
@@ -24,26 +24,26 @@ Phase & Architektur & Fokus & Validierungsgüte \\
 \end{table}
 
 \section{Analyse des Trainingsverlaufs}
-Um die Stabilität und Konvergenz des finalen Modells (Phase 5) zu bewerten, wurden die Loss- und Accuracy-Metriken während des Trainingsprozesses aufgezeichnet. 
+Um die Stabilität und Konvergenz des finalen Modells (Phase 5) zu prüfen, haben wir den Verlauf von Loss und Accuracy während des Trainings aufgezeichnet.
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.85\textwidth]{figures/loss_plot_final.png}
-    \caption{Verlauf des Training- und Validation-Loss: Die stetige Abnahme beider Kurven ohne Divergenz deutet auf eine erfolgreiche Generalisierung hin.}
+    \caption{Verlauf von Trainings- und Validierungs-Loss: Die stetige Abnahme beider Kurven ohne Divergenz deutet auf eine gute Generalisierung hin.}
     \label{fig:loss_plot}
 \end{figure}
 
 \begin{figure}[htbp]
     \centering
     \includegraphics[width=0.85\textwidth]{figures/accuracy_plot_final.png}
-    \caption{Entwicklung der Training- und Validation-Accuracy über die Trainingsschritte.}
+    \caption{Entwicklung der Trainings- und Validierungs-Accuracy über die Trainingsschritte.}
     \label{fig:accuracy_plot}
 \end{figure}
 
-Wie in \autoref{fig:loss_plot} ersichtlich, konvergieren Trainings- und Validierungsverlust stabil. Die Accuracy (\autoref{fig:accuracy_plot}) zeigt einen parallelen Anstieg, wobei die geringe Differenz zwischen den Kurven die Wirksamkeit der gewählten Regularisierungsmaßnahmen (Dropout 0,65) unterstreicht.
+Wie in \autoref{fig:loss_plot} ersichtlich, konvergieren Trainings- und Validierungsverlust stabil. Die Accuracy (\autoref{fig:accuracy_plot}) steigt parallel an, wobei die geringe Differenz zwischen den Kurven die Wirksamkeit der gewählten Regularisierungsmaßnahmen (Dropout 0,65) bestätigt.
 
 \section{Quantitative Ergebnisse}
-Die Leistungsfähigkeit des Modells wurde primär anhand der Top-1 und Top-5 Accuracy gemessen. Bei einem Vokabular von 146 Klassen wurden folgende Werte erreicht:
+Die Modellleistung wurde anhand der Top-1- und Top-5-Accuracy bewertet. Bei einem Vokabular von 146 Klassen haben wir folgende Werte erreicht:
 
 \begin{table}[h]
 \centering
@@ -61,10 +61,10 @@ Klassenanzahl ($N \ge 70$) & 146 \\
 \end{tabular}
 \end{table}
 
-Die hohe Top-5 Genauigkeit von über 91\,\% belegt, dass das System in der überwiegenden Mehrheit der Fälle die korrekte Gebärde unter den wahrscheinlichsten Kandidaten identifiziert. Dies ist besonders für die praktische Anwendung in interaktiven Übersetzungssystemen relevant.
+Die hohe Top-5-Genauigkeit von über 91\,\% zeigt, dass das System in den meisten Fällen die richtige Gebärde unter den wahrscheinlichsten Kandidaten identifiziert – ein wichtiger Aspekt für den praktischen Einsatz in interaktiven Übersetzungssystemen.
 
 \section{Konfidenz-Analyse und Kalibrierung}
-Zur Bewertung der Zuverlässigkeit der Vorhersagen wurde die Softmax-Konfidenz analysiert. Die Ergebnisse zeigen eine signifikante Trennung zwischen Wissen und Unsicherheit des Modells:
+Zur Bewertung der Vorhersagezuverlässigkeit haben wir die Softmax-Konfidenz untersucht. Die Ergebnisse zeigen eine klare Trennung zwischen sicheren und unsicheren Vorhersagen:
 
 \begin{table}[h]
 \centering
@@ -89,13 +89,13 @@ Anteil „Sichere Fehler“ (Konfidenz $> 0,8$) & 5,30 \% \\
     \label{fig:confidence_dist}
 \end{figure}
 
-Die Verteilung in \autoref{fig:confidence_dist} verdeutlicht, dass korrekte Klassifizierungen meist mit einer Konfidenz nahe 1,0 erfolgen, während das Modell bei Fehlern eine deutlich höhere Entropie (Unsicherheit) aufweist.
+Die Verteilung in \autoref{fig:confidence_dist} macht deutlich: korrekte Klassifizierungen liegen meist nahe bei 1,0, während Fehler deutlich unsicherer sind.
 
 \section{Detaillierte Fehleranalyse}
-Trotz der robusten Gesamtperformance treten systematische Verwechslungen auf. \autoref{fig:confusion_matrix} listet die häufigsten Fehlklassifikationen auf, die als Basis für die linguistische Diskussion in \autoref{ch:discussion} dienen.
+Trotz der insgesamt robusten Performance gibt es systematische Verwechslungen. Die Konfusionsmatrix in \autoref{fig:confusion_matrix} zeigt die zehn Klassen mit dem niedrigsten F1-Score und dient als Grundlage für die linguistische Diskussion im nächsten Kapitel.
 
 \subsection{Visualisierung der Fehlklassifikationen}
-\autoref{fig:confusion_matrix} zeigt die Konfusionsmatrix für die 10 Klassen mit dem niedrigsten F1-Score.
+\autoref{fig:confusion_matrix} zeigt die Konfusionsmatrix für die 10 Klassen mit der geringsten Trennschärfe.
 
 \begin{figure}[htbp]
     \centering

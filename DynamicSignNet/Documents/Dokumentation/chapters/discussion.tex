@@ -1,44 +1,53 @@
 \chapter{Diskussion}
 \label{ch:discussion}
 
-In diesem Kapitel werden die in Kapitel \ref{ch:results} präsentierten Ergebnisse kritisch gewürdigt und interpretiert. Es wird aufgezeigt, warum bestimmte Konzepte erfolgreich waren, während andere – wie der skelettbasierte Graphen-Ansatz – an ihre Grenzen stießen.
+In diesem Kapitel werden die Ergebnisse der finalen Phase 5 im Kontext der Forschungsfrage und der theoretischen Grundlagen interpretiert. Dabei wird die Brücke zwischen den rein statistischen Metriken aus Kapitel \ref{ch:results} und den linguistischen sowie architektonischen Herausforderungen geschlagen.
 
-\section{Interpretation der Ergebnisse und technologischer Wandel}
-Der deutliche Kontrast zwischen der statischen Genauigkeit von 99,6\,\% in Phase 1 und den 73,15\,\% der dynamischen Phase 5 lässt wichtige Schlüsse auf die Komplexität der Domäne zu.
+\section{Interpretation der Klassifikationsleistung}
+Die finale Evaluation zeigt eine Top-1 Accuracy von 73,86\,\% auf einem Vokabular von 146 Klassen. Im Vergleich zur Baseline aus Phase 2 (53,94\,\%) belegt dies die signifikante Effektivität des optimierten Feature Engineerings und der finalen Transformer-Architektur. 
 
+Besonders hervorzuheben ist die Top-5 Accuracy von 91,76\,\%. Diese Differenz von ca. 17 Prozentpunkten ist ein Indikator dafür, dass das Modell in über neun von zehn Fällen die korrekte Gebärde unter den wahrscheinlichsten Kandidaten identifiziert. Für die praktische Anwendung in einem interaktiven Assistenzsystem bedeutet dies eine hohe Resilienz, da die korrekte Information fast immer im engeren Auswahlfeld präsent ist.
+
+\section{Analyse der Trainingsdynamik und Overfitting-Resilienz}
+Ein zentraler Aspekt der Evaluation von Phase 5 ist die Untersuchung der Lernkurven im Hinblick auf die Generalisierungsfähigkeit des Modells und das Potenzial zur Trainingsoptimierung.
+
+\subsection{Detaillierte Loss-Analyse}
+Der Verlauf des \textit{Cross-Entropy Loss} liefert entscheidende Hinweise auf die Stabilität des Lernprozesses. Wie in Abbildung \ref{fig:loss_plot} ersichtlich, sinken sowohl der Training-Loss als auch der Validation-Loss über den gesamten Zeitraum stetig ab. 
 \begin{itemize}
-    \item \textbf{Vom Bild zum Fluss}: Die hohe Genauigkeit in Phase 1 belegt, dass die Klassifizierung isolierter Handformen auf Pixelebene ein weitgehend gelöstes Problem darstellt.
-    \item \textbf{Die Hürde der Dynamik}: Der Rückgang der Top-1-Genauigkeit beim Übergang zu 146 dynamischen Klassen ist keine Verschlechterung der Modellgüte, sondern resultiert aus der Notwendigkeit, zeitliche Abhängigkeiten und Bewegungsenergien zu interpretieren, statt nur statische Muster abzugleichen.
+    \item \textbf{Konvergenzverhalten:} Beide Kurven erreichen gegen Ende der Trainingszeit ein stabiles Plateau, wobei der Training-Loss bei ca. 1,1 und der Validation-Loss bei ca. 1,55 stagniert. 
+    \item \textbf{Fehlen von Divergenz:} Ein klassisches Anzeichen für Overfitting wäre ein Punkt, an dem der Validation-Loss wieder ansteigt, während der Training-Loss weiter sinkt. Da die Kurven im vorliegenden Experiment nahezu parallel verlaufen, kann eine destruktive Überanpassung an die Trainingsdaten ausgeschlossen werden.
 \end{itemize}
 
-\section{Kritische Würdigung des Konzepts}
-Das finale Konzept basiert auf der Kombination von \textit{MediaPipe Landmarks} und einer \textit{Transformer-Architektur}. Diese Wahl war das Resultat einer gezielten Abkehr von klassischen Ansätzen.
-
-\subsection{Warum der Transformer funktioniert}
-Der Erfolg in Phase 4 und 5 (Steigerung auf über 73\,\% Top-1 Accuracy) lässt sich auf den \textit{Self-Attention}-Mechanismus zurückführen.
-\begin{itemize}
-    \item \textbf{Fokussierung}: Im Gegensatz zu RNNs kann der Transformer gleichzeitig alle Frames betrachten und lernen, welche Zeitpunkte (z.\,B. der Apex einer Gebärde) für die Unterscheidung entscheidend sind.
-    \item \textbf{Robustheit}: Das Modell lernte, Pausen am Anfang oder Ende einer Videosequenz durch geringe Gewichtung zu ignorieren, was die Invarianz gegenüber unterschiedlichen Startzeitpunkten massiv erhöhte.
-\end{itemize}
-
-
-
-\subsection{Anomalien: Das Scheitern der GCN-Inspiration}
-Eine signifikante Anomalie im Entwicklungsprozess war Phase 3, in der die Genauigkeit auf 31,6\,\% einbrach. 
-\begin{itemize}
-    \item \textbf{Analyse}: Die skelettbasierten Graphen waren zu restriktiv. Anatomische Regeln (Bones) sind zwar für die Repräsentation hilfreich, als starre Eingabestruktur verhinderten sie jedoch, dass das Modell subtile, individuelle Abweichungen in der Ausführung lernen konnte. 
-    \item \textbf{Konsequenz}: Diese Erkenntnis führte zur Rückkehr zu einem flexibleren Feature-Vektor, der durch \texttt{EnhancedLandmarkFeatures} nur mit den notwendigen physikalischen Ableitungen (Geschwindigkeit) ergänzt wurde.
-\end{itemize}
-
-\section{Scope und praktische Konsequenzen}
-Die Ergebnisse zeigen, dass das System innerhalb eines definierten Scopes (146 Klassen, hohe Probenanzahl) zuverlässig funktioniert.
+\subsection{Interpretation des Accuracy-Gaps und Early Stopping}
+Die Differenz zwischen der finalen Training-Accuracy (85,41\,\%) und der Validation-Accuracy (73,86\,\%) beläuft sich auf 11.55 Prozentpunkte. Eine zeitliche Analyse dieser Metriken offenbart jedoch ein signifikantes Optimierungspotenzial:
 
 \begin{itemize}
-    \item \textbf{Einsatzbereich}: Eine Top-5 Accuracy von 92,05\,\% ist für reale Assistenzsysteme ein exzellenter Wert. In einer Benutzeroberfläche würde dies bedeuten, dass die korrekte Gebärde fast immer unter den ersten Vorschlägen erscheint.
-    \item \textbf{Limitationen durch Verdeckungen}: Trotz \texttt{NaN}-Handling und Rausch-Augmentation bleiben Gebärden mit starken Eigenverdeckungen (z.\,B. Handrücken zur Kamera) problematisch. Hier stößt die rein kamerabasierte 2D-Landmark-Extraktion im Vergleich zu spezialisierten 3D-Sensoren (Stand der Technik) an physikalische Grenzen.
+    \item \textbf{Stagnation ab Schritt 2700:} Die Daten zeigen, dass die Validierungs-Genauigkeit bereits um Epoche 2700 einen Wert von ca. 73\,\% erreichte. In den verbleibenden 1300 Schritten verbesserte sich die Validierungs-Performance lediglich um marginale 0,8 Prozentpunkte, während die Training-Accuracy im selben Zeitraum von ca. 82\,\% auf ca. 85\,\% anstieg.
+    \item \textbf{Reduzierung des Gaps:} Dieser Zuwachs der Training-Accuracy ohne entsprechende Verbesserung der Generalisierung ist ein Indikator für eine beginnende, wenn auch nicht kritische, Sättigung des Modells. Durch den Einsatz von \textit{Early Stopping} hätte das Training bereits bei Schritt 2700 beendet werden können. Dies hätte den finalen Generalization Gap von 11.55\,\% auf ca. 9\,\% reduziert, ohne dabei nennenswerte Einbußen in der Vorhersagegüte auf unbekannten Daten hinzunehmen.
+    \item \textbf{Effizienz und Regularisierung:} Dass der Gap trotz des verzögerten Trainingsendes nicht weiter aufging, ist der starken Regularisierung (Dropout 0,65) zu verdanken, die eine stärkere Divergenz der Kurven erfolgreich unterdrückte.
 \end{itemize}
 
+\subsection{Zusammenfassende Bewertung der Generalisierung}
+Trotz des Gaps von 11.55\,\% ist die Generalisierung als erfolgreich zu bewerten. Die parallelen Loss-Kurven beweisen, dass der Transformer robuste Repräsentationen gelernt hat, die über die reinen Trainingsbeispiele hinaus Bestand haben. Die Analyse legt jedoch nahe, dass für zukünftige Iterationen ein strikteres Early-Stopping-Kriterium die Trainingseffizienz steigern und die Differenz zwischen den Metriken weiter minimieren könnte.
 
+\section{Detaillierte Analyse linguistischer Konfusionscluster}
+Die Fehleranalyse in \autoref{fig:confusion_matrix} verdeutlicht, dass Fehlklassifikationen nicht zufällig auftreten, sondern systematischen linguistischen Mustern folgen:
 
-\section{Fazit der Resultate}
-Zusammenfassend lässt sich sagen, dass die Reduktion auf 146 Klassen mit mindestens 70 Stichproben pro Klasse die notwendige Datenbasis schuf, um ein hochperformantes Modell zu trainieren. Die Konsequenz für die Weiterentwicklung ist klar: Während die Architektur (Transformer) steht, liegt der limitierende Faktor für eine Erweiterung des Vokabulars in der Verfügbarkeit von qualitativ hochwertigen, balancierten Trainingsdaten.
+\begin{itemize}
+    \item \textbf{Morphologische Varianten und Classifier:} Die häufigsten Verwechslungen treten zwischen Stammgebärden und deren klassifikatorischen (\texttt{cl-}) oder lokalisatorischen (\texttt{loc-}) Erweiterungen auf. Die Paare \texttt{KOMMEN} vs. \texttt{cl-KOMMEN} (17 Verwechslungen) und \texttt{REGION} vs. \texttt{loc-REGION} (16 Verwechslungen) belegen, dass das Modell zwar die semantische Kernbewegung erkennt, jedoch Schwierigkeiten hat, die feinen räumlichen Nuancen im 3D-Raum der Landmarks exakt zu differenzieren.
+    \item \textbf{Visuelle Minimalpaare:} Gebärden wie \texttt{ABEND} und \texttt{NACHT} (je 11 Fälle) oder \texttt{AUCH} und \texttt{ABER} (16 Fälle) teilen identische Handformen und Ausführungsorte. Die Unterscheidung basiert hier oft auf non-manuellen Markern (Mimik), die trotz Face-Mesh-Daten im Vergleich zur dominanten Handbewegung offenbar noch nicht ausreichend gewichtet werden.
+    \item \textbf{Richtungskonfusion:} Die Verwechslung von \texttt{loc-NORD} mit \texttt{NORDRAUM} (15 Fälle) unterstreicht die Komplexität von Richtungsgebärden, bei denen sich die Trajektorien im PHOENIX-Kontext stark überschneiden.
+\end{itemize}
+
+\section{Modellstabilität und Konfidenz-Evaluation}
+Die in Abbildung \ref{fig:confidence_dist} visualisierte Konfidenzverteilung liefert den Nachweis für eine erfolgreiche Modell-Kalibrierung.
+
+\begin{itemize}
+    \item \textbf{Trennschärfe:} Eine durchschnittliche Konfidenz von 87,37\,\% bei korrekten Vorhersagen gegenüber 57,19\,\% bei Fehlern belegt eine hohe Verlässlichkeit der Selbsteinschätzung des Systems. 
+    \item \textbf{Vermeidung von Fehlentscheidungen:} Der geringe Anteil von 5,30\,\% an „sicheren Fehlern“ (Konfidenz $> 0,8$ bei falscher Vorhersage) ist ein starkes Indiz für die Robustheit der Architektur gegen das Auswendiglernen von Artefakten.
+\end{itemize}
+
+\section{Architektonische Einflüsse und Limitationen}
+Der Erfolg von Phase 5 gegenüber den Vorphasen lässt sich auf die Rückkehr zur Transformer-Architektur mit einer kompakten \texttt{hidden\_size} von 256 Einheiten zurückführen. Während die Skeleton-Graphen in Phase 3 (31,56\,\% Accuracy) zu starr waren, erlaubt die Self-Attention des Transformers, zeitliche Abhängigkeiten über die gesamte Sequenz flexibel zu gewichten. 
+
+Trotz dieser Fortschritte bleibt die phonologische Ähnlichkeit die größte Hürde. Die Ergebnisse legen nahe, dass zukünftige Iterationen eine noch stärkere Gewichtung von Mundbild-Features (Face-Mesh) innerhalb der Cross-Attention benötigen, um die verbleibenden Minimalpaar-Konfusionen weiter zu reduzieren.

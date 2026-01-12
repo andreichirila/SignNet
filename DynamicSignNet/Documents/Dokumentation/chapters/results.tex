@@ -18,7 +18,7 @@ Phase & Architektur & Fokus & Validierungsgüte \\
 2 & Transformer v1 & Dynamische Gebärden (146 Klassen) & 53,94 \% \\
 3 & Skeleton-Graph & Anatomische Graphen-Pipeline & 31,56 \% \\
 4 & Transformer v2 & Self-Attention Baseline & 66,61 \% \\
-5 & Transformer Final & Optimiertes Feature Engineering & 73,15 \% \\
+5 & Transformer Final & Optimiertes Feature Engineering & 73,86 \% \\
 \bottomrule
 \end{tabular}
 \end{table}
@@ -53,7 +53,7 @@ Die Leistungsfähigkeit des Modells wurde primär anhand der Top-1 und Top-5 Acc
 \toprule
 Metrik & Wert \\
 \midrule
-Top-1 Accuracy & \textbf{74,01 \%} \\
+Top-1 Accuracy & \textbf{73,86 \%} \\
 Top-5 Accuracy & \textbf{91,76 \%} \\
 Anzahl Test-Samples & 4.489 \\
 Klassenanzahl ($N \ge 70$) & 146 \\
@@ -95,7 +95,7 @@ Die Verteilung in \autoref{fig:confidence_dist} verdeutlicht, dass korrekte Klas
 Trotz der robusten Gesamtperformance treten systematische Verwechslungen auf. \autoref{fig:confusion_matrix} listet die häufigsten Fehlklassifikationen auf, die als Basis für die linguistische Diskussion in \autoref{ch:discussion} dienen.
 
 \subsection{Visualisierung der Fehlklassifikationen}
-Ergänzend zur tabellarischen Analyse zeigt \autoref{fig:confusion_matrix} die Konfusionsmatrix für die 10 Klassen mit dem niedrigsten F1-Score. Diese Darstellung verdeutlicht die im vorigen Abschnitt diskutierten Konfusionscluster.
+\autoref{fig:confusion_matrix} zeigt die Konfusionsmatrix für die 10 Klassen mit dem niedrigsten F1-Score.
 
 \begin{figure}[htbp]
     \centering
@@ -103,5 +103,3 @@ Ergänzend zur tabellarischen Analyse zeigt \autoref{fig:confusion_matrix} die K
     \caption{Konfusionsmatrix der 10 Klassen mit der geringsten Trennschärfe. Die Diagonale repräsentiert korrekte Vorhersagen, während die Nebenwerte die systematischen Verwechslungen innerhalb semantischer Gruppen visualisieren.}
     \label{fig:confusion_matrix}
 \end{figure}
-
-Die Matrix visualisiert deutlich, dass Fehler nicht zufällig über das gesamte Vokabular verteilt sind, sondern sich auf spezifische Regionen konzentrieren. Besonders auffällig sind die Cluster-Bildungen bei morphologischen Varianten (z.\,B. lokalisatorische Modifikationen), was die Theorie der visuellen Konfusion bei phonologisch ähnlichen Gebärden stützt.

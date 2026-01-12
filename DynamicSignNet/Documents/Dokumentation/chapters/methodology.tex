@@ -39,11 +39,11 @@ In der ersten Phase wurde die Erkennung des statischen Fingeralphabets (25 Klass
     \item \textbf{Erkenntnis}: Trotz der hohen Genauigkeit wurde klar, dass dieser Ansatz die zeitliche Dynamik der Gebärdensprache nicht erfassen kann.
 \end{itemize}
 
-\subsection{Phase 2: Erste dynamische Klassifizierung (150 Klassen)}
-Die Erweiterung auf 150 dynamische Glossen erforderte den Wechsel von Einzelbildern zu Videosequenzen:
+\subsection{Phase 2: Erste dynamische Klassifizierung (SignNetWord)}
+Der Übergang von statischen Buchstaben zu dynamischen Gebärden erforderte die Implementierung einer Architektur, die zeitliche Sequenzen verarbeiten kann:
 \begin{itemize}
-    \item \textbf{Technischer Aufbau}: Nutzung von Landmark-Extraktionen zur Reduktion der Datenkomplexität.
-    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit lag bei \textbf{53,9\,\%}. Dies zeigte, dass herkömmliche Modelle bei steigender Klassenanzahl und zeitlicher Varianz an ihre Grenzen stoßen.
+    \item \textbf{Konzept}: Einführung eines \textit{Transformer-Encoders}, um die zeitlichen Abhängigkeiten innerhalb der Sequenzen aus 1659 MediaPipe-Landmarks zu modellieren. Das Vokabular wurde auf 146 Klassen gefiltert, für die jeweils mindestens 70 Stichproben im PHOENIX-Datensatz vorlagen.
+    \item \textbf{Ergebnis}: Die Top-1 Validierungsgenauigkeit lag bei \textbf{53,94\,\%}. Diese Phase verdeutlichte die Komplexität der Long-Tail-Verteilung (Gini-Index 0,81) und die Herausforderung durch phonologisch ähnliche Gebärden.
 \end{itemize}
 
 \subsection{Phase 3: Skelettbasierte Graph-Experimente}
@@ -53,17 +53,17 @@ Es wurde versucht, die anatomischen Relationen der Hand-Landmarks explizit durch
     \item \textbf{Designentscheidung}: Die Ergebnisse zeigten, dass starre skelettbasierte Graphen die hohe individuelle Variabilität in der Gebärdenausführung nicht ausreichend generalisieren konnten. Dies führte zur Entscheidung für eine flexiblere, auf Aufmerksamkeit basierende Architektur: den Transformer.
 \end{itemize}
 
-\subsection{Phase 4: Einführung der Transformer-Architektur}
-Der Wechsel auf einen Transformer-Encoder markierte den technologischen Durchbruch für das Projekt:
+\subsection{Phase 4: Rückkehr zur optimierten Transformer-Architektur (v2)}
+Nach den Erkenntnissen aus Phase 3 markierte Phase 4 die Rückkehr zu einer rein Landmark-basierten Transformer-Architektur, jedoch mit verbesserten Hyperparametern:
 \begin{itemize}
-    \item \textbf{Konzept}: Implementierung eines \textit{Self-Attention}-Mechanismus, um zeitliche Abhängigkeiten über die gesamte Sequenz hinweg zu lernen.
-    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit stieg deutlich auf \textbf{66,6\,\%}.
+    \item \textbf{Konzept}: Implementierung einer robusten \textit{Self-Attention}-Baseline als Reaktion auf die Defizite des Graphen-Ansatzes aus Phase 3. Der Fokus lag auf einer stabileren Gewichtung zeitlicher Abhängigkeiten innerhalb der 1659-dimensionalen Landmark-Sequenzen.
+    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit konnte gegenüber der ersten Transformer-Version aus Phase 2 signifikant gesteigert werden und erreichte \textbf{66,61\,\%}. Dieser deutliche Sprung bestätigte die Überlegenheit des Transformer-Prinzips gegenüber dem anatomisch starren Skelett-Modell (Phase 3) für diese Datenbasis.
 \end{itemize}
 
 \subsection{Phase 5: Finales optimiertes Modell}
 Durch intensives Hyperparameter-Tuning und die Verfeinerung des Feature Engineerings wurde der aktuelle Bestwert erreicht:
 \begin{itemize}
-    \item \textbf{Optimierung}: Einführung von \textit{Label Smoothing} und optimierten kinematischen Features.
+    \item \textbf{Optimierung}: Einführung von \textit{Label Smoothing}, \textit{Augmentation} und optimierten kinematischen Features.
     \item \textbf{Resultat}: Das System erzielte eine finale \textbf{Validierungsgenauigkeit von 73,15\,\%} sowie eine \textbf{Top-5 Accuracy von 92,05\,\%}.
 \end{itemize}
 
@@ -95,20 +95,27 @@ Zur Verbesserung der Robustheit gegenüber Verdeckungen wurde ein spezifisches F
 \end{itemize}
 
 \section{Feature Engineering: Kinematik und Geometrie}
-Die Klasse \texttt{EnhancedLandmarkFeatures} transformiert statische Punkte in einen dynamischen Merkmalsraum.
+Die Klasse \texttt{EnhancedLandmarkFeatures} transformiert die statischen Rohdaten der MediaPipe-Punkte in einen hochdimensionalen, dynamischen Merkmalsraum, um die zeitliche und geometrische Varianz der Gebärdensprache abzubilden.
 
 \subsection{Kinematische Ableitungen}
-Die Bewegung wird durch Geschwindigkeit $\vec{v}_t$ und Beschleunigung $\vec{a}_t$ beschrieben, normiert durch die Bildrate (\textit{fps}):
+Die Dynamik der Gebärdenausführung wird durch die Berechnung der Geschwindigkeit $\vec{v}_t$ und der Beschleunigung $\vec{a}_t$ erfasst, wobei die Werte durch die Bildrate (\textit{fps}) normiert werden:
 \begin{equation}
     \vec{v}_t = (\mathbf{p}_t - \mathbf{p}_{t-1}) \cdot \text{fps} \quad , \quad \vec{a}_t = (\vec{v}_t - \vec{v}_{t-1}) \cdot \text{fps}
 \end{equation}
 
-\subsection{Skelett-Geometrie: Bone-Vektoren}
-Um die Handform präzise abzubilden, werden Vektoren zwischen anatomisch verbundenen Gelenken berechnet:
+\subsection{Skelett-Geometrie und Bone-Vektoren}
+Um die Handform unabhängig von der absoluten Bildposition präzise abzubilden, werden Vektoren zwischen anatomisch verbundenen Gelenken (Bones) berechnet:
 \begin{equation}
     \vec{b} = \mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}
 \end{equation}
-Diese Vektoren sind invariant gegenüber Translationen und erfassen die geometrische Konfiguration der Hand unabhängig von der Position im Bild.
+Diese Bone-Vektoren sind invariant gegenüber globalen Translationen und erfassen die geometrische Konfiguration der Hand skelettbasiert.
+
+\subsection{Distanzmerkmale und Normalisierung}
+Ergänzend zur Richtungscharakteristik der Vektoren werden euklidische Abstände $d$ zwischen kritischen Landmark-Paaren berechnet, um die Kompaktheit und Krümmung der Handform statistisch greifbar zu machen:
+\begin{equation}
+    d = \|\mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}\|_2
+\end{equation}
+Um eine vollständige Unabhängigkeit von der Kameraposition zu erreichen, werden sämtliche Koordinaten vor der Merkmalsextraktion auf das Handgelenk (\textit{wrist}) als Ursprung normiert. Dieser kombinierte Merkmalsvektor aus 1659 Werten bildete die Grundlage für die signifikante Genauigkeitssteigerung in Phase 5.
 
 \section{Modellarchitektur: Transformer-Encoder}
 Die Wahl des Transformers begründet sich durch seine Fähigkeit, globale Abhängigkeiten effizient zu modellieren:

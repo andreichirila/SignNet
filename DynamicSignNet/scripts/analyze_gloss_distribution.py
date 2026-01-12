@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 Gloss Distribution Analyzer for Sign Language Dataset
-Analyzes .npz files and counts samples per gloss based on filename patterns
+Analyzes .npz files and counts samples per gloss based on filename patterns.
+Includes Gini Coefficient calculation to measure dataset imbalance.
 """
 
 import os
@@ -9,20 +10,31 @@ import sys
 from pathlib import Path
 from collections import Counter
 import pandas as pd
+import numpy as np  # Neu für die Gini-Berechnung
 import argparse
+
+def calculate_gini(array):
+    """
+    Berechnet den Gini-Koeffizienten eines Arrays (Maß für die Ungleichverteilung).
+    0 = Perfekte Gleichverteilung
+    1 = Maximale Ungleichverteilung (Long-Tail)
+    """
+    # Sicherstellen, dass es ein flaches Numpy-Array ist und sortieren
+    array = np.sort(array).astype(float)
+    n = len(array)
+    if n <= 1:
+        return 0.0
+    
+    # Index-Vektor (1 bis n)
+    index = np.arange(1, n + 1)
+    
+    # Gini-Formel für diskrete Werte
+    return (np.sum((2 * index - n - 1) * array)) / (n * np.sum(array))
 
 def analyze_gloss_distribution(directory):
     """
     Analyze gloss distribution from .npz filenames
-
-    Args:
-        directory: Path to directory containing .npz files
-
-    Returns:
-        DataFrame with gloss counts sorted by frequency
     """
-
-    # Get all .npz files from directory
     directory_path = Path(directory)
 
     if not directory_path.exists():
@@ -37,19 +49,15 @@ def analyze_gloss_distribution(directory):
 
     print(f"Found {len(file_list)} .npz files in {directory}")
 
-    # Extract glosses from filenames
     glosses = []
     invalid_files = []
 
     for file_path in file_list:
         filename = file_path.name
-        # Remove .npz extension
         name = filename.replace(".npz", "")
-        # Split by underscore and take everything except the last part (number)
         parts = name.split("_")
 
         if len(parts) >= 2:
-            # Join all parts except the last one (which is the number)
             gloss = "_".join(parts[:-1])
             glosses.append(gloss)
         else:
@@ -57,15 +65,10 @@ def analyze_gloss_distribution(directory):
 
     if invalid_files:
         print(f"\nWarning: {len(invalid_files)} files with unexpected format:")
-        for f in invalid_files[:10]:  # Show first 10
+        for f in invalid_files[:10]:
             print(f"  - {f}")
-        if len(invalid_files) > 10:
-            print(f"  ... and {len(invalid_files) - 10} more")
 
-    # Count glosses
     gloss_counts = Counter(glosses)
-
-    # Create DataFrame
     df = pd.DataFrame.from_dict(gloss_counts, orient='index', columns=['count'])
     df.index.name = 'gloss'
     df = df.sort_values('count', ascending=False)
@@ -75,6 +78,9 @@ def analyze_gloss_distribution(directory):
 
 def print_statistics(df, total_files):
     """Print detailed statistics about gloss distribution"""
+
+    # Gini berechnen
+    gini_index = calculate_gini(df['count'].values)
 
     print(f"\n{'='*70}")
     print("GLOSS DISTRIBUTION ANALYSIS")
@@ -89,11 +95,6 @@ def print_statistics(df, total_files):
     print(df.head(20).to_string(index=False))
 
     print(f"\n{'='*70}")
-    print("BOTTOM 20 LEAST FREQUENT GLOSSES")
-    print(f"{'='*70}")
-    print(df.tail(20).to_string(index=False))
-
-    print(f"\n{'='*70}")
     print("SUMMARY STATISTICS")
     print(f"{'='*70}")
     print(f"Mean samples per gloss:   {df['count'].mean():.2f}")
@@ -101,8 +102,17 @@ def print_statistics(df, total_files):
     print(f"Std dev:                  {df['count'].std():.2f}")
     print(f"Min samples:              {df['count'].min()}")
     print(f"Max samples:              {df['count'].max()}")
+    print(f"\nGINI INDEX:               {gini_index:.4f}")
+    
+    # Interpretation des Gini-Werts
+    if gini_index > 0.7:
+        status = "Extreme Imbalance (Massive Long-Tail)"
+    elif gini_index > 0.4:
+        status = "High Imbalance"
+    else:
+        status = "Moderate to Low Imbalance"
+    print(f"Interpretation:           {status}")
 
-    # Distribution by sample count
     print(f"\n{'='*70}")
     print("DISTRIBUTION BY SAMPLE COUNT")
     print(f"{'='*70}")
@@ -128,19 +138,13 @@ def save_results(df, output_file):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Analyze gloss distribution in sign language dataset',
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Example usage:
-  python analyze_gloss_distribution.py /path/to/dataset
-  python analyze_gloss_distribution.py ./word_landmarks_extracted
-  python analyze_gloss_distribution.py ./dataset -o my_distribution.csv
-        """
+        description='Analyze gloss distribution in sign language dataset'
     )
 
     parser.add_argument(
         'directory',
         type=str,
+        default='..\\word_landmarks_extracted/',
         help='Path to directory containing .npz files'
     )
 
@@ -152,14 +156,8 @@ Example usage:
     )
 
     args = parser.parse_args()
-
-    # Analyze distribution
     df, counts, total_files = analyze_gloss_distribution(args.directory)
-
-    # Print statistics
     print_statistics(df, total_files)
-
-    # Save results
     save_results(df, args.output)
 
 if __name__ == "__main__":

@@ -2,18 +2,24 @@
 \label{ch:conclusion}
 
 \section{Zusammenfassung der Ergebnisse}
-Das Ziel dieser Arbeit war die Entwicklung und Evaluation eines robusten Systems zur isolierten Gebärdenspracherkennung unter Berücksichtigung extremer Klassenimbalance und visueller Ähnlichkeit. Mit dem Entwurf des \textit{SignNet}-Frameworks wurde eine Architektur implementiert, die einen Transformer-Encoder mit einem hierarchischen Experten-System kombiniert. Die Ergebnisse zeigen, dass die Basis-Genauigkeit von 52,34\,\% durch das gezielte Routing an spezialisierte Experten-Modelle auf 54,82\,\% gesteigert werden konnte. Dies belegt, dass eine hierarchische Unterteilung des Vokabulars in Konfusionsgruppen ein effektives Mittel zur Disambiguierung visuell ähnlicher Gebärden darstellt.
+Das Ziel dieser Arbeit war es, ein robustes System zur isolierten Gebärdenspracherkennung zu entwickeln und zu bewerten – trotz großer Unterschiede in der Klassenverteilung und visueller Ähnlichkeiten zwischen Gebärden. Mit dem \textit{SignNet}-Framework haben wir eine Architektur umgesetzt, die einen optimierten Transformer-Encoder mit einem erweiterten Feature-Engineering kombiniert. 
+
+Die Ergebnisse zeigen eine deutliche Verbesserung: Von einer einfachen Transformer-Baseline in Phase 2 (53,94\,\%) stieg die Genauigkeit durch zusätzliche kinematische und geometrische Merkmale in Phase 5 auf \textbf{73,15\,\%} (Validierung). Besonders die hohe Top-5-Genauigkeit von \textbf{91,76\,\%} zeigt, dass das System auch bei ähnlichen Gebärden sehr zuverlässig ist.
 
 \section{Technische Würdigung}
-Die technische Komplexität der Arbeit lag insbesondere in der Verarbeitung hochdimensionaler Landmark-Daten und der Bekämpfung von Overfitting bei gleichzeitigem Vorliegen eines "Long-Tail"-Datensatzes.
+Die größte technische Herausforderung lag in der Verarbeitung der 1659-dimensionalen Landmark-Daten und im Umgang mit der ungleichen Klassenverteilung des PHOENIX-Datensatzes.
 \begin{itemize}
-    \item \textbf{Feature Engineering:} Die explizite Modellierung von Geschwindigkeit und Knochenvektoren erwies sich als entscheidend, um über statische Posen hinausgehende Bewegungsmuster zu erfassen.
-    \item \textbf{Imbalance-Handling:} Durch den Einsatz von \textit{Balanced Softmax Loss} und \textit{Oversampling}-Strategien konnte eine stabilere Klassifizierung seltener Klassen erreicht werden, obgleich die Dominanz der "Head-Klassen" eine fundamentale Herausforderung bleibt.
-    \item \textbf{Hierarchische Inferenz:} Das entwickelte System zur Inferenz-Steuerung erlaubt eine granulare Kontrolle über die Vorhersagequalität, stößt jedoch bei der automatischen Trigger-Logik ohne dediziertes Gating-Netzwerk an Effizienzgrenzen.
+    \item \textbf{Feature Engineering:} Die Klasse \texttt{EnhancedLandmarkFeatures} war entscheidend, um Bewegungsmuster wie Geschwindigkeit, Beschleunigung und Knochenvektoren zu erfassen – weit über die reine Pose hinaus.
+    \item \textbf{Generalisierung und Regularisierung:} Eine kompakte Transformer-Konfiguration (\texttt{hidden\_size} = 256) und ein starkes Dropout (0,65) sorgten für stabile Trainingskurven ohne kritisches Overfitting. Der verbleibende Unterschied von ca. 12\,\% zwischen Training und Validierung ist angesichts der hohen Variabilität der Gebärden akzeptabel.
+    \item \textbf{Umgang mit Imbalance:} Die Reduktion des Vokabulars auf 146 Klassen mit mindestens 70 Beispielen senkte die extreme Ungleichverteilung und schuf eine solide Basis für ein verlässliches Training.
 \end{itemize}
 
 \section{Ausblick}
-Zukünftige Forschungsansätze sollten die Integration von multimodalen Datenströmen (z.\,B. Kombination von Skelett-Daten mit optischem Fluss aus RGB-Videos) untersuchen, um die Erkennungsrate weiter zu stabilisieren. Zudem bietet die Erweiterung des hierarchischen Systems um ein lernbares Gating-Modell das Potenzial, die Routing-Präzision zu erhöhen und so die theoretische Performance der Experten-Modelle voll auszuschöpfen.
+Trotz der erreichten Meilensteine ist das Projekt natürlich noch lange nicht am Ziel. Wenn wir nach vorne blicken, sehen wir vor allem in der Kombination verschiedener Datenströme („Multimodalität“) den größten Hebel. Ein spannender nächster Schritt wäre es, die Skelett-Daten mit dem optischen Fluss aus den ursprünglichen RGB-Videos zu verknüpfen. Das könnte dem Modell helfen, Bewegungsdynamiken noch feiner zu erfassen, als es Landmarks allein können.
+
+Unsere Fehleranalyse war hier ein echter Augenöffner: Bei optischen Minimalpaaren wie \texttt{ABEND} und \texttt{NACHT}, die sich visuell extrem ähnlich sind, stößt das Skelett-Modell an seine Grenzen. Hier müssten wir in Zukunft die Mimik und das Mundbild (Face-Mesh) noch viel stärker gewichten, um diese feinen, aber entscheidenden Unterschiede greifbar zu machen.
+Auch architektonisch gibt es noch Luft nach oben. Ein lernbares Gating-Netzwerk innerhalb eines hierarchischen Systems könnte dabei helfen, die Entscheidung zwischen Stammgebärden und ihren komplexen Classifier-Varianten noch präziser zu steuern. Das große Ziel bleibt am Ende natürlich die Brücke von der isolierten Erkennung einzelner Wörter hin zur kontinuierlichen Gebärdensprachübersetzung (Sign Language Translation). Es bleibt also noch viel zu tun, aber die Basis mit \textit{SignNet} steht.
+
 
 \section{Persönliches Fazit Andrei}
 \label{sec:personal_conclusion_andrei}
@@ -60,6 +66,11 @@ Das Projekt hat mir gezeigt, dass Machine Learning zu 80\,\% Data Engineering un
 
 \section{Persönliches Fazit Roman}
 \label{sec:personal_conclusion_roman}
+
 \subsection{Was habe ich gut gemacht?}
+Besonders stolz bin ich auf die Hartnäckigkeit beim Feature Engineering. Als wir in Phase 3 merkten, dass die starre Graphen-Struktur des Skelett-Modells die Genauigkeit eher bremste, habe ich viel Zeit investiert, um mit den \texttt{EnhancedLandmarkFeatures} einen eigenen Weg zu finden. Die Entscheidung, physikalische Größen wie Geschwindigkeit und Beschleunigung explizit zu berechnen, war rückblickend der Wendepunkt, der uns den Sprung auf über 73\,\% Genauigkeit ermöglicht hat. Auch das konsequente Monitoring via MLflow hat mir geholfen, den Überblick über die unzähligen Hyperparameter-Versuche zu behalten.
+
 \subsection{Was würde ich anders machen?}
+Rückblickend würde ich zwei Dinge anders angehen: Erstens hätte ich früher mehr Zeit in die Analyse der Fehler investiert, um die Ursachen für die häufigsten Verwechslungen schneller zu verstehen. Das hätte mir geholfen, gezielter an Lösungen wie einer besseren Gewichtung der Gesichtsdaten zu arbeiten. Zweitens hätte ich die Datenaugmentation noch kreativer gestaltet. Zum Beispiel mit stärkeren Variationen in Bewegung und Perspektive, um das Modell robuster gegenüber seltenen oder ähnlichen Gebärden zu machen. Diese Punkte hätten die Genauigkeit vermutlich weiter verbessert.
 \subsection{Was habe ich gelernt?}
+Die wichtigste Erkenntnis für mich war, dass ein komplexes Modell wie ein Transformer kein „Allheilmittel“ ist, wenn die Datenbasis nicht stimmt. Ich habe gelernt, wie entscheidend die Datenqualität und Vorverarbeitung sind – der Gini-Index von 0,81 war eine harte Lektion in Sachen Klassenimbalance. Technisch gesehen habe ich mein Verständnis für Attention-Mechanismen und Regularisierungsmethoden wie Dropout massiv vertieft. Und zum Schluss: Ein schlechtes Ergebnis in einer Phase (wie Phase 3) ist kein Scheitern, sondern ein wichtiger Wegweiser für die finale Lösung.

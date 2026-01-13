@@ -11,6 +11,8 @@ del *.ilg
 del *.mtc*
 del main.bmt
 del *.aux
+del chapters\*.aux
+del chapters\*.bak
 del *.toc
 del *.lot
 del *.lol

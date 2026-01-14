@@ -28,7 +28,7 @@ Die Projektarbeit hat mir gezeigt, dass systematisches Vorgehen der Schlüssel z
 
 Die \textbf{Datenanalyse vor architektonischen Entscheidungen} hat sich als richtig erwiesen. Die systematische Untersuchung der MediaPipe-Landmarks zeigte beispielsweise, dass die Z-Koordinaten zu 80--98\,\% nahezu Nullwerte enthielten -- diese Erkenntnis ermöglichte eine Reduktion der Feature-Anzahl von 1'659 auf 1'086 Features ohne Genauigkeitsverlust.
 
-Ein weiterer Erfolg war der \textbf{Umgang mit der extremen Klassenimbalance} (593:1 Verhältnis zwischen häufigster und seltenster Klasse). Die Implementierung von Balanced Softmax Loss in Kombination mit gezieltem Oversampling für seltene Klassen führte zu einer Gesamtverbesserung von 11,4\,\% (67,16\,\% auf 78,54\,\% Accuracy). Besonders beeindruckend war die 18,2\,\%-Verbesserung bei Klassen mit weniger als 100 Samples.
+Ein weiterer Erfolg war der \textbf{Umgang mit der extremen Klassenimbalance} (593:1 Verhältnis zwischen häufigster und seltenster Klasse). Die Implementierung von Balanced Softmax Loss in Kombination mit gezieltem Oversampling für seltene Klassen führte zu einer Gesamtverbesserung von 11,4\,\% (61,75\,\% auf 73,15\,\% Accuracy). Besonders beeindruckend war die 18,2\,\%-Verbesserung bei Klassen mit weniger als 100 Samples.
 
 Die Entwicklung eines \textbf{Bucket-basierten Evaluationssystems} -- inspiriert durch Feedback von Martin -- ermöglichte eine genaue Analyse der Modellleistung über verschiedene Stichprobengruppen hinweg. Dies half, gezielt Schwachstellen zu erkennen und zu beheben.
 
@@ -50,7 +50,7 @@ Die Arbeit mit dem RWTH-PHOENIX-Datensatz gab mir ein gutes Verständnis für di
 
 MediaPipe ist ein mächtiges Tool, aber seine Feinheiten -- insbesondere die unterschiedliche Handhabung von Handedness zwischen Holistic- und separaten Hand-Modellen -- muss man genau verstehen. Die Erkenntnis, dass LEFT-Hände konsistent an definierten Indizes gespeichert werden müssen, war entscheidend für reproduzierbare Ergebnisse.
 
-Die Transformer-Architektur mit 256 Hidden Units, 4 Layern und 4 Attention Heads ($\sim$4M Parameter) erwies sich als guter Kompromiss zwischen Performance und Overfitting-Risiko. Das ursprüngliche, grössere Modell (512h/6L/8heads, $\sim$21M Parameter) zeigte einen 16\,\%-Train/Validation-Gap.
+Die Transformer-Architektur mit 256 Hidden Units, 4 Layern und 8 Attention Heads ($\sim$4M Parameter) erwies sich als guter Kompromiss zwischen Performance und Overfitting-Risiko. Das ursprüngliche, grössere Modell (512h/6L/8heads, $\sim$21M Parameter) zeigte einen 16\,\%-Train/Validation-Gap.
 
 Besonders lehrreich war auch die Implementierung des \textit{MisclassificationAnalyzer}, der mir half, die inhaltliche und visuelle Ähnlichkeit von Gebärden besser zu verstehen.
 

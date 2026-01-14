@@ -4,7 +4,7 @@
 In diesem Kapitel werden die Ergebnisse der finalen Phase~9 im Zusammenhang mit der Forschungsfrage und den theoretischen Grundlagen interpretiert. Ziel ist es, die in \autoref{ch:results} dargestellten Metriken mit den linguistischen und architektonischen Herausforderungen in Beziehung zu setzen.
 
 \section{Interpretation der Klassifikationsleistung}
-Die finale Evaluation ergab eine Top‑1‑Accuracy von 73,86\,\% für das Vokabular von 146 Klassen. Im Vergleich zur Phase‑2‑Baseline (53,94\,\%) verdeutlicht dies den Nutzen des verfeinerten Feature‑Engineerings und der finalen Transformer‑Architektur.
+Die finale Evaluation ergab eine Top‑1‑Accuracy von 73,15\,\% für das Vokabular von 146 Klassen. Im Vergleich zur Phase‑2‑Baseline (53,94\,\%) verdeutlicht dies den Nutzen des verfeinerten Feature‑Engineerings und der finalen Transformer‑Architektur.
 
 Besonders aussagekräftig ist die Top‑5‑Accuracy von 91,76\,\%. Die Differenz von knapp 17 Prozentpunkten bedeutet, dass die richtige Gebärde in den meisten Fällen in einem engen Kandidatenkreis enthalten ist — ein wichtiges Kriterium für robuste Assistenzsysteme, bei denen die korrekte Option häufig unter den Top‑Vorschlägen auftaucht.
 
@@ -19,7 +19,7 @@ Der Verlauf des \textit{Cross‑Entropy Loss} liefert Hinweise auf die Trainings
 \end{itemize}
 
 \subsection{Interpretation des Accuracy‑Gaps und Early Stopping}
-Der Unterschied zwischen finaler Training‑Accuracy (85,41\,\%) und Validation‑Accuracy (73,86\,\%) beträgt 11,55 Prozentpunkte. Zeitliche Detailbetrachtungen zeigen Optimierungsmöglichkeiten:
+Der Unterschied zwischen finaler Training‑Accuracy (85,41\,\%) und Validation‑Accuracy (73,15\,\%) beträgt 12,26 Prozentpunkte. Zeitliche Detailbetrachtungen zeigen Optimierungsmöglichkeiten:
 \begin{itemize}
     \item \textbf{Frühes Plateau:} Die Validierungsgenauigkeit erreichte bereits um Schritt 2700 etwa 73\,\% und verbesserte sich danach nur noch geringfügig.
     \item \textbf{Early Stopping als Hebel:} Würde das Training bei Schritt 2700 gestoppt, ließe sich der Generalization‑Gap auf etwa 9\,\% reduzieren und Rechenressourcen sparen.

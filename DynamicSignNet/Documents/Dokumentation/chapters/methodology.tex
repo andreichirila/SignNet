@@ -108,44 +108,66 @@ Die Landmark-Extraktion mittels MediaPipe ist anfällig für Verdeckungen, etwa 
 \end{itemize}
 
 \section{Datenaugmentation}
-Um dem \textit{Long-Tail}-Problem des Datensatzes zu begegnen, wurde eine mehrstufige Augmentation implementiert.
+Um das \textit{Long-Tail}-Problem des Datensatzes zu adressieren, wurde eine mehrstufige Augmentationsstrategie entwickelt. Sie umfasst fünf Techniken, die hierarchisch auf die Trainingssequenzen angewendet werden.
 
-\subsection{Spatiale und temporale Transformationen}
+\subsection{Temporale Augmentation (TemporalAugmentation)}
+Die klassenabhängige temporale Augmentation wird mit einer Wahrscheinlichkeit von 75\,\% ausgeführt, wobei unterrepräsentierte Klassen stärker augmentiert werden:
 \begin{itemize}
-    \item \textbf{Geometrischer Shift}: Zufällige Rotationen bis zu 5° und Skalierungen zwischen $0,9$ und $1,1$ simulieren variierende Kamerapositionen.
-    \item \textbf{Temporaler Shift}: Sequenzen werden zufällig zeitlich verschoben, um die Invarianz gegenüber unterschiedlichen Startzeitpunkten einer Gebärde zu erhöhen.
+    \item \textbf{Time Warping}: Zeitliche Streckung oder Stauchung der Sequenzen (Faktor $0{,}8$ bis $1{,}25$) zur Simulation unterschiedlicher Gebärdengeschwindigkeiten.
+    \item \textbf{Temporal Dropout}: Zufälliges Entfernen einzelner Frames (Keep-Probability $0{,}85$ bis $0{,}98$) zur Nachbildung von Tracking-Verlusten.
+    \item \textbf{Global Scaling}: Skalierung der gesamten Sequenz ($0{,}92$ bis $1{,}08$) zur Simulation variierender Abstände zwischen Signer und Kamera.
+    \item \textbf{Gaussian Noise}: Hinzufügen normalverteilten Rauschens ($\sigma = 0{,}008$) auf Landmark-Koordinaten.
+    \item \textbf{Structured Channel Dropout}: Ausfall ganzer Feature-Blöcke (Rohdaten, Geschwindigkeiten, Bones) mit 10\,\% Wahrscheinlichkeit zur Erhöhung der Multi-Stream-Robustheit.
 \end{itemize}
 
 \subsection{Landmark-Occlusion-Augmentation}
-Zur Verbesserung der Robustheit gegenüber Verdeckungen wurde ein spezifisches Fehler-Modell integriert:
+Mit einer Wahrscheinlichkeit von 30\,\% werden realistische Verdeckungsmuster simuliert, um MediaPipe-Tracking-Fehler nachzubilden. Vier Strategien kommen zum Einsatz:
 \begin{itemize}
-    \item \textbf{Gaussian Noise}: Den Koordinaten wird ein normalverteiltes Rauschen ($\sigma = 0,005$) hinzugefügt.
-    \item \textbf{Simulation von Jitter}: Dieses Rauschen simuliert die Instabilität der Keypoints, die typischerweise bei teilweisen Verdeckungen auftritt.
-    \item \textbf{Lerneffekt}: Das Modell wird gezwungen, robuste Bewegungsmuster statt präziser Einzelpunkte zu lernen.
+    \item \textbf{Region Dropout (20\,\%)}: Ausfall anatomischer Regionen (Hände, Gesicht, Arme, Torso) basierend auf plausiblen Ko-Okklusionsmustern (z.\,B. „beide Hände vor dem Gesicht“).
+    \item \textbf{Temporal Dropout (15\,\%)}: Simuliert Tracking-Verlust über bis zu sieben aufeinanderfolgende Frames.
+    \item \textbf{Sub-Region Dropout (25\,\%)}: Selektiver Ausfall feiner Merkmale wie einzelner Finger oder Gesichtsdetails (Augen, Nase, Mund).
+    \item \textbf{Gradual Occlusion}: Fade-In/Fade-Out über 2--5 Frames mittels Alpha-Masking zur Simulation partieller Verdeckungen und Bewegungsunschärfe.
+\end{itemize}
+Die Okklusion erfolgt durch Nullsetzen der entsprechenden Landmark-Koordinaten, basierend auf anatomisch plausiblen Mustern.
+
+\subsection{Mirror Augmentation}
+Horizontales Spiegeln mit einer Wahrscheinlichkeit von 30\,\% zur Erhöhung der Invarianz gegenüber Handlateralität:
+\begin{itemize}
+    \item \textbf{Hand-Swapping}: Vertauschung der Landmark-Indizes der linken und rechten Hand (0--63 $\leftrightarrow$ 63--126).
+    \item \textbf{X-Koordinaten-Flip}: Spiegelung aller x-Koordinaten ($x \rightarrow 1-x$) für MediaPipe-normierte Werte.
+    \item \textbf{Pose-Pair-Swapping}: Vertauschung von Links-/Rechts-Körper-Landmarks (Schultern, Ellbogen, Handgelenke, Hüften, Knie, Knöchel).
+\end{itemize}
+
+\subsection{Weighted Sampling und Oversampling}
+Zur Reduzierung des Class-Imbalance wurden zwei komplementäre Strategien eingesetzt:
+\begin{itemize}
+    \item \textbf{WeightedRandomSampler}: Sampling-Gewichte proportional zu $1/\sqrt{n_c}$, wobei $n_c$ die Klassenfrequenz ist.
+    \item \textbf{Explicit Oversampling}: Gezielte Duplikation seltener Klassen (z.\,B. „ZWEI“ $5\times$, „loc-SUED“ $4\times$).
 \end{itemize}
 
 \section{Feature Engineering: Kinematik und Geometrie}
 Die Klasse \texttt{EnhancedLandmarkFeatures} transformiert die statischen Rohdaten der MediaPipe-Punkte in einen hochdimensionalen, dynamischen Merkmalsraum, um die zeitliche und geometrische Varianz der Gebärdensprache abzubilden.
 
 \subsection{Kinematische Ableitungen}
-Die Dynamik der Gebärdenausführung wird durch die Berechnung der Geschwindigkeit $\vec{v}_t$ und der Beschleunigung $\vec{a}_t$ erfasst, wobei die Werte durch die Bildrate (\textit{fps}) normiert werden:
+Die Dynamik der Gebärden wird durch die Berechnung der Geschwindigkeit $\vec{v}_t$ und optional der Beschleunigung $\vec{a}_t$ erfasst, normiert durch die Bildrate (\textit{fps} = 25):
 \begin{equation}
     \vec{v}_t = (\mathbf{p}_t - \mathbf{p}_{t-1}) \cdot \text{fps} \quad , \quad \vec{a}_t = (\vec{v}_t - \vec{v}_{t-1}) \cdot \text{fps}
 \end{equation}
+Die Geschwindigkeitsvektoren werden zusätzlich mittels Z-Score-Normalisierung ($\mu=0$, $\sigma=1$) über die gesamte Sequenz standardisiert.
 
 \subsection{Skelett-Geometrie und Bone-Vektoren}
-Um die Handform unabhängig von der absoluten Bildposition präzise abzubilden, werden Vektoren zwischen anatomisch verbundenen Gelenken (Bones) berechnet:
+Zur präzisen Abbildung der Handform unabhängig von der Bildposition werden Vektoren zwischen anatomisch verbundenen Gelenken (Bones) gemäß der MediaPipe-Hand-Topologie berechnet:
 \begin{equation}
     \vec{b} = \mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}
 \end{equation}
-Diese Bone-Vektoren sind invariant gegenüber globalen Translationen und erfassen die geometrische Konfiguration der Hand skelettbasiert.
+Diese Bone-Vektoren sind translationsinvariant. Während des Trainings werden die Bone-Längen mit 30\,\% Wahrscheinlichkeit zufällig skaliert (Faktor $0{,}9$ bis $1{,}1$), um anatomische Variationen zwischen Signern zu simulieren.
 
 \subsection{Distanzmerkmale und Normalisierung}
-Ergänzend zur Richtungscharakteristik der Vektoren werden euklidische Abstände $d$ zwischen kritischen Landmark-Paaren berechnet, um die Kompaktheit und Krümmung der Handform statistisch greifbar zu machen:
+Ergänzend zur Richtungscharakteristik der Vektoren werden euklidische Abstände $d$ zwischen kritischen Landmark-Paaren berechnet:
 \begin{equation}
     d = \|\mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}\|_2
 \end{equation}
-Um eine vollständige Unabhängigkeit von der Kameraposition zu erreichen, werden sämtliche Koordinaten vor der Merkmalsextraktion auf das Handgelenk (\textit{wrist}) als Ursprung normiert. Dieser kombinierte Merkmalsvektor aus 1659 Werten bildete die Grundlage für die signifikante Genauigkeitssteigerung in Phase 9.
+Um vollständige Positionsinvarianz zu erreichen, werden alle Koordinaten vor der Merkmalsextraktion auf das Handgelenk (\textit{wrist}, Landmark 0) als Ursprung normiert.
 
 \section{Modellarchitektur: Transformer-Encoder}
 Die Wahl des Transformers begründet sich durch seine Fähigkeit, globale Abhängigkeiten effizient zu modellieren:

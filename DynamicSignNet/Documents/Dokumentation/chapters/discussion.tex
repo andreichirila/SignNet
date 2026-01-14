@@ -12,7 +12,7 @@ Besonders aussagekräftig ist die Top‑5‑Accuracy von 91,76\,\%. Die Differen
 Ein zentraler Analysepunkt ist das Verhalten der Lernkurven in Hinblick auf Generalisierung und Optimierungspotential.
 
 \subsection{Detaillierte Loss‑Analyse}
-Der Verlauf des \textit{Cross‑Entropy Loss} liefert Hinweise auf die Trainingsstabilität. Wie in \autoref{fig:loss_plot} sichtbar, sinken Training‑ und Validation‑Loss über die Trainingsdauer gleichmäßig.
+Der Verlauf des \textit{Cross‑Entropy Loss} liefert Hinweise auf die Trainingsstabilität. Wie in \autoref{fig:loss_plot} sichtbar, sinken Training‑ und Validation‑Loss über die Trainingsdauer gleichmässig.
 \begin{itemize}
     \item \textbf{Konvergenz:} Beide Kurven erreichen gegen Ende ein Plateau — der Training‑Loss bei etwa 1,1, der Validation‑Loss bei rund 1,55.
     \item \textbf{Kein typisches Overfitting‑Signal:} Ein wieder ansteigender Validation‑Loss bei weiter fallendem Training‑Loss wäre ein klares Overfitting‑Indiz. Da die Kurven hier weitgehend parallel verlaufen, spricht das gegen eine destruktive Überanpassung.
@@ -22,7 +22,7 @@ Der Verlauf des \textit{Cross‑Entropy Loss} liefert Hinweise auf die Trainings
 Der Unterschied zwischen finaler Training‑Accuracy (85,41\,\%) und Validation‑Accuracy (73,15\,\%) beträgt 12,26 Prozentpunkte. Zeitliche Detailbetrachtungen zeigen Optimierungsmöglichkeiten:
 \begin{itemize}
     \item \textbf{Frühes Plateau:} Die Validierungsgenauigkeit erreichte bereits um Schritt 2700 etwa 73\,\% und verbesserte sich danach nur noch geringfügig.
-    \item \textbf{Early Stopping als Hebel:} Würde das Training bei Schritt 2700 gestoppt, ließe sich der Generalization‑Gap auf etwa 9\,\% reduzieren und Rechenressourcen sparen.
+    \item \textbf{Early Stopping als Hebel:} Würde das Training bei Schritt 2700 gestoppt, liesse sich der Generalization‑Gap auf etwa 9\,\% reduzieren und Rechenressourcen sparen.
     \item \textbf{Rolle der Regularisierung:} Dass der Gap trotz weiterem Training nicht dramatisch anstieg, ist ein Verdienst der starken Regularisierung (Dropout 0,65).
 \end{itemize}
 

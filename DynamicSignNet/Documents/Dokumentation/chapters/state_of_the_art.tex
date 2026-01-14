@@ -1,52 +1,52 @@
 \chapter{Stand der Technik}
 \label{ch:state_of_the_art}
 
-Die automatische Gebärdenspracherkennung (Isolated Sign Language Recognition, ISLR) hat in den letzten Jahrzehnten eine signifikante Entwicklung durchlaufen, die von handgesteuerten statistischen Modellen hin zu komplexen Deep-Learning-Architekturen reicht \cite{dafnis2022}.
+Die automatische Gebärdenspracherkennung (Isolated Sign Language Recognition, ISLR) hat sich in den letzten Jahrzehnten deutlich weiterentwickelt – von handzentrierten, statistischen Verfahren hin zu komplexen Deep-Learning-Architekturen \cite{dafnis2022}.
 
 \section{Traditionelle Methoden}
-Vor dem Aufkommen von Deep Learning basierten Erkennungssysteme primär auf handgefertigten Merkmalen (Hand-crafted Features), wie etwa relativen Handpositionen oder Distanzen zwischen Händen und spezifischen Körperteilen \cite{vogler2001}. Zur Klassifizierung dieser raumzeitlichen Informationen wurden klassische Algorithmen wie Hidden Markov Models (HMMs), Support Vector Machines (SVMs) und k-Nearest Neighbors (kNNs) eingesetzt \cite{starner1998, vogler2001}. Ein wesentlicher Nachteil dieser Ansätze war jedoch ihre begrenzte Generalisierungsfähigkeit und Skalierbarkeit \cite{bowden2004}.
+Vor dem Durchbruch des Deep Learning stützten sich Erkennungssysteme vorwiegend auf handgefertigte Merkmale, etwa relative Handpositionen oder Abstände zwischen Händen und bestimmten Körperpunkten \cite{vogler2001}. Zur Klassifikation wurden klassische Methoden wie Hidden Markov Models (HMMs), Support Vector Machines (SVMs) und k-Nearest Neighbors (kNNs) eingesetzt \cite{starner1998, vogler2001}. Solche Ansätze litten jedoch unter eingeschränkter Generalisierbarkeit und limitiertem Skalierungspotenzial \cite{bowden2004}.
 
 \section{Deep-Learning-Ansätze}
-Mit dem Durchbruch neuronaler Netze verschob sich der Fokus auf die automatische Extraktion von Merkmalen direkt aus Videodaten.
+Mit der Verbreitung neuronaler Netze verlagerte sich der Fokus auf die automatische Merkmalsextraktion direkt aus Videodaten, was die Leistungsfähigkeit vieler Systeme deutlich steigerte.
 
-\subsection{CNN-RNN Architekturen}
-Frühe Deep-Learning-Modelle kombinierten Convolutional Neural Networks (CNNs) zur Extraktion räumlicher Merkmale pro Frame mit rekurrenten Netzwerken wie LSTMs oder Bidirectional LSTMs (Bi-LSTMs), um die zeitliche Dynamik der Gebärden zu erfassen \cite{pigou2014}.
+\subsection{CNN-RNN-Architekturen}
+Frühe Deep-Learning-Modelle kombinierten Convolutional Neural Networks (CNNs) zur räumlichen Merkmalsextraktion pro Frame mit rekurrenten Netzwerken wie LSTMs oder bidirektionalen LSTMs (Bi-LSTMs) zur Modellierung zeitlicher Dynamik \cite{pigou2014}. Diese Kombination ermöglichte eine robuste Erfassung lokaler Bildmerkmale und ihrer zeitlichen Entwicklung.
 
 \subsection{3D-CNNs}
-Um kurzfristige zeitliche Abhängigkeiten besser abzubilden, wurden 3D-CNNs eingeführt. Das Inflated 3D-CNN (I3D) von Carreira und Zisserman \cite{carreira2017} wurde zu einer der am häufigsten verwendeten Architekturen in der Aktions- und Gebärdenerkennung. Diese Modelle weisen jedoch Schwächen bei der Erfassung langfristiger Abhängigkeiten auf.
+3D-CNNs adressieren kurzzeitige zeitliche Abhängigkeiten direkt in der Faltungsebene. Das Inflated 3D-CNN (I3D) von Carreira und Zisserman \cite{carreira2017} zählt zu den am weitesten verbreiteten Architekturen für Action- und Gebärdenerkennung. Allerdings zeigen solche Modelle oft Schwächen bei der Erfassung langfristiger Abhängigkeiten über längere Sequenzen.
 
 \subsection{Transformer-Architekturen}
-In jüngster Zeit werden vermehrt Transformer-Modelle eingesetzt, die den Self-Attention-Mechanismus nutzen \cite{vaswani2017}. Der Vorteil dieser Architektur liegt in der Fähigkeit, Abhängigkeiten über beliebig lange Sequenzen zu modellieren, ohne das Problem verschwindender Gradienten rekurrenter Netze. Für die Gebärdenerkennung ermöglicht dies die gleichzeitige Berücksichtigung aller Frames einer Sequenz bei der Klassifikation.
+Jüngst gewinnen Transformer-Modelle an Bedeutung, da ihr Self-Attention-Mechanismus Abhängigkeiten über beliebig lange Sequenzen modellieren kann \cite{vaswani2017}. Für die Gebärdenerkennung bedeutet das: Alle Frames einer Sequenz können simultan berücksichtigt werden, ohne die Limitierungen rekurrenter Modelle.
 
 \section{Skelettbasierte Ansätze}
-Anstatt rohe RGB-Frames zu verarbeiten, nutzen skelettbasierte Methoden extrahierte Keypoints von Körpergelenken, Händen und Gesicht. Dies reduziert die Datendimensionalität erheblich und fokussiert das Lernen auf relevante Bewegungsinformationen.
+Statt rohe RGB-Frames zu verarbeiten, setzen skelettbasierte Methoden auf extrahierte Keypoints von Körper, Händen und Gesicht. Dadurch sinkt die Datendimensionalität, und das Lernen fokussiert sich stärker auf relevante Bewegungsmuster.
 
-\subsection{Pose Estimation}
-Die Extraktion von Skelettdaten erfolgt typischerweise durch spezialisierte Pose-Estimation-Systeme. OpenPose \cite{cao2019} war eines der ersten Echtzeit-Systeme für Multi-Person Pose Estimation. MediaPipe \cite{lugaresi2019} bietet eine effiziente Pipeline zur Extraktion von Körper-, Hand- und Gesichtslandmarks mit insgesamt 543 Keypoints pro Frame. Die Verwendung von Landmark-Koordinaten anstelle von Rohbildern bietet mehrere Vorteile: Robustheit gegenüber Hintergrundvariationen, geringerer Speicherbedarf und schnellere Inferenz.
+\subsection{Pose-Estimation}
+Die Gewinnung von Skelettdaten erfolgt meist mit spezialisierten Pose-Estimation-Systemen. OpenPose \cite{cao2019} war eines der ersten Echtzeit-Systeme für Multi-Person-Pose-Estimation. MediaPipe \cite{lugaresi2019} stellt eine effiziente Pipeline zur Verfügung, die Körper-, Hand- und Gesichtslandmarks extrahiert — insgesamt bis zu 543 Keypoints pro Frame. Die Nutzung von Landmark-Koordinaten statt Rohbildern bietet Vorteile wie Robustheit gegenüber Hintergrundvariationen, geringeren Speicherbedarf und schnellere Inferenz.
 
 \subsection{Graph Convolutional Networks}
-Das Spatial-Temporal Graph Convolutional Network (ST-GCN) von Yan et al. \cite{yan2018} markierte einen wichtigen Fortschritt bei der Modellierung der raumzeitlichen Dynamik von Skelettdaten. Die Skelettstruktur wird als Graph repräsentiert, wobei Gelenke als Knoten und anatomische Verbindungen als Kanten modelliert werden. Frühere GCN-Modelle verarbeiteten Informationen jedoch oft nur entlang der natürlichen biologischen Verbindungen, wodurch Interaktionen zwischen nicht direkt verbundenen Punkten (z.B. zwischen den beiden Händen) vernachlässigt wurden.
+Das Spatial-Temporal Graph Convolutional Network (ST-GCN) von Yan et al. \cite{yan2018} war ein wichtiger Schritt zur Modellierung raumzeitlicher Dynamik in Skelettdaten. Hierbei wird das Skelett als Graph abgebildet, Gelenke sind Knoten und anatomische Verbindungen Kanten. Frühere GCN-Modelle beschränkten sich jedoch oft auf natürliche, biologische Verbindungen und vernachlässigten damit Interaktionen zwischen nicht direkt verbundenen Punkten (etwa zwischen beiden Händen).
 
 \section{Datensätze}
-Die Verfügbarkeit annotierter Datensätze ist entscheidend für das Training von Deep-Learning-Modellen.
+Gut annotierte Datensätze sind eine Voraussetzung für das Training leistungsfähiger Modelle.
 
 \subsection{WLASL}
-Der Word-Level American Sign Language (WLASL) Datensatz \cite{li2020wlasl} umfasst über 2000 ASL-Gebärden und ist einer der größten öffentlich verfügbaren Datensätze für isolierte Gebärdenerkennung. Die Daten stammen aus verschiedenen Online-Quellen, was zu hoher Variabilität in Aufnahmequalität und Hintergrund führt.
+Der Word-Level American Sign Language (WLASL)-Datensatz \cite{li2020wlasl} umfasst über 2000 ASL-Gestiken und zählt zu den grössten öffentlich verfügbaren Sammlungen für isolierte Gebärdenerkennung. Er zeichnet sich durch hohe Variation in Aufnahmequalität und Hintergrund aus, da die Daten aus diversen Online-Quellen stammen.
 
-\subsection{Phoenix}
-Der RWTH-PHOENIX-Weather-2014T Datensatz \cite{koller2015phoenix, camgoz2018neural} basiert auf Aufnahmen von Gebärdensprachdolmetschern deutscher Wettersendungen. Er enthält kontinuierliche Gebärdensprachsequenzen mit Gloss-Annotationen und deutschen Übersetzungen. Der Datensatz zeichnet sich durch konsistente Aufnahmebedingungen und professionelle Gebärdende aus, weist jedoch eine ausgeprägte Domänenspezifität (Wettervokabular) auf.
+\subsection{PHOENIX}
+Der RWTH-PHOENIX-Weather-2014T Datensatz \cite{koller2015phoenix, camgoz2018neural} besteht aus Aufnahmen professioneller Gebärdensprachdolmetscher in Wettersendungen. Er enthält kontinuierliche Gebärdensequenzen mit Gloss-Annotationen und deutschen Übersetzungen. Die konsistenten Aufnahmebedingungen sind ein Vorteil, jedoch ist die Domäne auf Wettervokabular beschränkt.
 
 \section{Herausforderung: Klassenungleichheit}
-Ein fundamentales Problem in der Gebärdenerkennung ist die ungleiche Verteilung der Trainingsbeispiele über die Klassen – das sogenannte Long-Tail-Problem. Wenige häufige Gebärden dominieren die Datensätze, während die Mehrheit der Klassen nur selten vorkommt.
+Ein zentrales Problem in der Gebärdenerkennung ist die ungleiche Verteilung von Trainingsbeispielen über Klassen — das Long-Tail-Problem. Wenige häufige Gebärden dominieren die Datensätze, während die Mehrheit der Klassen selten vertreten ist.
 
 \subsection{Focal Loss}
-Lin et al. \cite{lin2017focal} führten Focal Loss ein, um das Ungleichgewicht zwischen einfachen und schweren Beispielen zu adressieren. Durch einen modulierenden Faktor $(1-p_t)^\gamma$ wird der Verlustbeitrag gut klassifizierter Beispiele reduziert, sodass das Training auf schwierige Beispiele fokussiert wird.
+Lin et al. \cite{lin2017focal} führten Focal Loss ein, um das Ungleichgewicht zwischen einfachen und schwierigen Beispielen zu mildern. Durch den Faktor $(1-p_t)^\gamma$ wird der Beitrag gut klassifizierter Beispiele reduziert, sodass das Training schwieriger Fälle stärker gewichtet.
 
 \subsection{Class-Balanced Loss}
-Cui et al. \cite{cui2019classbalanced} schlugen eine Gewichtung basierend auf der \textit{effektiven Anzahl} von Beispielen vor. Diese Methode berücksichtigt, dass zusätzliche Beispiele einer bereits gut repräsentierten Klasse weniger Informationsgewinn bringen als bei unterrepräsentierten Klassen.
+Cui et al. \cite{cui2019classbalanced} schlugen eine Gewichtung auf Basis der \textit{effektiven Anzahl} von Beispielen vor. Diese Methode berücksichtigt, dass zusätzliche Datenpunkte einer bereits gut vertretenen Klasse weniger Informationsgewinn bringen als für seltene Klassen.
 
 \subsection{Balanced Softmax}
-Ren et al. \cite{ren2020balanced} erweiterten die Standard-Softmax-Funktion um klassenspezifische Prior-Terme, die die Klassenverteilung des Trainingsdatensatzes kompensieren. Dies ermöglicht eine faire Evaluation auch für seltene Klassen ohne Änderung der Verlustfunktion.
+Ren et al. \cite{ren2020balanced} erweiterten die Standard-Softmax-Funktion um klassenspezifische Prior-Terme, die die Trainingsklassenverteilung ausgleichen. Dadurch lassen sich seltene Klassen fairer bewerten, ohne die Verlustfunktion grundlegend zu verändern.
 
 \section{Zusammenfassung}
-Der aktuelle Stand der Technik in der isolierten Gebärdenerkennung ist durch die Kombination mehrerer Ansätze gekennzeichnet: skelettbasierte Merkmalsextraktion mittels Pose-Estimation-Systemen wie MediaPipe, Transformer-Architekturen für die temporale Modellierung, und spezialisierte Verlustfunktionen zur Handhabung unbalancierter Datensätze. Die vorliegende Arbeit baut auf diesen Grundlagen auf und untersucht zusätzlich den Einsatz hierarchischer Expertenmodelle zur Reduktion systematischer Verwechslungen zwischen ähnlichen Gebärden.
+Der Stand der Technik in der isolierten Gebärdenerkennung kombiniert heute skelettbasierte Merkmalsextraktion (z.\,B. mit MediaPipe), moderne Modellarchitekturen wie Transformer zur temporalen Modellierung und spezialisierte Verlustfunktionen zur Behandlung unbalancierter Datensätze. Auf dieser Basis untersucht die vorliegende Arbeit zusätzlich den Einsatz hierarchischer Expertenmodelle, um systematische Verwechslungen zwischen ähnlichen Gebärden weiter zu reduzieren.

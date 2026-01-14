@@ -15,7 +15,7 @@ import argparse
 
 def calculate_gini(array):
     """
-    Berechnet den Gini-Koeffizienten eines Arrays (Maß für die Ungleichverteilung).
+    Berechnet den Gini-Koeffizienten eines Arrays (Mass für die Ungleichverteilung).
     0 = Perfekte Gleichverteilung
     1 = Maximale Ungleichverteilung (Long-Tail)
     """

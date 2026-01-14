@@ -1,50 +1,50 @@
 \chapter{Hintergrund}
 \label{ch:background}
 
-Dieses Kapitel führt in die theoretischen Grundlagen ein, die für das Verständnis der vorliegenden Arbeit notwendig sind. Zunächst wird die Gebärdensprache als linguistisches System vorgestellt, gefolgt von den technischen Grundlagen der verwendeten Deep-Learning-Architektur und der Merkmalsextraktion.
+Dieses Kapitel vermittelt die theoretischen Grundlagen, die zum Verständnis der vorliegenden Arbeit erforderlich sind. Zunächst wird Gebärdensprache als eigenständiges linguistisches System beschrieben; anschliessend folgen die technischen Grundlagen der verwendeten Deep-Learning-Architektur sowie Aspekte der Merkmalsextraktion.
 
 \section{Gebärdensprache als linguistisches System}
 
-Gebärdensprachen sind vollwertige, natürliche Sprachen mit eigener Grammatik, Syntax und Morphologie. Im Gegensatz zu weit verbreiteten Missverständnissen handelt es sich nicht um eine visuelle Kodierung gesprochener Sprache oder um Pantomime, sondern um eigenständige linguistische Systeme \cite{stokoe1960}.
+Gebärdensprachen sind vollwertige, natürliche Sprachen mit eigener Grammatik, Syntax und Morphologie. Entgegen verbreiteten Missverständnissen handelt es sich nicht um eine visuelle Umschrift gesprochener Sprache oder um Pantomime, sondern um autonome sprachliche Systeme \cite{stokoe1960}.
 
 \subsection{Phonologie der Gebärdensprache}
 
-William Stokoe legte 1960 den Grundstein für die linguistische Analyse von Gebärdensprachen, indem er nachwies, dass Gebärden – analog zu gesprochenen Wörtern – aus kleineren, bedeutungsunterscheidenden Einheiten bestehen. Diese Einheiten werden als \textit{Cheremes} (in Anlehnung an Phoneme) oder heute häufiger als \textit{Parameter} bezeichnet.
+William Stokoe legte 1960 den Grundstein für die linguistische Analyse von Gebärdensprachen, indem er zeigte, dass Gebärden – ähnlich wie gesprochene Wörter – aus kleineren, bedeutungsunterscheidenden Einheiten bestehen. Diese Einheiten werden als \textit{Cheremes} (analog zu Phonemen) bezeichnet; heute spricht man häufiger von \textit{Parametern}.
 
-Eine Gebärde setzt sich aus fünf simultanen Parametern zusammen:
+Eine Gebärde besteht simultan aus fünf Parametern:
 
 \begin{itemize}
-    \item \textbf{Handform}: Die Konfiguration der Finger (z.B. flache Hand, Faust, ausgestreckter Zeigefinger). Die Deutsche Gebärdensprache (DGS) verwendet etwa 30 distinktive Handformen.
-    \item \textbf{Handstellung (Orientierung)}: Die Ausrichtung der Handfläche und Finger relativ zum Körper (z.B. Handfläche nach oben, nach unten, zum Körper).
-    \item \textbf{Ausführungsort}: Die Position im Gebärdenraum, an der die Gebärde ausgeführt wird (z.B. vor der Brust, am Kopf, im neutralen Raum).
-    \item \textbf{Bewegung}: Die Art und Richtung der Handbewegung (z.B. linear, kreisförmig, wiederholend).
-    \item \textbf{Non-manuelle Komponenten}: Mimik, Mundbild, Kopf- und Körperhaltung, die grammatische oder lexikalische Informationen tragen.
+    \item \textbf{Handform}: Die Fingerkonfiguration (z.\,B. flache Hand, Faust, ausgestreckter Zeigefinger). In der Deutschen Gebärdensprache (DGS) existieren etwa 30 distinktive Handformen.
+    \item \textbf{Handstellung (Orientierung)}: Die Richtung von Handfläche und Fingern relativ zum Körper (z.\,B. Handfläche nach oben, nach unten, zum Körper).
+    \item \textbf{Ausführungsort}: Die Position im Gebärdenraum, an der die Gebärde stattfindet (z.\,B. vor der Brust, am Kopf, im neutralen Raum).
+    \item \textbf{Bewegung}: Die Art und Richtung der Handbewegung (z.\,B. linear, kreisförmig, wiederholend).
+    \item \textbf{Non-manuelle Komponenten}: Mimik, Mundbild sowie Kopf- und Körperhaltung, die grammatische oder lexikalische Informationen vermitteln.
 \end{itemize}
 
-Diese Simultaneität unterscheidet Gebärdensprachen fundamental von sequentiell aufgebauten Lautsprachen und stellt besondere Anforderungen an maschinelle Erkennungssysteme.
+Die gleichzeitige Kombination dieser Parameter unterscheidet Gebärdensprachen grundlegend von sequentiell aufgebauten Lautsprachen und stellt besondere Anforderungen an automatische Erkennungssysteme.
 
 \subsection{Glossennotation}
 
-In der Gebärdensprachforschung werden Gebärden typischerweise durch \textit{Glossen} repräsentiert – konventionalisierte Bezeichnungen in Großbuchstaben, die auf der Bedeutung der Gebärde basieren. Die Glosse \texttt{HAUS} bezeichnet beispielsweise die Gebärde für das Konzept "Haus", unabhängig von der spezifischen Ausführungsform. Diese Notation ermöglicht die Annotation von Videodaten und bildet die Grundlage für überwachtes maschinelles Lernen.
+In der Gebärdensprachforschung werden Gebärden häufig durch \textit{Glossen} dargestellt — standardisierte Bezeichnungen in Grossbuchstaben, die sich an der Bedeutung orientieren. Die Glosse \texttt{HAUS} bezeichnet beispielsweise das Konzept „Haus“, unabhängig von variierenden Artikulationsformen. Diese Notation ist zentral für die Annotation von Videodaten und bildet die Grundlage für überwachtes maschinelles Lernen.
 
 \subsection{Isolierte vs. kontinuierliche Gebärdenerkennung}
 
-Man unterscheidet zwei Hauptaufgaben in der automatischen Gebärdenerkennung:
+Man unterscheidet zwei wesentliche Aufgaben in der automatischen Gebärdenerkennung:
 
 \begin{itemize}
-    \item \textbf{Isolierte Gebärdenerkennung (Isolated Sign Language Recognition, ISLR)}: Klassifikation einzelner, segmentierter Gebärden. Der Anfang und das Ende der Gebärde sind bekannt.
-    \item \textbf{Kontinuierliche Gebärdenerkennung (Continuous Sign Language Recognition, CSLR)}: Erkennung von Gebärdensequenzen ohne vorgegebene Segmentierung, analog zur Spracherkennung.
+    \item \textbf{Isolierte Gebärdenerkennung (Isolated Sign Language Recognition, ISLR)}: Die Klassifikation einzelner, bereits segmentierter Gebärden; Anfang und Ende der Gebärde sind bekannt.
+    \item \textbf{Kontinuierliche Gebärdenerkennung (Continuous Sign Language Recognition, CSLR)}: Die Erkennung von Gebärdensequenzen ohne vorgegebene Segmentierung, vergleichbar mit der automatischen Spracherkennung.
 \end{itemize}
 
-Die vorliegende Arbeit fokussiert sich auf die isolierte Gebärdenerkennung, bei der vorgeschnittene Videosequenzen einzelnen Glossen zugeordnet werden.
+Die vorliegende Arbeit konzentriert sich auf die isolierte Gebärdenerkennung, bei der vorgeschnittene Videosequenzen einzelnen Glossen zugeordnet werden.
 
 \section{Transformer-Architektur}
 
-Die Transformer-Architektur \cite{vaswani2017} hat sich als dominantes Paradigma für die Verarbeitung sequentieller Daten etabliert. Im Gegensatz zu rekurrenten Netzwerken (RNNs, LSTMs) verarbeitet der Transformer die gesamte Sequenz parallel und modelliert Abhängigkeiten durch einen Attention-Mechanismus.
+Die Transformer-Architektur \cite{vaswani2017} hat sich als führendes Paradigma für die Verarbeitung sequentieller Daten etabliert. Anders als rekurrente Netze (RNNs, LSTMs) verarbeitet der Transformer ganze Sequenzen parallel und modelliert Abhängigkeiten über einen Attention-Mechanismus.
 
 \subsection{Self-Attention}
 
-Der Kern des Transformers ist der \textit{Self-Attention}-Mechanismus, der es jedem Element einer Sequenz ermöglicht, Informationen von allen anderen Elementen zu aggregieren. Für eine Eingabesequenz $\mathbf{X} \in \mathbb{R}^{T \times d}$ mit $T$ Zeitschritten und Dimension $d$ werden drei Projektionen berechnet:
+Im Zentrum des Transformers steht der \textit{Self-Attention}-Mechanismus, der jedem Element einer Sequenz erlaubt, Informationen aus allen anderen Elementen zu beziehen. Für eine Eingabesequenz $\mathbf{X} \in \mathbb{R}^{T \times d}$ mit $T$ Zeitschritten und Dimension $d$ werden drei Projektionen berechnet:
 
 \begin{align}
     \mathbf{Q} &= \mathbf{X} \mathbf{W}^Q \quad \text{(Queries)} \\
@@ -52,23 +52,23 @@ Der Kern des Transformers ist der \textit{Self-Attention}-Mechanismus, der es je
     \mathbf{V} &= \mathbf{X} \mathbf{W}^V \quad \text{(Values)}
 \end{align}
 
-Die Attention-Gewichte werden durch Skalierung des Skalarprodukts zwischen Queries und Keys berechnet:
+Die Attention-Gewichte ergeben sich durch Skalierung des Skalarprodukts von Queries und Keys:
 
 \begin{equation}
     \text{Attention}(\mathbf{Q}, \mathbf{K}, \mathbf{V}) = \text{softmax}\left(\frac{\mathbf{Q}\mathbf{K}^\top}{\sqrt{d_k}}\right) \mathbf{V}
 \end{equation}
 
-Durch diesen Mechanismus kann jeder Frame einer Gebärdensequenz Informationen von allen anderen Frames berücksichtigen, was besonders für die Erfassung globaler Bewegungsmuster relevant ist.
+Auf diese Weise kann jeder Frame einer Gebärdensequenz Informationen aus der gesamten Sequenz nutzen, was für das Erfassen globaler Bewegungsmuster entscheidend ist.
 
 \subsection{Positional Encoding}
 
-Da der Transformer keine inhärente Sequenzordnung besitzt, muss die zeitliche Position explizit kodiert werden. Dies geschieht durch \textit{Positional Encodings}, die zur Eingabe addiert werden. In dieser Arbeit werden \textit{lernbare} Positional Embeddings verwendet, die während des Trainings optimiert werden:
+Da der Transformer keine eingebaute Reihenfolgeinformation besitzt, muss die zeitliche Position explizit kodiert werden. Dies erfolgt durch \textit{Positional Encodings}, die zur Eingabe addiert werden. In dieser Arbeit werden \textit{lernbare} Positions-Embeddings verwendet, die während des Trainings optimiert werden:
 
 \begin{equation}
     \mathbf{X}' = \mathbf{X} + \mathbf{E}_{\text{pos}}
 \end{equation}
 
-wobei $\mathbf{E}_{\text{pos}} \in \mathbb{R}^{T_{\max} \times d}$ eine trainierbare Embedding-Matrix ist.
+wobei $\mathbf{E}_{\text{pos}} \in \mathbb{R}^{T_{\max} \times d}$ eine trainierbare Embedding-Matrix darstellt.
 
 \subsection{Vorteile gegenüber rekurrenten Architekturen}
 
@@ -77,27 +77,27 @@ Transformer bieten mehrere Vorteile für die Gebärdenerkennung:
 \begin{itemize}
     \item \textbf{Parallelisierung}: Alle Positionen werden gleichzeitig verarbeitet, was das Training beschleunigt.
     \item \textbf{Lange Abhängigkeiten}: Direkte Verbindungen zwischen beliebigen Positionen vermeiden das Problem verschwindender Gradienten bei langen Sequenzen.
-    \item \textbf{Interpretierbarkeit}: Attention-Gewichte können visualisiert werden, um zu verstehen, welche Frames für die Klassifikation relevant sind.
+    \item \textbf{Interpretierbarkeit}: Attention-Gewichte lassen sich visualisieren und zeigen, welche Frames für die Klassifikation relevant sind.
 \end{itemize}
 
 \section{Herausforderungen des Datensatzes}
 
 \subsection{Long-Tail-Verteilung}
 
-Ein zentrales Problem der Gebärdenspracherkennung ist die ungleiche Verteilung der Trainingsbeispiele. Der verwendete Phoenix-Datensatz folgt einer \textit{Power-Law}-Verteilung: Wenige häufige Gebärden (z.B. \texttt{REGION}, \texttt{MORGEN}) dominieren, während die Mehrheit der Klassen nur selten vorkommt.
+Ein zentrales Problem bei der Gebärdenspracherkennung ist die ungleiche Verteilung der Trainingsbeispiele. Der verwendete Phoenix-Datensatz folgt einer \textit{Power-Law}-Verteilung: Wenige sehr häufige Gebärden (z.\,B. \texttt{REGION}, \texttt{MORGEN}) dominieren, während die grosse Mehrheit der Klassen nur selten auftritt.
 
 \subsection{Gini-Koeffizient}
 
-Die Ungleichverteilung lässt sich durch den Gini-Koeffizienten $G$ quantifizieren. Für $n$ Klassen mit den jeweiligen Stichprobenanzahlen $x_i$ gilt:
+Die Ungleichverteilung lässt sich mithilfe des Gini-Koeffizienten $G$ quantifizieren. Für $n$ Klassen mit Stichprobenanzahlen $x_i$ gilt:
 
 \begin{equation}
     G = \frac{\sum_{i=1}^n \sum_{j=1}^n |x_i - x_j|}{2n \sum_{i=1}^n x_i}
 \end{equation}
 
-Ein hoher Gini-Koeffizient deutet auf eine extreme Konzentration der Daten auf wenige "Head-Klassen" hin, während die Mehrheit der Klassen ("Tail") unterrepräsentiert ist. Dies erfordert spezielle Trainingsstrategien wie Focal Loss, Class-Balanced Loss oder Oversampling.
+Ein hoher Gini-Wert zeigt eine starke Konzentration auf wenige „Head“-Klassen, während die meisten Klassen im „Tail“ unterrepräsentiert sind. Solche Verteilungen erfordern spezielle Trainingsstrategien wie Focal Loss, Class-Balanced Loss oder Oversampling.
 
 \subsection{Visuelle Konfusion}
 
-Zusätzlich zur statistischen Imbalance erschwert die \textit{phonologische Ähnlichkeit} die Klassifikation. Viele Gebärden unterscheiden sich lediglich in einem Parameter – beispielsweise unterscheiden sich die Gebärden für Himmelsrichtungen (\texttt{NORD}, \texttt{SUED}, \texttt{OST}, \texttt{WEST}) primär durch die Bewegungsrichtung bei ansonsten identischer Handform und -position.
+Neben statistischer Imbalance erschwert die \textit{phonologische Ähnlichkeit} die Klassifikation: Viele Gebärden unterscheiden sich lediglich in einem Parameter. So unterscheiden sich etwa die Gebärden für Himmelsrichtungen (\texttt{NORD}, \texttt{SUED}, \texttt{OST}, \texttt{WEST}) oft nur in der Bewegungsrichtung bei ansonsten identischer Handform und -position.
 
-Solche systematisch verwechselten Gruppen werden in dieser Arbeit als \textit{Konfusionscluster} bezeichnet. Sie motivieren die Implementierung hierarchischer Expertenmodelle, die auf die Unterscheidung innerhalb spezifischer Cluster spezialisiert sind.
+Diese systematisch verwechslungsanfälligen Gruppen werden in dieser Arbeit als \textit{Konfusionscluster} bezeichnet und begründen den Einsatz hierarchischer Expertenmodelle, die besonders auf die feine Unterscheidung innerhalb solcher Cluster spezialisiert sind.

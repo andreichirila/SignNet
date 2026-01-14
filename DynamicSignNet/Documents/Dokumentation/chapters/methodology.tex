@@ -12,7 +12,7 @@ Aufgrund der starken Klassenimbalance (Long-Tail-Verteilung) wurde das Vokabular
 \begin{itemize}
     \item \textbf{Mindestanforderung}: Berücksichtigt wurden nur Klassen mit mindestens \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} Beispielen.
     \item \textbf{Resultat}: Nach der Filterung blieben \textbf{146 Klassen} für die finale Klassifikation übrig.
-    \item \textbf{Begründung}: So erhält das Modell pro Gebärde ausreichend Variabilität, um generalisierbare Merkmale zu lernen statt bloßes Memorieren.
+    \item \textbf{Begründung}: So erhält das Modell pro Gebärde ausreichend Variabilität, um generalisierbare Merkmale zu lernen statt blosses Memorieren.
 \end{itemize}
 
 \subsection{Merkmalsextraktion mit MediaPipe}
@@ -72,7 +72,7 @@ LSTM-Modelle zeigten bei wachsender Klassenanzahl Begrenzungen; daher stiegen wi
 
 \begin{itemize}
     \item \textbf{Konzept}: Ersetzen der LSTM-Struktur durch einen Transformer-Encoder. Self-Attention sollte zeitliche Abhängigkeiten der 1659-dimensionalen Landmark-Repräsentation besser erfassen.
-    \item \textbf{Ergebnis}: Top-1-Validierungsgenauigkeit \textbf{53{,}94\,\%} — ein wichtiges Signal für erste Erfolge auf dem großen Vokabular, trotz deutlich spürbarer Long-Tail-Effekte (Gini-Index 0{,}81).
+    \item \textbf{Ergebnis}: Top-1-Validierungsgenauigkeit \textbf{53{,}94\,\%} — ein wichtiges Signal für erste Erfolge auf dem grossen Vokabular, trotz deutlich spürbarer Long-Tail-Effekte (Gini-Index 0{,}81).
 \end{itemize}
 
 \subsection{Phase 7: Ein Exkurs in skelettbasierte Graphen}
@@ -101,7 +101,7 @@ Durch umfangreiches Hyperparameter-Tuning und verfeinertes Feature Engineering w
 Robuste Vorverarbeitung war essenziell für stabile Modelle.
 
 \subsection{Umgang mit Fehlwerten und Verdeckungen (Occlusion)}
-MediaPipe ist anfällig für Verdeckungen (z.\,B. überlappende Hände). Maßnahmen:
+MediaPipe ist anfällig für Verdeckungen (z.\,B. überlappende Hände). Massnahmen:
 \begin{itemize}
     \item \textbf{Numerische Stabilität}: Auftretende \texttt{NaN}-Werte werden durch $0.0$ ersetzt, um Fehler in folgenden Berechnungen zu vermeiden.
     \item \textbf{Händigkeits-Invarianz}: Der \texttt{TransformerSignClassifierWithHandedness} berücksichtigt explizit dominante Hand, um Händigkeit unabhängig zu machen.
@@ -177,7 +177,7 @@ Der Transformer wurde gewählt, weil er globale Abhängigkeiten effizient modell
 \end{itemize}
 
 \subsection{Spezifikation der Transformer-Architektur}
-Um Overfitting vorzubeugen, wurde eine kompakte Konfiguration gewählt. Die reduzierte Modellgröße fördert die Generalisierung auf dem Validierungsset.
+Um Overfitting vorzubeugen, wurde eine kompakte Konfiguration gewählt. Die reduzierte Modellgrösse fördert die Generalisierung auf dem Validierungsset.
 
 \begin{table}[h]
 \centering

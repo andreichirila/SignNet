@@ -7,7 +7,7 @@ Ziel dieser Arbeit war es, zu demonstrieren, dass zuverlässige Gebärdensprache
 Während die erste Transformer-Phase (Phase~6) noch eine Validierungsgenauigkeit von 53{,}94\,\% zeigte, stieg diese mit der Integration kinematischer und geometrischer Merkmale in Phase~9 auf \textbf{73{,}15\,\%}. Ebenfalls bemerkenswert ist die Top‑5‑Genauigkeit von \textbf{91{,}76\,\%} — in über neun von zehn Fällen liegt die korrekte Gebärde unter den fünf wahrscheinlichsten Vorhersagen. Diese Resultate belegen, dass die \textit{EnhancedLandmarkFeatures} einen entscheidenden Beitrag zur besseren Abbildung dynamischer Gebärdeneigenschaften geleistet haben.
 
 \section{Technische Würdigung}
-Die maßgeblichen technischen Herausforderungen lagen in der Verarbeitung der 1659‑dimensionalen Landmark-Daten und im Umgang mit der starken Klassenungleichheit des PHOENIX‑Datensatzes.
+Die massgeblichen technischen Herausforderungen lagen in der Verarbeitung der 1659‑dimensionalen Landmark-Daten und im Umgang mit der starken Klassenungleichheit des PHOENIX‑Datensatzes.
 \begin{itemize}
     \item \textbf{Feature Engineering:} Die Klasse \texttt{EnhancedLandmarkFeatures} machte es möglich, Bewegungscharakteristika wie Geschwindigkeit, Beschleunigung und Bone‑Vektoren explizit zu modellieren — also Informationen, die über die statische Pose hinausgehen.
     \item \textbf{Generalisierung und Regularisierung:} Eine kompakte Transformer‑Konfiguration (\texttt{hidden\_size} = 256) zusammen mit starkem Dropout (0,65) sorgte für stabile Trainingsverläufe. Der verbleibende Abstand von rund 12\,\% zwischen Trainings‑ und Validierungsleistung ist angesichts der hohen intra‑klassigen Variabilität vertretbar.
@@ -17,7 +17,7 @@ Die maßgeblichen technischen Herausforderungen lagen in der Verarbeitung der 16
 \section{Ausblick}
 Trotz erzielter Fortschritte bleiben mehrere Anschlussfragen offen. Besonders vielversprechend ist die stärkere Fusion verschiedener Modalitäten: Die Verknüpfung von Skelettdaten mit optischem Fluss aus den RGB‑Videos könnte Bewegungsdynamiken erfassen, die allein anhand von Landmarks schwer zu erfassen sind.
 
-Unsere Fehleranalyse zeigte zudem, dass das reine Skelettmodell bei optischen Minimalpaaren wie \texttt{ABEND} und \texttt{NACHT} an Grenzen stößt. In solchen Fällen sind non‑manuelle Marker (Mimik, Mundbild) entscheidend — eine stärkere Gewichtung des Face‑Mesh in der Architektur dürfte die Unterscheidung verbessern. Architektonisch könnte ein lernbares Gating in einem hierarchischen System helfen, zwischen Stammgebärden und komplexen Classifier‑Varianten zielgerichteter zu entscheiden. Langfristiges Ziel bleibt die Überführung der isolierten Worterkennung in eine kontinuierliche Gebärdensprachübersetzung (Sign Language Translation) — ein ambitioniertes, aber realistisches Folgeprojekt für \textit{SignNet}.
+Unsere Fehleranalyse zeigte zudem, dass das reine Skelettmodell bei optischen Minimalpaaren wie \texttt{ABEND} und \texttt{NACHT} an Grenzen stösst. In solchen Fällen sind non‑manuelle Marker (Mimik, Mundbild) entscheidend — eine stärkere Gewichtung des Face‑Mesh in der Architektur dürfte die Unterscheidung verbessern. Architektonisch könnte ein lernbares Gating in einem hierarchischen System helfen, zwischen Stammgebärden und komplexen Classifier‑Varianten zielgerichteter zu entscheiden. Langfristiges Ziel bleibt die Überführung der isolierten Worterkennung in eine kontinuierliche Gebärdensprachübersetzung (Sign Language Translation) — ein ambitioniertes, aber realistisches Folgeprojekt für \textit{SignNet}.
 
 \section{Persönliches Fazit Andrei}
 \label{sec:personal_conclusion_andrei}
@@ -66,7 +66,7 @@ Das Projekt hat mir gezeigt, dass Machine Learning zu 80\,\% Data Engineering un
 \label{sec:personal_conclusion_roman}
 
 \subsection{Was habe ich gut gemacht?}
-Ich bin stolz auf das Feature Engineering: Die explizite Berechnung physikalischer Größen wie Geschwindigkeit und Beschleunigung war ein Wendepunkt und trug maßgeblich zur Erreichung von über 73\,\% Genauigkeit bei. MLflow‑Monitoring half, Experimentverläufe nachzuvollziehen.
+Ich bin stolz auf das Feature Engineering: Die explizite Berechnung physikalischer Grössen wie Geschwindigkeit und Beschleunigung war ein Wendepunkt und trug massgeblich zur Erreichung von über 73\,\% Genauigkeit bei. MLflow‑Monitoring half, Experimentverläufe nachzuvollziehen.
 
 \subsection{Was würde ich anders machen?}
 Frühere, tiefere Fehleranalyse und kreativere Datenaugmentationen (mehr Variation in Bewegung und Perspektive) würden helfen, häufige Verwechslungen schneller zu beheben und das Modell robuster zu machen.

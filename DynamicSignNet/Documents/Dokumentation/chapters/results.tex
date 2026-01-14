@@ -1,10 +1,10 @@
 \chapter{Resultate}
 \label{ch:results}
 
-In diesem Kapitel werden die quantitativen Ergebnisse der neun Entwicklungsphasen vorgestellt. Die Daten basieren auf den MLflow-Tracking-Aufzeichnungen sowie den abschließenden Evaluierungsläufen der jeweiligen Modellvarianten.
+In diesem Kapitel werden die quantitativen Ergebnisse der neun Entwicklungsphasen präsentiert. Die Zahlen beruhen auf MLflow-Tracking und abschließenden Evaluationen der jeweiligen Modellvarianten.
 
 \section{Vergleich der Entwicklungsphasen}
-Die Performance der unterschiedlichen Modellarchitekturen wurde über den gesamten Projektverlauf systematisch erfasst. \autoref{tab:phase_accuracy} zeigt die Entwicklung der Validierungsgenauigkeit – von der statischen Vorphase bis hin zum finalen Transformer-Modell.
+Die Performance der unterschiedlichen Architekturen wurde während des gesamten Projektverlaufs systematisch dokumentiert. \autoref{tab:phase_accuracy} fasst die Validierungsgenauigkeiten von der statischen Vorphase bis zum finalen Transformer-Modell zusammen.
 
 \begin{table}[H]
 \centering
@@ -28,7 +28,7 @@ Phase & Architektur & Fokus & Validierungsgüte \\
 \end{table}
 
 \section{Datensatz-Statistik und Split-Verhältnis}
-Für die Evaluation in Phase 9 wurde der gefilterte Datensatz (146 Klassen, $N \ge 70$) in ein Trainings- und ein Validierungsset unterteilt. Es wurde ein stratifizierter Split im Verhältnis von 80:20 angewandt, um die Klassenverteilung in beiden Teilmengen konsistent zu halten. Die resultierende Probenverteilung ist in \autoref{tab:data_split} dokumentiert.
+Für Phase~9 wurde der gefilterte Datensatz (146 Klassen, $N\ge 70$) stratifiziert in Training und Validierung im Verhältnis 80:20 aufgeteilt, sodass die Klassenverhältnisse erhalten bleiben. Die resultierenden Stichprobenzahlen sind in \autoref{tab:data_split} aufgeführt.
 
 \begin{table}[H]
 \centering
@@ -47,7 +47,7 @@ Validierungsset & 5.657 & 20,0\,\% \\
 \end{table}
 
 \section{Analyse des Trainingsverlaufs}
-Der Verlauf von Loss und Accuracy für das finale Modell (Phase 9) wurde über den gesamten Trainingszeitraum aufgezeichnet. Wie in \autoref{fig:loss_plot} zu sehen, konvergieren sowohl der Trainings- als auch der Validierungsverlust zuverlässig.
+Der Verlauf von Loss und Accuracy des finalen Modells (Phase~9) wurde über die gesamte Trainingsdauer aufgezeichnet. In \autoref{fig:loss_plot} ist zu sehen, dass sich Trainings- und Validierungs-Loss konsistent nach unten bewegen.
 
 \begin{figure}[H]
     \centering
@@ -56,7 +56,7 @@ Der Verlauf von Loss und Accuracy für das finale Modell (Phase 9) wurde über d
     \label{fig:loss_plot}
 \end{figure}
 
-Die Accuracy (\autoref{fig:accuracy_plot}) steigt über die Epochen kontinuierlich an. Im Plateau-Bereich beträgt die Differenz zwischen Trainings- und Validierungswerten rund 12 Prozentpunkte.
+Die Accuracy-Kurven (\autoref{fig:accuracy_plot}) zeigen ein stetiges Ansteigen mit einem anschließenden Plateau. Im stabilen Bereich beträgt die Differenz zwischen Trainings- und Validierungswerten etwa 12 Prozentpunkte.
 
 \begin{figure}[H]
     \centering
@@ -66,7 +66,7 @@ Die Accuracy (\autoref{fig:accuracy_plot}) steigt über die Epochen kontinuierli
 \end{figure}
 
 \section{Quantitative Ergebnisse}
-Die Modellleistung in Phase 9 wurde anhand der Top-1- und Top-5-Accuracy auf dem Validierungsdatensatz bewertet. Für ein Vokabular von 146 Klassen ergaben sich die in \autoref{tab:globale_ergebnisse} dargestellten Werte.
+Die Leistung in Phase~9 wurde mit Top-1- und Top-5-Accuracy auf dem Validierungsset bewertet. Für das Vokabular von 146 Klassen ergeben sich die in \autoref{tab:globale_ergebnisse} angegebenen Kennzahlen.
 
 \begin{table}[H]
 \centering
@@ -88,7 +88,7 @@ Gini-Index (nach Filterung) & 0,32 \\
 \end{table}
 
 \section{Konfidenz-Analyse und Kalibrierung}
-Die statistische Auswertung der Softmax-Konfidenz (\autoref{tab:konfidenz_stats}) verdeutlicht die Verteilung der Vorhersagewahrscheinlichkeiten. Korrekte Vorhersagen sind im Mittel deutlich selbstsicherer als Fehlklassifikationen.
+Die Auswertung der Softmax-Konfidenzen (Tabelle \ref{tab:konfidenz_stats}) zeigt klare Unterschiede zwischen korrekten und fehlerhaften Vorhersagen: Korrekte Vorhersagen sind im Mittel deutlich sicherer.
 
 \begin{table}[H]
 \centering
@@ -109,12 +109,12 @@ Anteil Fehler mit hoher Konfidenz ($> 0,8$) & 5,30\,\% \\
 \begin{figure}[H]
     \centering
     \includegraphics[width=1.0\textwidth]{figures/confidence_distribution.png}
-    \caption{Vergleich der Konfidenz-Verteilung für korrekte (grün) und falsche (rot) Vorhersagen.}
+    \caption{Konfidenz-Verteilung für korrekte (grün) und falsche (rot) Vorhersagen.}
     \label{fig:confidence_dist}
 \end{figure}
 
 \section{Detaillierte Fehleranalyse}
-\autoref{fig:confusion_matrix} zeigt die Konfusionsmatrix für die zehn Klassen mit dem niedrigsten F1-Score. Auffällig sind Häufungen von Nebenwerten, die auf wiederkehrende Verwechslungsmuster zwischen bestimmten Klassengruppen hinweisen.
+Die Konfusionsmatrix der zehn Klassen mit dem niedrigsten F1-Score (\autoref{fig:confusion_matrix}) macht wiederkehrende Verwechslungsmuster sichtbar. Diese Häufungen deuten auf systematische linguistische und visuelle Überschneidungen zwischen bestimmten Klassen hin, die gezielte Nachbearbeitung erfordern.
 
 \begin{figure}[H]
     \centering

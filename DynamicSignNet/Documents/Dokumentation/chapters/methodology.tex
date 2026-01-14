@@ -1,183 +1,183 @@
 \chapter{Methodik}
 \label{ch:methodology}
 
-Dieses Kapitel beschreibt die technische Umsetzung und den iterativen Forschungsprozess des \textit{SignNet}-Systems. Im Mittelpunkt steht die Begründung der Designentscheidungen, die in fünf aufeinanderfolgenden Entwicklungsphasen getroffen wurden, um eine robuste und dynamische Gebärdenspracherkennung zu realisieren.
+Dieses Kapitel beschreibt die technische Umsetzung und den iterativen Forschungsprozess des \textit{SignNet}-Systems. Im Zentrum stehen die Begründungen der Designentscheidungen, die in mehreren Entwicklungsphasen getroffen wurden, um eine robuste und dynamische Gebärdenspracherkennung zu ermöglichen.
 
 \section{Datengrundlage und Klassenwahl}
-Die Basis für die dynamische Erkennung bildet der \textit{Phoenix}-Datensatz, der ursprünglich über 1200 verschiedene Gebärden (Glossen) umfasst.
+Die Grundlage für die dynamische Erkennung bildet der \textit{Phoenix}-Datensatz, der ursprünglich mehr als 1200 verschiedene Gebärden (Glossen) enthält.
 
 \subsection{Filterkriterien und Stichprobenumfang}
-Da der Datensatz eine starke Klassenimbalance (Long-Tail-Verteilung) aufweist, wurde das Vokabular bewusst eingeschränkt, um die Robustheit des Trainings zu erhöhen:
+Aufgrund der starken Klassenimbalance (Long-Tail-Verteilung) wurde das Vokabular gezielt eingeschränkt, um stabile Trainingsbedingungen zu schaffen:
 
 \begin{itemize}
-    \item \textbf{Mindestanforderung}: Es wurden nur Klassen berücksichtigt, die mindestens \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} Beispiele enthalten.
-    \item \textbf{Resultat}: Nach der Filterung blieben \textbf{146 Klassen} für die finale Klassifizierung übrig.
-    \item \textbf{Begründung}: Diese Auswahl stellt sicher, dass das Modell pro Gebärde genügend Varianz erhält, um verallgemeinerbare Merkmale zu lernen und nicht nur auswendig zu lernen (Overfitting).
+    \item \textbf{Mindestanforderung}: Berücksichtigt wurden nur Klassen mit mindestens \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} Beispielen.
+    \item \textbf{Resultat}: Nach der Filterung blieben \textbf{146 Klassen} für die finale Klassifikation übrig.
+    \item \textbf{Begründung}: So erhält das Modell pro Gebärde ausreichend Variabilität, um generalisierbare Merkmale zu lernen statt bloßes Memorieren.
 \end{itemize}
 
 \subsection{Merkmalsextraktion mit MediaPipe}
-Um die Komplexität der Rohvideodaten zu reduzieren und das System robust gegenüber variierenden Hintergründen und Lichtverhältnissen zu machen, wurde die \textit{MediaPipe}-Pipeline eingesetzt \cite{lugaresi2019}. Anstatt das Modell direkt auf Pixelebene zu trainieren, extrahiert diese Pipeline anatomisch relevante 3D-Landmarks aus jedem Frame der Videosequenz.
+Um die Komplexität der Rohvideos zu reduzieren und Robustheit gegenüber Hintergrund und Beleuchtung zu erreichen, verwendeten wir die \textit{MediaPipe}-Pipeline \cite{lugaresi2019}. Statt direkt auf Pixelebene zu arbeiten, extrahiert diese Pipeline anatomisch relevante 3D-Landmarks für jedes Frame.
 
-Die Extraktion erfolgt in drei spezialisierten Submodellen, deren Ergebnisse zu einem kombinierten Merkmalsvektor zusammengefasst werden:
+Die Extraktion erfolgt mittels dreier spezialisierter Submodelle, deren Ergebnisse zu einem kombinierten Merkmalsvektor zusammengeführt werden:
 
 \begin{itemize}
-    \item \textbf{Face-Mesh}: 478 Landmarks für mimische Details und Mundbilder.
-    \item \textbf{Hand-Tracking}: 21 Landmarks pro Hand (insgesamt 42 Punkte) für die präzise Fingerstellung.
-    \item \textbf{Pose-Modell}: 33 Landmarks zur Definition der Oberkörperposition.
+    \item \textbf{Face-Mesh}: 478 Landmarks für Mimik und Mundbild.
+    \item \textbf{Hand-Tracking}: 21 Landmarks pro Hand (insgesamt 42 Punkte) für die Fingerstellung.
+    \item \textbf{Pose-Modell}: 33 Landmarks zur Charakterisierung der Oberkörperhaltung.
 \end{itemize}
 
-Insgesamt ergeben sich 553 Punkte, die jeweils durch ein Koordinatentripel $(x, y, z)$ repräsentiert werden. Das führt zu einer Eingabedimension von 1659 Merkmalen pro Frame. Dieser flache Merkmalsvektor dient als Grundlage für das anschließende Feature Engineering, wie die Berechnung von Geschwindigkeiten und Knochenvektoren. Dabei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die geschätzte Tiefe relativ zur Kamera darstellt.
+Insgesamt ergeben sich 553 Punkte, je als Koordinatentripel $(x,y,z)$ dargestellt, was einer Eingabedimension von 1659 Merkmalen pro Frame entspricht. Dieser flache Merkmalsvektor bildet die Grundlage für weiteres Feature Engineering wie Geschwindigkeiten und Bone-Vektoren. Die $x$- und $y$-Werte sind auf Bildbreite bzw. -höhe normiert ($[0,1]$), während $z$ die relative Tiefeninformation zur Kamera darstellt.
 
 \section{Iterativer Forschungsansatz und Versuchsaufbau}
-Das finale System wurde nicht in einem Schritt entwickelt, sondern in neun Etappen. Jede Phase basierte auf den Erkenntnissen der vorherigen und zielte darauf ab, Schwachstellen zu beheben.
+Das System wurde schrittweise entwickelt; jede Phase baute auf den Erkenntnissen der Vorangegangenen auf, um identifizierte Schwachstellen gezielt zu adressieren.
 
 \subsection{Phase 1: Statische Baseline (CNN) – Fingeralphabet}
-In der ersten Phase wurde die Erkennung des statischen Fingeralphabets (24 Klassen) anhand von Bilddaten getestet:
+Zunächst wurde die Erkennung des statischen Fingeralphabets (24 Klassen) untersucht:
 \begin{itemize}
-    \item \textbf{Designentscheidung}: Einsatz eines \textit{Convolutional Neural Networks} (CNN) zur direkten Merkmalsextraktion aus Pixeldaten.
-    \item \textbf{Ergebnis}: Das Modell erreichte eine \textbf{Testgenauigkeit von 99,6\,\%}.
-    \item \textbf{Erkenntnis}: Trotz der hohen Genauigkeit wurde klar, dass dieser Ansatz die zeitliche Dynamik der Gebärdensprache nicht erfassen kann.
+    \item \textbf{Design}: Einsatz eines Convolutional Neural Networks (CNN) auf Bilddaten.
+    \item \textbf{Ergebnis}: Testgenauigkeit von \textbf{99,6\,\%}.
+    \item \textbf{Erkenntnis}: Hohe Genauigkeit, jedoch fehlte die Fähigkeit, zeitliche Dynamik der Gebärden zu erfassen.
 \end{itemize}
 
 \subsection{Phase 2: Kontinuierliche Erkennung auf Satzebene}
-Zu Beginn des Projekts lag der Fokus auf der Erkennung ganzer Sätze direkt aus den Landmark-Sequenzen.
+Anfangs zielten wir auf Satzverarbeitung direkt aus Landmark-Sequenzen:
 \begin{itemize}
-    \item \textbf{Methode}: Implementierung einer Architektur mit \textit{Connectionist Temporal Classification} (CTC-Loss), um die zeitliche Ausrichtung zwischen Video-Frames und Glossen-Sequenzen ohne explizite Segmentierung zu lernen.
-    \item \textbf{Ergebnis}: Der Ansatz erwies sich als zu komplex für die verfügbare Datenmenge. Mit einer \textit{Word Error Rate} (WER) von ca. \textbf{90\,\%} konnte das Modell keine sinnvollen sprachlichen Strukturen extrahieren.
+    \item \textbf{Methode}: Architektur mit Connectionist Temporal Classification (CTC-Loss), um Alignment ohne explizite Segmentierung zu lernen.
+    \item \textbf{Ergebnis}: Mit einer Word Error Rate (WER) von ca. \textbf{90\,\%} erwies sich der Ansatz als zu anspruchsvoll für die verfügbare Datenbasis.
 \end{itemize}
 
 \subsection{Phase 3: Minimalistisches Satz-Modell (Debugging)}
-Um die Ursache der mangelnden Konvergenz zu isolieren, wurde ein stark vereinfachtes Modell entworfen.
+Um Konvergenzprobleme zu analysieren, entstand ein vereinfachtes Modell:
 \begin{itemize}
-    \item \textbf{Methode}: Einsatz eines \textit{MinimalCTCModel}, bestehend aus einem schlanken Transformer-Encoder kombiniert mit CTC-Loss, um zu prüfen, ob das Modell grundlegende zeitliche Muster erkennt.
-    \item \textbf{Ergebnis}: Auch dieses Modell zeigte keine Lernfortschritte. Die Entscheidung fiel daraufhin, die Komplexität zu reduzieren und zur Klassifizierung isolierter Wörter überzugehen.
+    \item \textbf{Methode}: MinimalCTCModel — schlanker Transformer-Encoder mit CTC-Loss.
+    \item \textbf{Ergebnis}: Keine nennenswerte Lernfortschritte; folglich der Wechsel zur Klassifikation isolierter Wörter.
 \end{itemize}
 
 \subsection{Phase 4: Übergang zu isolierten Wörtern (Top 10)}
-Der Fokus wechselte zur Klassifizierung einzelner Glossen, um die Konvergenzfähigkeit der Architektur sicherzustellen.
+Der Fokus verschob sich auf einzelne Glossen, um Konvergenz sicherzustellen:
 \begin{itemize}
-    \item \textbf{Methode}: Verwendung einer \textit{LSTM-Architektur} (Long Short-Term Memory) zur Verarbeitung der Landmark-Sequenzen. Das Vokabular wurde auf die zehn am häufigsten vorkommenden Wörter beschränkt.
-    \item \textbf{Ergebnis}: Das Modell konvergierte erfolgreich. Es wurde eine Training-Accuracy von \textbf{91,23\,\%} und eine Validierungs-Accuracy von \textbf{81,15\,\%} erreicht, was die Eignung der Landmarks für die isolierte Wort-Erkennung bestätigte.
+    \item \textbf{Methode}: LSTM-Architektur zur Verarbeitung von Landmark-Sequenzen; Vokabular: 10 häufigste Wörter.
+    \item \textbf{Ergebnis}: Training-Accuracy \textbf{91,23\,\%}, Validierungs-Accuracy \textbf{81,15\,\%} — Bestätigung der Eignung der Landmarks für isolierte Worterkennung.
 \end{itemize}
 
 \subsection{Phase 5: Skalierung auf Top 50 Wörter}
-Nach dem Erfolg der Top-10-Klassifizierung wurde das Vokabular erweitert, um die Skalierbarkeit zu testen.
+Zur Prüfung der Skalierbarkeit wurde das Vokabular erweitert:
 \begin{itemize}
-    \item \textbf{Methode}: Erweiterung des Modells um einen \textit{Attention-Mechanismus} (\texttt{LSTM\_with\_Attention}), um dem Netzwerk zu ermöglichen, sich innerhalb längerer Sequenzen auf die linguistisch relevantesten Frames zu konzentrieren.
-    \item \textbf{Ergebnis}: Bei 50 Klassen sank die Genauigkeit erwartungsgemäß auf \textbf{56,84\,\%} (Training) bzw. \textbf{51,24\,\%} (Validierung).
+    \item \textbf{Methode}: LSTM mit Attention (\texttt{LSTM\_with\_Attention}) zur Fokussierung auf linguistisch relevante Frames.
+    \item \textbf{Ergebnis}: Bei 50 Klassen sanken die Accuracies auf \textbf{56,84\,\%} (Training) bzw. \textbf{51,24\,\%} (Validierung).
 \end{itemize}
 
 \subsection{Phase 6: Skalierung auf 146 Klassen und Wechsel zum Transformer}
-Die Experimente mit den Top-50-Wörtern in Phase~5 hatten gezeigt, dass LSTM-Modelle bei steigender Klassenanzahl schnell an ihre Grenzen stoßen. Phase~6 markierte daher einen entscheidenden Wendepunkt: den Umstieg auf die Transformer-Architektur und die Erweiterung auf das vollständige Zielvokabular.
+LSTM-Modelle zeigten bei wachsender Klassenanzahl Begrenzungen; daher stiegen wir auf Transformer um und erweiterten das Vokabular.
 
 \begin{itemize}
-    \item \textbf{Das Konzept}: Um die 146 Klassen (alle Gebärden mit mindestens 70 Stichproben) zu bewältigen, ersetzten wir die LSTM-Struktur durch einen \textit{Transformer-Encoder}. Die zentrale Idee war, dass der \textit{Self-Attention}-Mechanismus zeitliche Abhängigkeiten der 1659 MediaPipe-Landmarks besser erfassen kann als die sequenzielle Verarbeitung eines LSTMs. Unser Ziel war es, zunächst eine stabile Baseline für das „große“ Problem zu schaffen.
-    \item \textbf{Die Erkenntnis}: Das Modell erreichte eine Top-1-Validierungsgenauigkeit von \textbf{53{,}94\,\%}. Auch wenn dies im Vergleich zu den Ergebnissen der Top-10-Klassen zunächst wie ein Rückschritt wirkte, war es für 146 Klassen ein wichtiger Erfolg. Gleichzeitig zeigte sich hier erstmals die volle Auswirkung der „Long-Tail“-Verteilung (Gini-Index 0{,}81). Das Modell erfasste die grundlegenden Bewegungen, scheiterte jedoch häufig an der feinen Unterscheidung phonologisch ähnlicher Gebärden.
+    \item \textbf{Konzept}: Ersetzen der LSTM-Struktur durch einen Transformer-Encoder. Self-Attention sollte zeitliche Abhängigkeiten der 1659-dimensionalen Landmark-Repräsentation besser erfassen.
+    \item \textbf{Ergebnis}: Top-1-Validierungsgenauigkeit \textbf{53{,}94\,\%} — ein wichtiges Signal für erste Erfolge auf dem großen Vokabular, trotz deutlich spürbarer Long-Tail-Effekte (Gini-Index 0{,}81).
 \end{itemize}
 
 \subsection{Phase 7: Ein Exkurs in skelettbasierte Graphen}
-Nachdem wir mit dem Transformer eine solide Basis für das große Vokabular geschaffen hatten, wollten wir in Phase~7 einen neuen Ansatz erproben. Die Idee war, dem Modell explizit die anatomische Struktur der Hand zu vermitteln, anstatt die Landmarks lediglich als flache Liste von Koordinaten zu behandeln.
+Um die anatomische Struktur explizit zu modellieren, testeten wir skelettbasierte Graphen:
 
 \begin{itemize}
-    \item \textbf{Das Experiment}: Wir versuchten, die anatomischen Verbindungen zwischen den Handgelenken mithilfe skelettbasierter Graphstrukturen abzubilden. Die Hoffnung war, dass das Modell durch diese festen Regeln besser versteht, welche Fingerstellungen physikalisch möglich sind und welche nicht, um so die Präzision bei der Erkennung der Handform zu erhöhen.
-    \item \textbf{Die Ernüchterung}: Das Ergebnis war jedoch ernüchternd: Die Validierungsgenauigkeit fiel auf \textbf{31{,}6\,\%}. Rückblickend war dieser Exkurs dennoch wertvoll. Er zeigte uns, dass anatomisch starre Graphen zu unflexibel sind, um die große individuelle Variabilität bei der Ausführung von Gebärden abzubilden. Jeder Mensch gebärdet ein wenig anders, und der Graph wirkte hier eher wie ein Korsett, das die Generalisierung verhinderte. Diese „Sackgasse“ führte letztlich dazu, dass wir uns umso überzeugter wieder der Flexibilität des Transformers und seinem \textit{Self-Attention}-Mechanismus zuwandten.
+    \item \textbf{Experiment}: Abbildung anatomischer Verbindungen der Hand als Graph, mit der Hoffnung, physikalisch plausiblere Handformen zu erzwingen.
+    \item \textbf{Ergebnis}: Validierungsgenauigkeit sank auf \textbf{31{,}6\,\%}. Rückblickend zeigte sich, dass starre Graphen die notwendige Variabilität der menschlichen Gebärdung zu stark einschränken.
 \end{itemize}
 
 \subsection{Phase 8: Rückkehr zur optimierten Transformer-Architektur (v2)}
-Nach den Erkenntnissen aus Phase 7 markierte Phase 8 die Rückkehr zu einer rein Landmark-basierten Transformer-Architektur, jedoch mit verbesserten Hyperparametern:
+Aus den Erkenntnissen von Phase~7 resultierte eine optimierte Transformer-Baseline:
 \begin{itemize}
-    \item \textbf{Konzept}: Implementierung einer robusten \textit{Self-Attention}-Baseline als Reaktion auf die Defizite des Graphen-Ansatzes aus Phase 7. Der Fokus lag auf einer stabileren Gewichtung zeitlicher Abhängigkeiten innerhalb der 1659-dimensionalen Landmark-Sequenzen.
-    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit konnte gegenüber der ersten Transformer-Version aus Phase 6 signifikant gesteigert werden und erreichte \textbf{66,61\,\%}. Dieser deutliche Sprung bestätigte die Überlegenheit des Transformer-Prinzips gegenüber dem anatomisch starren Skelett-Modell (Phase 7) für diese Datenbasis.
+    \item \textbf{Konzept}: Robustere Self-Attention-Baseline mit angepassten Hyperparametern.
+    \item \textbf{Ergebnis}: Validierungsgenauigkeit stieg auf \textbf{66,61\,\%}.
 \end{itemize}
 
 \subsection{Phase 9: Finales optimiertes Modell}
-Durch intensives Hyperparameter-Tuning und die Verfeinerung des Feature Engineerings wurde der aktuelle Bestwert erreicht:
+Durch umfangreiches Hyperparameter-Tuning und verfeinertes Feature Engineering wurde die aktuelle Bestleistung erzielt:
 \begin{itemize}
-    \item \textbf{Optimierung}: Einführung von \textit{Label Smoothing}, \textit{Augmentation} und optimierten kinematischen Features.
-    \item \textbf{Resultat}: Das System erzielte eine finale \textbf{Validierungsgenauigkeit von 73,15\,\%} sowie eine \textbf{Top-5 Accuracy von 92,05\,\%}.
+    \item \textbf{Optimierung}: Label Smoothing, Augmentation und optimierte kinematische Features.
+    \item \textbf{Resultat}: Finale Validierungsgenauigkeit \textbf{73,15\,\%} sowie Top-5-Accuracy \textbf{92,05\,\%}.
 \end{itemize}
 
 \section{Vorverarbeitung und Datenreinigung}
-Ein robuster Umgang mit instabilen Datenquellen war entscheidend für die Modellstabilität.
+Robuste Vorverarbeitung war essenziell für stabile Modelle.
 
 \subsection{Umgang mit Fehlwerten und Verdeckungen (Occlusion)}
-Die Landmark-Extraktion mittels MediaPipe ist anfällig für Verdeckungen, etwa wenn eine Hand die andere überschneidet:
+MediaPipe ist anfällig für Verdeckungen (z.\,B. überlappende Hände). Maßnahmen:
 \begin{itemize}
-    \item \textbf{Numerische Stabilität}: Auftretende \texttt{NaN}-Werte werden in der Vorverarbeitung konsequent durch $0.0$ ersetzt, um Berechnungsfehler in den Transformer-Layern zu vermeiden.
-    \item \textbf{Händigkeits-Invarianz}: Der \texttt{TransformerSignClassifierWithHandedness} erkennt explizit die dominante Hand, um die Vorhersage unabhängig von der Händigkeit des Unterzeichners zu machen.
+    \item \textbf{Numerische Stabilität}: Auftretende \texttt{NaN}-Werte werden durch $0.0$ ersetzt, um Fehler in folgenden Berechnungen zu vermeiden.
+    \item \textbf{Händigkeits-Invarianz}: Der \texttt{TransformerSignClassifierWithHandedness} berücksichtigt explizit dominante Hand, um Händigkeit unabhängig zu machen.
 \end{itemize}
 
 \section{Datenaugmentation}
-Um das \textit{Long-Tail}-Problem des Datensatzes zu adressieren, wurde eine mehrstufige Augmentationsstrategie entwickelt. Sie umfasst fünf Techniken, die hierarchisch auf die Trainingssequenzen angewendet werden.
+Zur Milderung des Long-Tail-Problems wurde eine mehrstufige Augmentationspipeline entwickelt, die sequenziell fünf Techniken anwendet.
 
 \subsection{Temporale Augmentation (TemporalAugmentation)}
-Die klassenabhängige temporale Augmentation wird mit einer Wahrscheinlichkeit von 75\,\% ausgeführt, wobei unterrepräsentierte Klassen stärker augmentiert werden:
+Mit 75\,\% Wahrscheinlichkeit angewendet; unterrepräsentierte Klassen werden stärker augmentiert:
 \begin{itemize}
-    \item \textbf{Time Warping}: Zeitliche Streckung oder Stauchung der Sequenzen (Faktor $0{,}8$ bis $1{,}25$) zur Simulation unterschiedlicher Gebärdengeschwindigkeiten.
-    \item \textbf{Temporal Dropout}: Zufälliges Entfernen einzelner Frames (Keep-Probability $0{,}85$ bis $0{,}98$) zur Nachbildung von Tracking-Verlusten.
-    \item \textbf{Global Scaling}: Skalierung der gesamten Sequenz ($0{,}92$ bis $1{,}08$) zur Simulation variierender Abstände zwischen Signer und Kamera.
-    \item \textbf{Gaussian Noise}: Hinzufügen normalverteilten Rauschens ($\sigma = 0{,}008$) auf Landmark-Koordinaten.
-    \item \textbf{Structured Channel Dropout}: Ausfall ganzer Feature-Blöcke (Rohdaten, Geschwindigkeiten, Bones) mit 10\,\% Wahrscheinlichkeit zur Erhöhung der Multi-Stream-Robustheit.
+    \item \textbf{Time Warping}: Streckung/Stauchung der Zeitachse (Faktor $0{,}8$–$1{,}25$).
+    \item \textbf{Temporal Dropout}: Entfernen einzelner Frames (Keep-Probability $0{,}85$–$0{,}98$).
+    \item \textbf{Global Scaling}: Skalierung der Sequenz ($0{,}92$–$1{,}08$).
+    \item \textbf{Gaussian Noise}: Additives Rauschen ($\sigma=0{,}008$) auf Landmark-Koordinaten.
+    \item \textbf{Structured Channel Dropout}: Ausfall ganzer Feature-Blöcke (10\,\%).
 \end{itemize}
 
 \subsection{Landmark-Occlusion-Augmentation}
-Mit einer Wahrscheinlichkeit von 30\,\% werden realistische Verdeckungsmuster simuliert, um MediaPipe-Tracking-Fehler nachzubilden. Vier Strategien kommen zum Einsatz:
+Mit 30\,\% Wahrscheinlichkeit werden realistische Okklusionsmuster simuliert:
 \begin{itemize}
-    \item \textbf{Region Dropout (20\,\%)}: Ausfall anatomischer Regionen (Hände, Gesicht, Arme, Torso) basierend auf plausiblen Ko-Okklusionsmustern (z.\,B. „beide Hände vor dem Gesicht“).
-    \item \textbf{Temporal Dropout (15\,\%)}: Simuliert Tracking-Verlust über bis zu sieben aufeinanderfolgende Frames.
-    \item \textbf{Sub-Region Dropout (25\,\%)}: Selektiver Ausfall feiner Merkmale wie einzelner Finger oder Gesichtsdetails (Augen, Nase, Mund).
-    \item \textbf{Gradual Occlusion}: Fade-In/Fade-Out über 2--5 Frames mittels Alpha-Masking zur Simulation partieller Verdeckungen und Bewegungsunschärfe.
+    \item \textbf{Region Dropout (20\,\%)}: Ausfall anatomischer Regionen (z.\,B. beide Hände vor Gesicht).
+    \item \textbf{Temporal Dropout (15\,\%)}: Tracking-Verlust über bis zu sieben Frames.
+    \item \textbf{Sub-Region Dropout (25\,\%)}: Ausfall feiner Merkmale (einzelne Finger, Augen, Mund).
+    \item \textbf{Gradual Occlusion}: Fade-In/Fade-Out über 2–5 Frames mittels Alpha-Masking.
 \end{itemize}
-Die Okklusion erfolgt durch Nullsetzen der entsprechenden Landmark-Koordinaten, basierend auf anatomisch plausiblen Mustern.
+Okklusionen werden durch Nullsetzen der entsprechenden Koordinaten realisiert, nach anatomischer Plausibilität.
 
 \subsection{Mirror Augmentation}
-Horizontales Spiegeln mit einer Wahrscheinlichkeit von 30\,\% zur Erhöhung der Invarianz gegenüber Handlateralität:
+Horizontales Spiegeln (30\,\%):
 \begin{itemize}
-    \item \textbf{Hand-Swapping}: Vertauschung der Landmark-Indizes der linken und rechten Hand (0--63 $\leftrightarrow$ 63--126).
-    \item \textbf{X-Koordinaten-Flip}: Spiegelung aller x-Koordinaten ($x \rightarrow 1-x$) für MediaPipe-normierte Werte.
-    \item \textbf{Pose-Pair-Swapping}: Vertauschung von Links-/Rechts-Körper-Landmarks (Schultern, Ellbogen, Handgelenke, Hüften, Knie, Knöchel).
+    \item \textbf{Hand-Swapping}: Vertauschung der Landmark-Indizes beider Hände.
+    \item \textbf{X-Koordinaten-Flip}: $x \rightarrow 1-x$ für normierte Werte.
+    \item \textbf{Pose-Pair-Swapping}: Vertauschung links/rechts relevanter Pose-Landmarks.
 \end{itemize}
 
 \subsection{Weighted Sampling und Oversampling}
-Zur Reduzierung des Class-Imbalance wurden zwei komplementäre Strategien eingesetzt:
+Zur Reduktion von Class-Imbalance:
 \begin{itemize}
-    \item \textbf{WeightedRandomSampler}: Sampling-Gewichte proportional zu $1/\sqrt{n_c}$, wobei $n_c$ die Klassenfrequenz ist.
-    \item \textbf{Explicit Oversampling}: Gezielte Duplikation seltener Klassen (z.\,B. „ZWEI“ $5\times$, „loc-SUED“ $4\times$).
+    \item \textbf{WeightedRandomSampler}: Gewichte $\propto 1/\sqrt{n_c}$.
+    \item \textbf{Explicit Oversampling}: Gezielte Duplikation seltener Klassen (z.\,B. „ZWEI“ $5\times$).
 \end{itemize}
 
 \section{Feature Engineering: Kinematik und Geometrie}
-Die Klasse \texttt{EnhancedLandmarkFeatures} transformiert die statischen Rohdaten der MediaPipe-Punkte in einen hochdimensionalen, dynamischen Merkmalsraum, um die zeitliche und geometrische Varianz der Gebärdensprache abzubilden.
+Die Klasse \texttt{EnhancedLandmarkFeatures} wandelt statische Landmark-Daten in einen dynamischen, hochdimensionalen Merkmalsraum zur Abbildung zeitlicher und geometrischer Variationen.
 
 \subsection{Kinematische Ableitungen}
-Die Dynamik der Gebärden wird durch die Berechnung der Geschwindigkeit $\vec{v}_t$ und optional der Beschleunigung $\vec{a}_t$ erfasst, normiert durch die Bildrate (\textit{fps} = 25):
+Dynamik wird über Geschwindigkeit $\vec{v}_t$ und optional Beschleunigung $\vec{a}_t$ erfasst (fps = 25):
 \begin{equation}
     \vec{v}_t = (\mathbf{p}_t - \mathbf{p}_{t-1}) \cdot \text{fps} \quad , \quad \vec{a}_t = (\vec{v}_t - \vec{v}_{t-1}) \cdot \text{fps}
 \end{equation}
-Die Geschwindigkeitsvektoren werden zusätzlich mittels Z-Score-Normalisierung ($\mu=0$, $\sigma=1$) über die gesamte Sequenz standardisiert.
+Geschwindigkeitsvektoren werden per Z-Score-Normalisierung ($\mu=0$, $\sigma=1$) entlang der Sequenz standardisiert.
 
 \subsection{Skelett-Geometrie und Bone-Vektoren}
-Zur präzisen Abbildung der Handform unabhängig von der Bildposition werden Vektoren zwischen anatomisch verbundenen Gelenken (Bones) gemäß der MediaPipe-Hand-Topologie berechnet:
+Bone-Vektoren zwischen anatomisch verbundenen Gelenken nach MediaPipe-Hand-Topologie:
 \begin{equation}
     \vec{b} = \mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}
 \end{equation}
-Diese Bone-Vektoren sind translationsinvariant. Während des Trainings werden die Bone-Längen mit 30\,\% Wahrscheinlichkeit zufällig skaliert (Faktor $0{,}9$ bis $1{,}1$), um anatomische Variationen zwischen Signern zu simulieren.
+Diese Vektoren sind translationsinvariant. Während des Trainings werden Bone-Längen mit 30\,\% Wahrscheinlichkeit zufällig skaliert (Faktor $0{,}9$–$1{,}1$), um anatomische Unterschiede zu simulieren.
 
 \subsection{Distanzmerkmale und Normalisierung}
-Ergänzend zur Richtungscharakteristik der Vektoren werden euklidische Abstände $d$ zwischen kritischen Landmark-Paaren berechnet:
+Ergänzend werden euklidische Abstände $d$ zwischen kritischen Landmark-Paaren berechnet:
 \begin{equation}
     d = \|\mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}\|_2
 \end{equation}
-Um vollständige Positionsinvarianz zu erreichen, werden alle Koordinaten vor der Merkmalsextraktion auf das Handgelenk (\textit{wrist}, Landmark 0) als Ursprung normiert.
+Zur Positionsinvarianz werden alle Koordinaten vor Merkmalsextraktion relativ zum Handgelenk (wrist, Landmark 0) verschoben.
 
 \section{Modellarchitektur: Transformer-Encoder}
-Die Wahl des Transformers begründet sich durch seine Fähigkeit, globale Abhängigkeiten effizient zu modellieren:
+Der Transformer wurde gewählt, weil er globale Abhängigkeiten effizient modelliert:
 \begin{itemize}
-    \item \textbf{Self-Attention}: Der Mechanismus erlaubt es dem Modell, irrelevante Phasen (z.\,B. das Heben der Hände) automatisch auszublenden und sich auf die linguistischen Kernbewegungen zu fokussieren.
-    \item \textbf{Padding-Masking}: Mittels \texttt{PadCollate} und \texttt{seq\_lengths} werden variable Videolängen einheitlich verarbeitet, ohne dass Padding-Werte die Berechnung beeinflussen.
+    \item \textbf{Self-Attention}: Ermöglicht dem Modell, irrelevante Phasen auszublenden und sich auf linguistisch relevante Bewegungen zu konzentrieren.
+    \item \textbf{Padding-Masking}: Mittels \texttt{PadCollate} und \texttt{seq\_lengths} werden variable Videolängen korrekt behandelt, ohne dass Padding die Berechnung verfälscht.
 \end{itemize}
 
 \subsection{Spezifikation der Transformer-Architektur}
-Um Overfitting zu vermeiden, wurde für das finale Modell eine kompakte Transformer-Konfiguration gewählt. Die Modellgröße wurde gezielt reduziert, um eine bessere Generalisierung auf dem Validierungsset zu erreichen.
+Um Overfitting vorzubeugen, wurde eine kompakte Konfiguration gewählt. Die reduzierte Modellgröße fördert die Generalisierung auf dem Validierungsset.
 
 \begin{table}[h]
 \centering
@@ -187,11 +187,11 @@ Um Overfitting zu vermeiden, wurde für das finale Modell eine kompakte Transfor
 \toprule
 Parameter & Wert & Begründung \\
 \midrule
-\texttt{input\_size} & 1659 & Resultiert aus 553 Landmarks mit jeweils 3 Koordinaten ($x, y, z$). \\
-\texttt{hidden\_size} & 256 & Reduktion von 512 auf 256 zur Vermeidung von Overfitting bei begrenzter Datenmenge. \\
-\texttt{num\_layers} & 4 & Optimale Balance zwischen Rechentiefe und Trainingsstabilität (reduziert von 6 Layern). \\
-\texttt{num\_heads} & 8 & Ermöglicht 8 parallele Attention-Heads mit jeweils 32 Dimensionen pro Head. \\
-\texttt{dim\_feedforward} & 1024 & Entspricht dem 4-fachen der \texttt{hidden\_size} für ausreichende Kapazität im MLP-Block. \\
+\texttt{input\_size} & 1659 & Resultiert aus 553 Landmarks mit je 3 Koordinaten ($x,y,z$). \\
+\texttt{hidden\_size} & 256 & Reduktion zur Vermeidung von Overfitting bei begrenzter Datenmenge. \\
+\texttt{num\_layers} & 4 & Balance zwischen Tiefe und Stabilität ( reduziert von 6 ). \\
+\texttt{num\_heads} & 8 & Ermöglicht mehrere parallele Attention-Heads. \\
+\texttt{dim\_feedforward} & 1024 & Ca. 4-fache der \texttt{hidden\_size} für ausreichende MLP-Kapazität. \\
 \bottomrule
 \end{tabular}
 \end{table}

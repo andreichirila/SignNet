@@ -1,12 +1,12 @@
 \chapter{Resultate}
 \label{ch:results}
 
-In diesem Kapitel stellen wir die quantitativen Resultate aus den fünf Entwicklungsphasen vor. Die Daten stammen aus den MLflow-Tracking-Aufzeichnungen sowie den Evaluierungsläufen der jeweiligen Modellvarianten.
+In diesem Kapitel werden die quantitativen Ergebnisse der neun Entwicklungsphasen vorgestellt. Die Daten basieren auf den MLflow-Tracking-Aufzeichnungen sowie den abschließenden Evaluierungsläufen der jeweiligen Modellvarianten.
 
 \section{Vergleich der Entwicklungsphasen}
-Über den gesamten Projektverlauf hinweg haben wir die Performance der verschiedenen Modellarchitekturen systematisch erfasst. In \autoref{tab:phase_accuracy} sehen Sie, wie sich die Genauigkeit (Accuracy) von der statischen Vorphase bis hin zum finalen Transformer-Modell entwickelt hat.
+Die Performance der unterschiedlichen Modellarchitekturen wurde über den gesamten Projektverlauf systematisch erfasst. \autoref{tab:phase_accuracy} zeigt die Entwicklung der Validierungsgenauigkeit – von der statischen Vorphase bis hin zum finalen Transformer-Modell.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \caption{Übersicht der erreichten Genauigkeiten pro Phase}
 \label{tab:phase_accuracy}
@@ -14,59 +14,83 @@ In diesem Kapitel stellen wir die quantitativen Resultate aus den fünf Entwickl
 \toprule
 Phase & Architektur & Fokus & Validierungsgüte \\
 \midrule
-1 & CNN & Statisches Alphabet (25 Klassen) & 99,60 \% \\
-2 & Transformer v1 & Dynamische Gebärden (146 Klassen) & 53,94 \% \\
-3 & Skeleton-Graph & Anatomische Graphen-Pipeline & 31,56 \% \\
-4 & Transformer v2 & Self-Attention Baseline & 66,61 \% \\
-5 & Transformer Final & Optimiertes Feature Engineering & 73,86 \% \\
+1 & CNN & Statisches Alphabet (24 Klassen) & 99,60\,\% \\
+2 & DynamicSignNet & Satzebene (CTC-Loss) & 90,00\,\% (WER) \\
+3 & MinimalCTC & Debugging Satzebene & keine Konv. \\
+4 & LSTM & Top 10 Wörter & 81,15\,\% \\
+5 & LSTM + Attention & Top 50 Wörter & 51,24\,\% \\
+6 & Transformer v1 & Dynamische Gebärden (146 Klassen) & 53,94\,\% \\
+7 & Skeleton-Graph & Anatomische Graphen-Pipeline & 31,56\,\% \\
+8 & Transformer v2 & Self-Attention Baseline & 66,61\,\% \\
+9 & Transformer Final & Optimiertes Feature Engineering & \textbf{73,15\,\%}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\section{Datensatz-Statistik und Split-Verhältnis}
+Für die Evaluation in Phase 9 wurde der gefilterte Datensatz (146 Klassen, $N \ge 70$) in ein Trainings- und ein Validierungsset unterteilt. Es wurde ein stratifizierter Split im Verhältnis von 80:20 angewandt, um die Klassenverteilung in beiden Teilmengen konsistent zu halten. Die resultierende Probenverteilung ist in \autoref{tab:data_split} dokumentiert.
+
+\begin{table}[H]
+\centering
+\caption{Verteilung der Stichproben (80/20-Split)}
+\label{tab:data_split}
+\begin{tabular}{lrr}
+\toprule
+Datensatz-Teil & Anzahl Samples & Anteil [\%] \\
+\midrule
+Trainingsset & 22.628 & 80,0\,\% \\
+Validierungsset & 5.657 & 20,0\,\% \\
+\midrule
+\textbf{Gesamtanzahl (gefiltert)} & \textbf{28.285} & \textbf{100,0\,\%} \\
 \bottomrule
 \end{tabular}
 \end{table}
 
 \section{Analyse des Trainingsverlaufs}
-Um die Stabilität und Konvergenz des finalen Modells (Phase 5) zu prüfen, haben wir den Verlauf von Loss und Accuracy während des Trainings aufgezeichnet.
+Der Verlauf von Loss und Accuracy für das finale Modell (Phase 9) wurde über den gesamten Trainingszeitraum aufgezeichnet. Wie in \autoref{fig:loss_plot} zu sehen, konvergieren sowohl der Trainings- als auch der Validierungsverlust zuverlässig.
 
-\begin{figure}[htbp]
+\begin{figure}[H]
     \centering
     \includegraphics[width=0.85\textwidth]{figures/loss_plot_final.png}
-    \caption{Verlauf von Trainings- und Validierungs-Loss: Die stetige Abnahme beider Kurven ohne Divergenz deutet auf eine gute Generalisierung hin.}
+    \caption{Verlauf von Trainings- und Validierungs-Loss in Phase 9.}
     \label{fig:loss_plot}
 \end{figure}
 
-\begin{figure}[htbp]
+Die Accuracy (\autoref{fig:accuracy_plot}) steigt über die Epochen kontinuierlich an. Im Plateau-Bereich beträgt die Differenz zwischen Trainings- und Validierungswerten rund 12 Prozentpunkte.
+
+\begin{figure}[H]
     \centering
     \includegraphics[width=0.85\textwidth]{figures/accuracy_plot_final.png}
-    \caption{Entwicklung der Trainings- und Validierungs-Accuracy über die Trainingsschritte.}
+    \caption{Entwicklung der Trainings- und Validierungs-Accuracy über die Epochen.}
     \label{fig:accuracy_plot}
 \end{figure}
 
-Wie in \autoref{fig:loss_plot} ersichtlich, konvergieren Trainings- und Validierungsverlust stabil. Die Accuracy (\autoref{fig:accuracy_plot}) steigt parallel an, wobei die geringe Differenz zwischen den Kurven die Wirksamkeit der gewählten Regularisierungsmaßnahmen (Dropout 0,65) bestätigt.
-
 \section{Quantitative Ergebnisse}
-Die Modellleistung wurde anhand der Top-1- und Top-5-Accuracy bewertet. Bei einem Vokabular von 146 Klassen haben wir folgende Werte erreicht:
+Die Modellleistung in Phase 9 wurde anhand der Top-1- und Top-5-Accuracy auf dem Validierungsdatensatz bewertet. Für ein Vokabular von 146 Klassen ergaben sich die in \autoref{tab:globale_ergebnisse} dargestellten Werte.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
-\caption{Globale Klassifikationsergebnisse (Phase 5)}
+\caption{Globale Klassifikationsergebnisse (Phase 9)}
 \label{tab:globale_ergebnisse}
 \begin{tabular}{lr}
 \toprule
 Metrik & Wert \\
 \midrule
-Top-1 Accuracy & \textbf{73,86 \%} \\
-Top-5 Accuracy & \textbf{91,76 \%} \\
-Anzahl Test-Samples & 4.489 \\
-Klassenanzahl ($N \ge 70$) & 146 \\
+Training Accuracy & 85,41\,\% \\
+Validierungs-Accuracy (Top-1) & \textbf{73,15\,\%} \\
+Top-5 Accuracy & \textbf{91,76\,\%} \\
+\midrule
+Anzahl Validierungs-Samples & 5.657 \\
+Anzahl Klassen ($N \ge 70$) & 146 \\
+Gini-Index (nach Filterung) & 0,32 \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-Die hohe Top-5-Genauigkeit von über 91\,\% zeigt, dass das System in den meisten Fällen die richtige Gebärde unter den wahrscheinlichsten Kandidaten identifiziert – ein wichtiger Aspekt für den praktischen Einsatz in interaktiven Übersetzungssystemen.
-
 \section{Konfidenz-Analyse und Kalibrierung}
-Zur Bewertung der Vorhersagezuverlässigkeit haben wir die Softmax-Konfidenz untersucht. Die Ergebnisse zeigen eine klare Trennung zwischen sicheren und unsicheren Vorhersagen:
+Die statistische Auswertung der Softmax-Konfidenz (\autoref{tab:konfidenz_stats}) verdeutlicht die Verteilung der Vorhersagewahrscheinlichkeiten. Korrekte Vorhersagen sind im Mittel deutlich selbstsicherer als Fehlklassifikationen.
 
-\begin{table}[h]
+\begin{table}[H]
 \centering
 \caption{Statistische Auswertung der Modell-Konfidenz}
 \label{tab:konfidenz_stats}
@@ -74,32 +98,27 @@ Zur Bewertung der Vorhersagezuverlässigkeit haben wir die Softmax-Konfidenz unt
 \toprule
 Kategorie & Durchschnittliche Konfidenz \\
 \midrule
-Korrekte Vorhersagen & \textbf{87,37 \%} \\
-Fehlklassifikationen & \textbf{57,19 \%} \\
+Korrekte Vorhersagen & 87,37\,\% \\
+Fehlklassifikationen & 57,19\,\% \\
 \midrule
-Anteil „Sichere Fehler“ (Konfidenz $> 0,8$) & 5,30 \% \\
+Anteil Fehler mit hoher Konfidenz ($> 0,8$) & 5,30\,\% \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-\begin{figure}[htbp]
+\begin{figure}[H]
     \centering
     \includegraphics[width=1.0\textwidth]{figures/confidence_distribution.png}
-    \caption{Konfidenz-Verteilung der Vorhersagen: Gegenüberstellung von korrekten (grün) und falschen (rot) Klassifizierungen zur Bewertung der Modell-Kalibrierung.}
+    \caption{Vergleich der Konfidenz-Verteilung für korrekte (grün) und falsche (rot) Vorhersagen.}
     \label{fig:confidence_dist}
 \end{figure}
 
-Die Verteilung in \autoref{fig:confidence_dist} macht deutlich: korrekte Klassifizierungen liegen meist nahe bei 1,0, während Fehler deutlich unsicherer sind.
-
 \section{Detaillierte Fehleranalyse}
-Trotz der insgesamt robusten Performance gibt es systematische Verwechslungen. Die Konfusionsmatrix in \autoref{fig:confusion_matrix} zeigt die zehn Klassen mit dem niedrigsten F1-Score und dient als Grundlage für die linguistische Diskussion im nächsten Kapitel.
+\autoref{fig:confusion_matrix} zeigt die Konfusionsmatrix für die zehn Klassen mit dem niedrigsten F1-Score. Auffällig sind Häufungen von Nebenwerten, die auf wiederkehrende Verwechslungsmuster zwischen bestimmten Klassengruppen hinweisen.
 
-\subsection{Visualisierung der Fehlklassifikationen}
-\autoref{fig:confusion_matrix} zeigt die Konfusionsmatrix für die 10 Klassen mit der geringsten Trennschärfe.
-
-\begin{figure}[htbp]
+\begin{figure}[H]
     \centering
     \includegraphics[width=1.0\textwidth]{figures/confusion_matrix_worst10.png}
-    \caption{Konfusionsmatrix der 10 Klassen mit der geringsten Trennschärfe. Die Diagonale repräsentiert korrekte Vorhersagen, während die Nebenwerte die systematischen Verwechslungen innerhalb semantischer Gruppen visualisieren.}
+    \caption{Konfusionsmatrix der zehn Klassen mit der geringsten Trennschärfe.}
     \label{fig:confusion_matrix}
 \end{figure}

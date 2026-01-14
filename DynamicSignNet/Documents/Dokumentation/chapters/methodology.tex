@@ -29,7 +29,7 @@ Die Extraktion erfolgt in drei spezialisierten Submodellen, deren Ergebnisse zu 
 Insgesamt ergeben sich 553 Punkte, die jeweils durch ein Koordinatentripel $(x, y, z)$ repräsentiert werden. Das führt zu einer Eingabedimension von 1659 Merkmalen pro Frame. Dieser flache Merkmalsvektor dient als Grundlage für das anschließende Feature Engineering, wie die Berechnung von Geschwindigkeiten und Knochenvektoren. Dabei sind $x$ und $y$ auf die Bildbreite und -höhe normiert ($[0, 1]$), während $z$ die geschätzte Tiefe relativ zur Kamera darstellt.
 
 \section{Iterativer Forschungsansatz und Versuchsaufbau}
-Das finale System wurde nicht in einem Schritt entwickelt, sondern in fünf Etappen. Jede Phase basierte auf den Erkenntnissen der vorherigen und zielte darauf ab, Schwachstellen zu beheben.
+Das finale System wurde nicht in einem Schritt entwickelt, sondern in neun Etappen. Jede Phase basierte auf den Erkenntnissen der vorherigen und zielte darauf ab, Schwachstellen zu beheben.
 
 \subsection{Phase 1: Statische Baseline (CNN) – Fingeralphabet}
 In der ersten Phase wurde die Erkennung des statischen Fingeralphabets (24 Klassen) anhand von Bilddaten getestet:
@@ -39,28 +39,58 @@ In der ersten Phase wurde die Erkennung des statischen Fingeralphabets (24 Klass
     \item \textbf{Erkenntnis}: Trotz der hohen Genauigkeit wurde klar, dass dieser Ansatz die zeitliche Dynamik der Gebärdensprache nicht erfassen kann.
 \end{itemize}
 
-\subsection{Phase 2: Erste dynamische Klassifizierung (SignNetWord)}
-Der Übergang von statischen Buchstaben zu dynamischen Gebärden erforderte die Implementierung einer Architektur, die zeitliche Sequenzen verarbeiten kann:
+\subsection{Phase 2: Kontinuierliche Erkennung auf Satzebene}
+Zu Beginn des Projekts lag der Fokus auf der Erkennung ganzer Sätze direkt aus den Landmark-Sequenzen.
 \begin{itemize}
-    \item \textbf{Konzept}: Einführung eines \textit{Transformer-Encoders}, um die zeitlichen Abhängigkeiten innerhalb der Sequenzen aus 1659 MediaPipe-Landmarks zu modellieren. Das Vokabular wurde auf 146 Klassen gefiltert, für die jeweils mindestens 70 Stichproben im PHOENIX-Datensatz vorlagen.
-    \item \textbf{Ergebnis}: Die Top-1 Validierungsgenauigkeit lag bei \textbf{53,94\,\%}. Diese Phase verdeutlichte die Komplexität der Long-Tail-Verteilung (Gini-Index 0,81) und die Herausforderung durch phonologisch ähnliche Gebärden.
+    \item \textbf{Methode}: Implementierung einer Architektur mit \textit{Connectionist Temporal Classification} (CTC-Loss), um die zeitliche Ausrichtung zwischen Video-Frames und Glossen-Sequenzen ohne explizite Segmentierung zu lernen.
+    \item \textbf{Ergebnis}: Der Ansatz erwies sich als zu komplex für die verfügbare Datenmenge. Mit einer \textit{Word Error Rate} (WER) von ca. \textbf{90\,\%} konnte das Modell keine sinnvollen sprachlichen Strukturen extrahieren.
 \end{itemize}
 
-\subsection{Phase 3: Skelettbasierte Graph-Experimente}
-Es wurde versucht, die anatomischen Relationen der Hand-Landmarks explizit durch skelettale Graphstrukturen abzubilden:
+\subsection{Phase 3: Minimalistisches Satz-Modell (Debugging)}
+Um die Ursache der mangelnden Konvergenz zu isolieren, wurde ein stark vereinfachtes Modell entworfen.
 \begin{itemize}
-    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit sank deutlich auf \textbf{31,6\,\%}.
-    \item \textbf{Designentscheidung}: Die Ergebnisse zeigten, dass starre skelettbasierte Graphen die hohe individuelle Variabilität in der Gebärdenausführung nicht ausreichend generalisieren konnten. Dies führte zur Entscheidung für eine flexiblere, auf Aufmerksamkeit basierende Architektur: den Transformer.
+    \item \textbf{Methode}: Einsatz eines \textit{MinimalCTCModel}, bestehend aus einem schlanken Transformer-Encoder kombiniert mit CTC-Loss, um zu prüfen, ob das Modell grundlegende zeitliche Muster erkennt.
+    \item \textbf{Ergebnis}: Auch dieses Modell zeigte keine Lernfortschritte. Die Entscheidung fiel daraufhin, die Komplexität zu reduzieren und zur Klassifizierung isolierter Wörter überzugehen.
 \end{itemize}
 
-\subsection{Phase 4: Rückkehr zur optimierten Transformer-Architektur (v2)}
-Nach den Erkenntnissen aus Phase 3 markierte Phase 4 die Rückkehr zu einer rein Landmark-basierten Transformer-Architektur, jedoch mit verbesserten Hyperparametern:
+\subsection{Phase 4: Übergang zu isolierten Wörtern (Top 10)}
+Der Fokus wechselte zur Klassifizierung einzelner Glossen, um die Konvergenzfähigkeit der Architektur sicherzustellen.
 \begin{itemize}
-    \item \textbf{Konzept}: Implementierung einer robusten \textit{Self-Attention}-Baseline als Reaktion auf die Defizite des Graphen-Ansatzes aus Phase 3. Der Fokus lag auf einer stabileren Gewichtung zeitlicher Abhängigkeiten innerhalb der 1659-dimensionalen Landmark-Sequenzen.
-    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit konnte gegenüber der ersten Transformer-Version aus Phase 2 signifikant gesteigert werden und erreichte \textbf{66,61\,\%}. Dieser deutliche Sprung bestätigte die Überlegenheit des Transformer-Prinzips gegenüber dem anatomisch starren Skelett-Modell (Phase 3) für diese Datenbasis.
+    \item \textbf{Methode}: Verwendung einer \textit{LSTM-Architektur} (Long Short-Term Memory) zur Verarbeitung der Landmark-Sequenzen. Das Vokabular wurde auf die zehn am häufigsten vorkommenden Wörter beschränkt.
+    \item \textbf{Ergebnis}: Das Modell konvergierte erfolgreich. Es wurde eine Training-Accuracy von \textbf{91,23\,\%} und eine Validierungs-Accuracy von \textbf{81,15\,\%} erreicht, was die Eignung der Landmarks für die isolierte Wort-Erkennung bestätigte.
 \end{itemize}
 
-\subsection{Phase 5: Finales optimiertes Modell}
+\subsection{Phase 5: Skalierung auf Top 50 Wörter}
+Nach dem Erfolg der Top-10-Klassifizierung wurde das Vokabular erweitert, um die Skalierbarkeit zu testen.
+\begin{itemize}
+    \item \textbf{Methode}: Erweiterung des Modells um einen \textit{Attention-Mechanismus} (\texttt{LSTM\_with\_Attention}), um dem Netzwerk zu ermöglichen, sich innerhalb längerer Sequenzen auf die linguistisch relevantesten Frames zu konzentrieren.
+    \item \textbf{Ergebnis}: Bei 50 Klassen sank die Genauigkeit erwartungsgemäß auf \textbf{56,84\,\%} (Training) bzw. \textbf{51,24\,\%} (Validierung).
+\end{itemize}
+
+\subsection{Phase 6: Skalierung auf 146 Klassen und Wechsel zum Transformer}
+Die Experimente mit den Top-50-Wörtern in Phase~5 hatten gezeigt, dass LSTM-Modelle bei steigender Klassenanzahl schnell an ihre Grenzen stoßen. Phase~6 markierte daher einen entscheidenden Wendepunkt: den Umstieg auf die Transformer-Architektur und die Erweiterung auf das vollständige Zielvokabular.
+
+\begin{itemize}
+    \item \textbf{Das Konzept}: Um die 146 Klassen (alle Gebärden mit mindestens 70 Stichproben) zu bewältigen, ersetzten wir die LSTM-Struktur durch einen \textit{Transformer-Encoder}. Die zentrale Idee war, dass der \textit{Self-Attention}-Mechanismus zeitliche Abhängigkeiten der 1659 MediaPipe-Landmarks besser erfassen kann als die sequenzielle Verarbeitung eines LSTMs. Unser Ziel war es, zunächst eine stabile Baseline für das „große“ Problem zu schaffen.
+    \item \textbf{Die Erkenntnis}: Das Modell erreichte eine Top-1-Validierungsgenauigkeit von \textbf{53{,}94\,\%}. Auch wenn dies im Vergleich zu den Ergebnissen der Top-10-Klassen zunächst wie ein Rückschritt wirkte, war es für 146 Klassen ein wichtiger Erfolg. Gleichzeitig zeigte sich hier erstmals die volle Auswirkung der „Long-Tail“-Verteilung (Gini-Index 0{,}81). Das Modell erfasste die grundlegenden Bewegungen, scheiterte jedoch häufig an der feinen Unterscheidung phonologisch ähnlicher Gebärden.
+\end{itemize}
+
+\subsection{Phase 7: Ein Exkurs in skelettbasierte Graphen}
+Nachdem wir mit dem Transformer eine solide Basis für das große Vokabular geschaffen hatten, wollten wir in Phase~7 einen neuen Ansatz erproben. Die Idee war, dem Modell explizit die anatomische Struktur der Hand zu vermitteln, anstatt die Landmarks lediglich als flache Liste von Koordinaten zu behandeln.
+
+\begin{itemize}
+    \item \textbf{Das Experiment}: Wir versuchten, die anatomischen Verbindungen zwischen den Handgelenken mithilfe skelettbasierter Graphstrukturen abzubilden. Die Hoffnung war, dass das Modell durch diese festen Regeln besser versteht, welche Fingerstellungen physikalisch möglich sind und welche nicht, um so die Präzision bei der Erkennung der Handform zu erhöhen.
+    \item \textbf{Die Ernüchterung}: Das Ergebnis war jedoch ernüchternd: Die Validierungsgenauigkeit fiel auf \textbf{31{,}6\,\%}. Rückblickend war dieser Exkurs dennoch wertvoll. Er zeigte uns, dass anatomisch starre Graphen zu unflexibel sind, um die große individuelle Variabilität bei der Ausführung von Gebärden abzubilden. Jeder Mensch gebärdet ein wenig anders, und der Graph wirkte hier eher wie ein Korsett, das die Generalisierung verhinderte. Diese „Sackgasse“ führte letztlich dazu, dass wir uns umso überzeugter wieder der Flexibilität des Transformers und seinem \textit{Self-Attention}-Mechanismus zuwandten.
+\end{itemize}
+
+\subsection{Phase 8: Rückkehr zur optimierten Transformer-Architektur (v2)}
+Nach den Erkenntnissen aus Phase 7 markierte Phase 8 die Rückkehr zu einer rein Landmark-basierten Transformer-Architektur, jedoch mit verbesserten Hyperparametern:
+\begin{itemize}
+    \item \textbf{Konzept}: Implementierung einer robusten \textit{Self-Attention}-Baseline als Reaktion auf die Defizite des Graphen-Ansatzes aus Phase 7. Der Fokus lag auf einer stabileren Gewichtung zeitlicher Abhängigkeiten innerhalb der 1659-dimensionalen Landmark-Sequenzen.
+    \item \textbf{Ergebnis}: Die Validierungsgenauigkeit konnte gegenüber der ersten Transformer-Version aus Phase 6 signifikant gesteigert werden und erreichte \textbf{66,61\,\%}. Dieser deutliche Sprung bestätigte die Überlegenheit des Transformer-Prinzips gegenüber dem anatomisch starren Skelett-Modell (Phase 7) für diese Datenbasis.
+\end{itemize}
+
+\subsection{Phase 9: Finales optimiertes Modell}
 Durch intensives Hyperparameter-Tuning und die Verfeinerung des Feature Engineerings wurde der aktuelle Bestwert erreicht:
 \begin{itemize}
     \item \textbf{Optimierung}: Einführung von \textit{Label Smoothing}, \textit{Augmentation} und optimierten kinematischen Features.
@@ -115,7 +145,7 @@ Ergänzend zur Richtungscharakteristik der Vektoren werden euklidische Abstände
 \begin{equation}
     d = \|\mathbf{p}_{\text{joint\_A}} - \mathbf{p}_{\text{joint\_B}}\|_2
 \end{equation}
-Um eine vollständige Unabhängigkeit von der Kameraposition zu erreichen, werden sämtliche Koordinaten vor der Merkmalsextraktion auf das Handgelenk (\textit{wrist}) als Ursprung normiert. Dieser kombinierte Merkmalsvektor aus 1659 Werten bildete die Grundlage für die signifikante Genauigkeitssteigerung in Phase 5.
+Um eine vollständige Unabhängigkeit von der Kameraposition zu erreichen, werden sämtliche Koordinaten vor der Merkmalsextraktion auf das Handgelenk (\textit{wrist}) als Ursprung normiert. Dieser kombinierte Merkmalsvektor aus 1659 Werten bildete die Grundlage für die signifikante Genauigkeitssteigerung in Phase 9.
 
 \section{Modellarchitektur: Transformer-Encoder}
 Die Wahl des Transformers begründet sich durch seine Fähigkeit, globale Abhängigkeiten effizient zu modellieren:
@@ -129,7 +159,7 @@ Um Overfitting zu vermeiden, wurde für das finale Modell eine kompakte Transfor
 
 \begin{table}[h]
 \centering
-\caption{Hyperparameter der Transformer-Architektur (Phase 5)}
+\caption{Hyperparameter der Transformer-Architektur (Phase 9)}
 \label{tab:model_config}
 \begin{tabular}{llp{11cm}}
 \toprule

@@ -2,10 +2,9 @@
 \label{ch:conclusion}
 
 \section{Zusammenfassung der Ergebnisse}
-Das Ziel dieser Arbeit war es, ein robustes System zur isolierten Gebärdenspracherkennung zu entwickeln und zu bewerten – trotz großer Unterschiede in der Klassenverteilung und visueller Ähnlichkeiten zwischen Gebärden. Mit dem \textit{SignNet}-Framework haben wir eine Architektur umgesetzt, die einen optimierten Transformer-Encoder mit einem erweiterten Feature-Engineering kombiniert. 
+Ziel dieser Arbeit war es zu zeigen, dass eine zuverlässige Gebärdenspracherkennung auch unter schwierigen Bedingungen möglich ist – selbst dann, wenn die Daten stark ungleich verteilt sind oder sich einzelne Gebärden visuell stark ähneln. Unser \textit{SignNet}-Framework spielte dabei eine zentrale Rolle: Durch die gezielte Kombination eines Transformer-Modells mit einem physikalisch orientierten Feature-Engineering konnten wir die Erkennungsrate im Verlauf des Projekts deutlich steigern.
 
-Die Ergebnisse zeigen eine deutliche Verbesserung: Von einer einfachen Transformer-Baseline in Phase 2 (53,94\,\%) stieg die Genauigkeit durch zusätzliche kinematische und geometrische Merkmale in Phase 5 auf \textbf{73,15\,\%} (Validierung). Besonders die hohe Top-5-Genauigkeit von \textbf{91,76\,\%} zeigt, dass das System auch bei ähnlichen Gebärden sehr zuverlässig ist.
-
+In der ersten Transformer-Phase (Phase~6) lag die Genauigkeit noch bei 53{,}94\,\%. Mit der Integration kinematischer und geometrischer Merkmale in Phase~9 erreichten wir schließlich eine beeindruckende Genauigkeit von \textbf{73{,}15\,\%} auf dem Validierungsdatensatz. Besonders hervorzuheben ist die Top-5-Genauigkeit von \textbf{91{,}76\,\%}. Sie zeigt, dass das System in über neun von zehn Fällen die korrekte Gebärde zumindest unter den fünf wahrscheinlichsten Kandidaten identifiziert. Diese Ergebnisse bestätigen, dass der Ansatz mit den \textit{EnhancedLandmarkFeatures} ein entscheidender Schritt war, um die dynamischen Eigenschaften der Gebärden präzise abzubilden.
 \section{Technische Würdigung}
 Die größte technische Herausforderung lag in der Verarbeitung der 1659-dimensionalen Landmark-Daten und im Umgang mit der ungleichen Klassenverteilung des PHOENIX-Datensatzes.
 \begin{itemize}

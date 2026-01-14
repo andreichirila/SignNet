@@ -27,7 +27,7 @@ def plot_training_results():
     plt.plot(df_train_loss['step'], df_train_loss['value'], label='Training Loss', color='#1f77b4', linewidth=2)
     plt.plot(df_val_loss['step'], df_val_loss['value'], label='Validation Loss', color='#ff7f0e', linewidth=2)
     
-    plt.title('Training und Validation Loss (SignNet Phase 5)', fontsize=14, pad=15)
+    plt.title('Training und Validation Loss (SignNet Phase 9)', fontsize=14, pad=15)
     plt.xlabel('Trainingsschritte (Steps)', fontsize=12)
     plt.ylabel('Loss-Wert', fontsize=12)
     plt.legend(fontsize=11)
@@ -42,7 +42,7 @@ def plot_training_results():
     plt.plot(df_train_acc['step'], df_train_acc['value'], label='Training Accuracy', color='#2ca02c', linewidth=2)
     plt.plot(df_val_acc['step'], df_val_acc['value'], label='Validation Accuracy', color='#d62728', linewidth=2)
     
-    plt.title('Training und Validation Accuracy (SignNet Phase 5)', fontsize=14, pad=15)
+    plt.title('Training und Validation Accuracy (SignNet Phase 9)', fontsize=14, pad=15)
     plt.xlabel('Trainingsschritte (Steps)', fontsize=12)
     plt.ylabel('Accuracy (0.0 - 1.0)', fontsize=12)
     plt.legend(fontsize=11)

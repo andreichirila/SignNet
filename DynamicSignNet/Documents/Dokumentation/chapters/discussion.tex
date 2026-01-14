@@ -1,7 +1,7 @@
 \chapter{Diskussion}
 \label{ch:discussion}
 
-In diesem Kapitel werden die Ergebnisse der finalen Phase 5 im Kontext der Forschungsfrage und der theoretischen Grundlagen interpretiert. Ziel ist es, die Brücke zwischen den statistischen Metriken aus \autoref{ch:results} und den linguistischen sowie architektonischen Herausforderungen zu schlagen.
+In diesem Kapitel werden die Ergebnisse der finalen Phase 9 im Kontext der Forschungsfrage und der theoretischen Grundlagen interpretiert. Ziel ist es, die Brücke zwischen den statistischen Metriken aus \autoref{ch:results} und den linguistischen sowie architektonischen Herausforderungen zu schlagen.
 
 \section{Interpretation der Klassifikationsleistung}
 Die finale Evaluation zeigt eine Top-1 Accuracy von 73,86\,\% auf einem Vokabular von 146 Klassen. Im Vergleich zur Baseline aus Phase 2 (53,94\,\%) belegt dies die signifikante Effektivität des optimierten Feature Engineerings und der finalen Transformer-Architektur.
@@ -9,7 +9,7 @@ Die finale Evaluation zeigt eine Top-1 Accuracy von 73,86\,\% auf einem Vokabula
 Besonders hervorzuheben ist die Top-5 Accuracy von 91,76\,\%. Diese Differenz von rund 17 Prozentpunkten zeigt, dass das Modell in über neun von zehn Fällen die korrekte Gebärde unter den wahrscheinlichsten Kandidaten identifiziert. Für die praktische Anwendung in einem interaktiven Assistenzsystem bedeutet dies eine hohe Resilienz, da die korrekte Information fast immer im engeren Auswahlfeld vorhanden ist.
 
 \section{Analyse der Trainingsdynamik und Overfitting-Resilienz}
-Ein zentraler Aspekt der Evaluation von Phase 5 ist die Untersuchung der Lernkurven im Hinblick auf die Generalisierungsfähigkeit des Modells und das Potenzial zur Trainingsoptimierung.
+Ein zentraler Aspekt der Evaluation von Phase 9 ist die Untersuchung der Lernkurven im Hinblick auf die Generalisierungsfähigkeit des Modells und das Potenzial zur Trainingsoptimierung.
 
 \subsection{Detaillierte Loss-Analyse}
 Der Verlauf des \textit{Cross-Entropy Loss} liefert entscheidende Hinweise auf die Stabilität des Lernprozesses. Wie in \autoref{fig:loss_plot} ersichtlich, sinken sowohl der Training-Loss als auch der Validation-Loss über den gesamten Zeitraum stetig ab.
@@ -45,6 +45,6 @@ Die in \autoref{fig:confidence_dist} visualisierte Konfidenzverteilung bestätig
 \end{itemize}
 
 \section{Architektonische Einflüsse und Limitationen}
-Der Erfolg von Phase 5 gegenüber den Vorphasen ist auf die Rückkehr zur Transformer-Architektur mit einer kompakten \texttt{hidden\_size} von 256 Einheiten zurückzuführen. Während die Skeleton-Graphen in Phase 3 zu starr waren, erlaubt die Self-Attention des Transformers, zeitliche Abhängigkeiten flexibel zu gewichten.
+Der Erfolg von Phase 9 gegenüber den Vorphasen ist auf die Rückkehr zur Transformer-Architektur mit einer kompakten \texttt{hidden\_size} von 256 Einheiten zurückzuführen. Während die Skeleton-Graphen in Phase 3 zu starr waren, erlaubt die Self-Attention des Transformers, zeitliche Abhängigkeiten flexibel zu gewichten.
 
 Trotz dieser Fortschritte bleibt die phonologische Ähnlichkeit die größte Hürde. Zukünftige Iterationen sollten eine stärkere Gewichtung von Mundbild-Features (Face-Mesh) innerhalb der Cross-Attention vorsehen, um die verbleibenden Minimalpaar-Konfusionen weiter zu reduzieren.

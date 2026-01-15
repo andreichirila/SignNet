@@ -50,24 +50,22 @@ Validierungsset & 5.657 & 20,0\,\% \\
 Der Verlauf von Loss und Accuracy des finalen Modells (Phase~9) wurde über die gesamte Trainingsdauer aufgezeichnet. In \autoref{fig:loss_plot} ist zu sehen, dass sich Trainings- und Validierungs-Loss konsistent nach unten bewegen. Die Accuracy-Kurven (\autoref{fig:accuracy_plot}) zeigen ein stetiges Ansteigen mit einem anschliessenden Plateau. Im stabilen Bereich beträgt die Differenz zwischen Trainings- und Validierungswerten etwa 11,55~Prozentpunkte.
 
 \begin{figure}[H]
-     \centering
-     % Linke Unterabbildung: Loss
-     \begin{subfigure}[b]{0.49\textwidth}
-         \centering
-         \includegraphics[width=\textwidth]{figures/loss_plot_final.png}
-         \caption{Balanced Softmax Loss}
-         \label{fig:loss_plot}
-     \end{subfigure}
-     \hfill
-     % Rechte Unterabbildung: Accuracy
-     \begin{subfigure}[b]{0.49\textwidth}
-         \centering
-         \includegraphics[width=\textwidth]{figures/accuracy_plot_final.png}
-         \caption{Accuracy (Top-1)}
-         \label{fig:accuracy_plot}
-     \end{subfigure}
-     \caption{Trainingsmetriken der finalen Phase~9: Gegenüberstellung von Loss-Entwicklung und Klassifikationsgenauigkeit.}
-     \label{fig:metrics_comparison}
+    \centering
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/loss_plot_final.png}
+        \caption{Balanced Softmax Loss und Lernrate}
+        \label{fig:loss_lr}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.49\textwidth}
+        \centering
+        \includegraphics[width=\textwidth]{figures/accuracy_plot_final.png}
+        \caption{Top-1 Accuracy}
+        \label{fig:accuracy_plot_dual}
+    \end{subfigure}
+    \caption{Trainingsmetriken der Phase~9: (a) zeigt den Verlauf des \textit{Balanced Softmax Loss} im Verhältnis zur zyklischen Lernrate (lila gestrichelt). Die periodischen Restarts des \textit{CosineAnnealing}-Schedulers ($T_0 = 100$, $T_{\text{mult}} = 2$) unterstützen das Verlassen lokaler Optima und fördern eine tiefere Konvergenz. (b) verdeutlicht die Stabilisierung der Validierungsgenauigkeit bei 73{,}86\,\%.}
+    \label{fig:final_metrics_combined}
 \end{figure}
 
 

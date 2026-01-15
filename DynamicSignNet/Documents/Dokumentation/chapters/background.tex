@@ -9,7 +9,7 @@ Gebärdensprachen sind vollwertige, natürliche Sprachen mit eigener Grammatik, 
 
 \subsection{Phonologie der Gebärdensprache}
 
-William Stokoe legte 1960 den Grundstein für die linguistische Analyse von Gebärdensprachen, indem er zeigte, dass Gebärden – ähnlich wie gesprochene Wörter – aus kleineren, bedeutungsunterscheidenden Einheiten bestehen. Diese Einheiten werden als \textit{Cheremes} (analog zu Phonemen) bezeichnet; heute spricht man häufiger von \textit{Parametern}.
+William Stokoe legte 1960 den Grundstein für die linguistische Analyse von Gebärdensprachen, indem er zeigte, dass Gebärden, ähnlich wie gesprochene Wörter, aus kleineren, bedeutungsunterscheidenden Einheiten bestehen. Diese Einheiten werden als \textit{Cheremes} (analog zu Phonemen) bezeichnet; heute spricht man häufiger von \textit{Parametern}.
 
 Eine Gebärde besteht simultan aus fünf Parametern:
 
@@ -25,7 +25,7 @@ Die gleichzeitige Kombination dieser Parameter unterscheidet Gebärdensprachen g
 
 \subsection{Glossennotation}
 
-In der Gebärdensprachforschung werden Gebärden häufig durch \textit{Glossen} dargestellt — standardisierte Bezeichnungen in Grossbuchstaben, die sich an der Bedeutung orientieren. Die Glosse \texttt{HAUS} bezeichnet beispielsweise das Konzept „Haus“, unabhängig von variierenden Artikulationsformen. Diese Notation ist zentral für die Annotation von Videodaten und bildet die Grundlage für überwachtes maschinelles Lernen.
+In der Gebärdensprachforschung werden Gebärden häufig durch \textit{Glossen} dargestellt. Das sind standardisierte Bezeichnungen in Grossbuchstaben, die sich an der Bedeutung orientieren. Die Glosse \texttt{HAUS} bezeichnet beispielsweise das Konzept „Haus“, unabhängig von variierenden Artikulationsformen. Diese Notation ist zentral für die Annotation von Videodaten und bildet die Grundlage für überwachtes maschinelles Lernen.
 
 \subsection{Isolierte vs. kontinuierliche Gebärdenerkennung}
 
@@ -40,7 +40,7 @@ Die vorliegende Arbeit konzentriert sich auf die isolierte Gebärdenerkennung, b
 
 \section{Transformer-Architektur}
 
-Die Transformer-Architektur \cite{vaswani2017} hat sich als führendes Paradigma für die Verarbeitung sequentieller Daten etabliert. Anders als rekurrente Netze (RNNs, LSTMs) verarbeitet der Transformer ganze Sequenzen parallel und modelliert Abhängigkeiten über einen Attention-Mechanismus.
+Die Transformer-Architektur \cite{vaswani2017} gilt heute als führendes Modell für die Verarbeitung sequentieller Daten. Statt wie rekurrente Netze (RNNs, LSTMs) Schritt für Schritt zu arbeiten, verarbeitet der Transformer Sequenzen vollständig parallel und stellt Abhängigkeiten durch einen Attention-Mechanismus dar, was insbesondere bei langen Kontexten Vorteile bringt.
 
 \subsection{Self-Attention}
 
@@ -94,10 +94,10 @@ Die Ungleichverteilung lässt sich mithilfe des Gini-Koeffizienten $G$ quantifiz
     G = \frac{\sum_{i=1}^n \sum_{j=1}^n |x_i - x_j|}{2n \sum_{i=1}^n x_i}
 \end{equation}
 
-Ein hoher Gini-Wert zeigt eine starke Konzentration auf wenige „Head“-Klassen, während die meisten Klassen im „Tail“ unterrepräsentiert sind. Solche Verteilungen erfordern spezielle Trainingsstrategien wie Focal Loss, Class-Balanced Loss oder Oversampling.
+Ein hoher Gini-Wert zeigt eine starke Konzentration auf wenige „Head“-Klassen, während die meisten Klassen im „Tail“ unterrepräsentiert sind. In unserem Datensatz beträgt der Gini-Koeffizient $G = 0.81$. Solche Verteilungen erfordern spezielle Trainingsstrategien wie Focal Loss, Class-Balanced Loss oder Oversampling.
 
 \subsection{Visuelle Konfusion}
 
 Neben statistischer Imbalance erschwert die \textit{phonologische Ähnlichkeit} die Klassifikation: Viele Gebärden unterscheiden sich lediglich in einem Parameter. So unterscheiden sich etwa die Gebärden für Himmelsrichtungen (\texttt{NORD}, \texttt{SUED}, \texttt{OST}, \texttt{WEST}) oft nur in der Bewegungsrichtung bei ansonsten identischer Handform und -position.
 
-Diese systematisch verwechslungsanfälligen Gruppen werden in dieser Arbeit als \textit{Konfusionscluster} bezeichnet und begründen den Einsatz hierarchischer Expertenmodelle, die besonders auf die feine Unterscheidung innerhalb solcher Cluster spezialisiert sind.
+Diese systematisch verwechslungsanfälligen Gruppen werden in dieser Arbeit als \textit{Konfusionscluster} bezeichnet.

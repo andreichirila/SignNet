@@ -10,14 +10,14 @@ Während die erste Transformer-Phase (Phase~6) noch eine Validierungsgenauigkeit
 Die massgeblichen technischen Herausforderungen lagen in der Verarbeitung der 1659‑dimensionalen Landmark-Daten und im Umgang mit der starken Klassenungleichheit des PHOENIX‑Datensatzes.
 \begin{itemize}
     \item \textbf{Feature Engineering:} Die Klasse \texttt{EnhancedLandmarkFeatures} machte es möglich, Bewegungscharakteristika wie Geschwindigkeit, Beschleunigung und Bone‑Vektoren explizit zu modellieren — also Informationen, die über die statische Pose hinausgehen.
-    \item \textbf{Generalisierung und Regularisierung:} Eine kompakte Transformer‑Konfiguration (\texttt{hidden\_size} = 256) zusammen mit starkem Dropout (0,65) sorgte für stabile Trainingsverläufe. Der verbleibende Abstand von rund 12\,\% zwischen Trainings‑ und Validierungsleistung ist angesichts der hohen intra‑klassigen Variabilität vertretbar.
-    \item \textbf{Umgang mit Imbalance:} Die Beschränkung des Vokabulars auf 146 Klassen (jeweils >= 70 Beispiele) reduzierte die extreme Schiefe und schuf eine belastbare Basis für das Modelltraining.
+    \item \textbf{Generalisierung und Regularisierung:} Eine kompakte Transformer‑Konfiguration zusammen mit starkem Dropout sorgte für stabile Trainingsverläufe. Der verbleibende Abstand von rund 12\,\% zwischen Trainings‑ und Validierungsleistung ist angesichts der hohen intra‑klassigen Variabilität vertretbar.
+    \item \textbf{Umgang mit Imbalance:} Die Beschränkung des Vokabulars auf 146 Klassen (jeweils >= 70 Beispiele) reduzierte die extreme Schiefe und schaffte eine belastbare Basis für das Modelltraining.
 \end{itemize}
 
 \section{Ausblick}
 Trotz erzielter Fortschritte bleiben mehrere Anschlussfragen offen. Besonders vielversprechend ist die stärkere Fusion verschiedener Modalitäten: Die Verknüpfung von Skelettdaten mit optischem Fluss aus den RGB‑Videos könnte Bewegungsdynamiken erfassen, die allein anhand von Landmarks schwer zu erfassen sind.
 
-Unsere Fehleranalyse zeigte zudem, dass das reine Skelettmodell bei optischen Minimalpaaren wie \texttt{ABEND} und \texttt{NACHT} an Grenzen stösst. In solchen Fällen sind non‑manuelle Marker (Mimik, Mundbild) entscheidend — eine stärkere Gewichtung des Face‑Mesh in der Architektur dürfte die Unterscheidung verbessern. Architektonisch könnte ein lernbares Gating in einem hierarchischen System helfen, zwischen Stammgebärden und komplexen Classifier‑Varianten zielgerichteter zu entscheiden. Langfristiges Ziel bleibt die Überführung der isolierten Worterkennung in eine kontinuierliche Gebärdensprachübersetzung (Sign Language Translation) — ein ambitioniertes, aber realistisches Folgeprojekt für \textit{SignNet}.
+Unsere Fehleranalyse zeigte zudem, dass das reine Skelettmodell bei optischen Minimalpaaren wie \texttt{ABEND} und \texttt{NACHT} an Grenzen stösst. In solchen Fällen sind non‑manuelle Marker (Mimik, Mundbild) entscheidend. Eine stärkere Gewichtung des Face‑Mesh in der Architektur dürfte die Unterscheidung verbessern. Architektonisch könnte ein lernbares Gating in einem hierarchischen System helfen, zwischen Stammgebärden und komplexen Classifier‑Varianten zielgerichteter zu entscheiden. Langfristiges Ziel bleibt die Überführung der isolierten Worterkennung in eine kontinuierliche Gebärdensprachübersetzung (Sign Language Translation). Ein ambitioniertes, aber realistisches Folgeprojekt für \textit{SignNet}.
 
 \section{Persönliches Fazit Andrei}
 \label{sec:personal_conclusion_andrei}
@@ -28,7 +28,7 @@ Die Projektarbeit hat mir gezeigt, dass systematisches Vorgehen der Schlüssel z
 
 Die \textbf{Datenanalyse vor architektonischen Entscheidungen} hat sich als richtig erwiesen. Die systematische Untersuchung der MediaPipe-Landmarks zeigte beispielsweise, dass die Z-Koordinaten zu 80--98\,\% nahezu Nullwerte enthielten -- diese Erkenntnis ermöglichte eine Reduktion der Feature-Anzahl von 1'659 auf 1'086 Features ohne Genauigkeitsverlust.
 
-Ein weiterer Erfolg war der \textbf{Umgang mit der extremen Klassenimbalance} (593:1 Verhältnis zwischen häufigster und seltenster Klasse). Die Implementierung von Balanced Softmax Loss in Kombination mit gezieltem Oversampling für seltene Klassen führte zu einer Gesamtverbesserung von 11,4\,\% (61,75\,\% auf 73,15\,\% Accuracy). Besonders beeindruckend war die 18,2\,\%-Verbesserung bei Klassen mit weniger als 100 Samples.
+Ein weiterer Erfolg war der \textbf{Umgang mit der extremen Klassenimbalance} (593:1 Verhältnis zwischen häufigster und seltenster Klasse). Die Implementierung von Balanced Softmax Loss in Kombination mit gezieltem Oversampling für seltene Klassen führte zu einer Gesamtverbesserung von 12,1\,\% (61,75\,\% auf 73,86\,\% Accuracy). Besonders beeindruckend war die 18,2\,\%-Verbesserung bei Klassen mit weniger als 100 Samples.
 
 Die Entwicklung eines \textbf{Bucket-basierten Evaluationssystems} -- inspiriert durch Feedback von Martin -- ermöglichte eine genaue Analyse der Modellleistung über verschiedene Stichprobengruppen hinweg. Dies half, gezielt Schwachstellen zu erkennen und zu beheben.
 

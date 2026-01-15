@@ -13,14 +13,13 @@ Aus technischer Sicht führen diese Eigenschaften zu hochdimensionalen, zeitlich
 Hinzu kommt die starke Klassenungleichheit in verfügbaren Datensätzen: Viele Begriffe treten sehr häufig auf, während die Mehrheit der Gebärden selten ist (\textit{Long-Tail}-Verteilung). Diese Imbalance erschwert das Training tiefer neuronaler Netze, da Modelle dazu neigen, seltene Klassen zu vernachlässigen. Zusätzlich führen phonologische Ähnlichkeiten zwischen Gebärden – etwa bei Richtungsangaben oder semantisch verwandten Begriffen – zu systematischen Verwechslungen, weil sich die Gebärden oft nur in kleinen Bewegungsdetails unterscheiden.
 
 \section{Zielsetzung}
-Ziel dieser Arbeit ist die Entwicklung, Implementierung und Evaluation des \textit{SignNet}-Systems zur Erkennung von Gebärdensprach-Glossen. Im Fokus steht die Frage, ob ein hierarchisches Klassifikationskonzept gegenüber einem monolithischen Modell bessere Erkennungsraten liefert.
+Ziel dieser Arbeit ist die Entwicklung, Implementierung und Evaluation des \textit{SignNet}-Systems zur Erkennung von Gebärdensprach-Glossen.
 
 Konkret werden folgende Ziele verfolgt:
 
 \begin{itemize}
     \item \textbf{Robuste Feature-Extraction-Pipeline}: Extraktion und Aufbereitung von Körper-, Hand- und Gesichtslandmarks mittels MediaPipe für nachfolgendes maschinelles Lernen.
     \item \textbf{Transformer-basierter Klassifikator}: Einsatz von Attention-Mechanismen zur Modellierung temporaler Abhängigkeiten in Gebärdensequenzen.
-    \item \textbf{Hierarchische Expertenmodelle}: Entwicklung spezialisierter Submodelle für systematisch verwechselbare Gruppen (z.\,B. Richtungsangaben, wetterbezogene Begriffe).
     \item \textbf{Strategien gegen Klassenungleichheit}: Evaluation von Methoden wie Focal Loss, Balanced Softmax und Oversampling.
     \item \textbf{Evaluation auf dem Phoenix-Datensatz}: Quantitative Bewertung der Systemleistung auf einem etablierten Benchmark für die Deutsche Gebärdensprache.
 \end{itemize}

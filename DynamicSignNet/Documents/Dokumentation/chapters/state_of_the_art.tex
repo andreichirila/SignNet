@@ -37,7 +37,7 @@ Der Word-Level American Sign Language (WLASL)-Datensatz \cite{li2020wlasl} umfas
 Der RWTH-PHOENIX-Weather-2014T Datensatz \cite{koller2015phoenix, camgoz2018neural} besteht aus Aufnahmen professioneller Gebärdensprachdolmetscher in Wettersendungen. Er enthält kontinuierliche Gebärdensequenzen mit Gloss-Annotationen und deutschen Übersetzungen. Die konsistenten Aufnahmebedingungen sind ein Vorteil, jedoch ist die Domäne auf Wettervokabular beschränkt.
 
 \section{Herausforderung: Klassenungleichheit}
-Ein zentrales Problem in der Gebärdenerkennung ist die ungleiche Verteilung von Trainingsbeispielen über Klassen — das Long-Tail-Problem. Wenige häufige Gebärden dominieren die Datensätze, während die Mehrheit der Klassen selten vertreten ist.
+Ein zentrales Problem in der Gebärdenerkennung ist die ungleiche Verteilung von Trainingsbeispielen über Klassen, das Long-Tail-Problem. Wenige häufige Gebärden dominieren die Datensätze, während die Mehrheit der Klassen selten vertreten ist.
 
 \subsection{Focal Loss}
 Lin et al. \cite{lin2017focal} führten Focal Loss ein, um das Ungleichgewicht zwischen einfachen und schwierigen Beispielen zu mildern. Durch den Faktor $(1-p_t)^\gamma$ wird der Beitrag gut klassifizierter Beispiele reduziert, sodass das Training schwieriger Fälle stärker gewichtet.
@@ -49,4 +49,4 @@ Cui et al. \cite{cui2019classbalanced} schlugen eine Gewichtung auf Basis der \t
 Ren et al. \cite{ren2020balanced} erweiterten die Standard-Softmax-Funktion um klassenspezifische Prior-Terme, die die Trainingsklassenverteilung ausgleichen. Dadurch lassen sich seltene Klassen fairer bewerten, ohne die Verlustfunktion grundlegend zu verändern.
 
 \section{Zusammenfassung}
-Der Stand der Technik in der isolierten Gebärdenerkennung kombiniert heute skelettbasierte Merkmalsextraktion (z.\,B. mit MediaPipe), moderne Modellarchitekturen wie Transformer zur temporalen Modellierung und spezialisierte Verlustfunktionen zur Behandlung unbalancierter Datensätze. Auf dieser Basis untersucht die vorliegende Arbeit zusätzlich den Einsatz hierarchischer Expertenmodelle, um systematische Verwechslungen zwischen ähnlichen Gebärden weiter zu reduzieren.
+Der Stand der Technik in der isolierten Gebärdenerkennung kombiniert heute skelettbasierte Merkmalsextraktion (z.\,B. mit MediaPipe), moderne Modellarchitekturen wie Transformer zur temporalen Modellierung und spezialisierte Verlustfunktionen zur Behandlung unbalancierter Datensätze.

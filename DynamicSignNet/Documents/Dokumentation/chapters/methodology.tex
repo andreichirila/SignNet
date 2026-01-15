@@ -12,7 +12,7 @@ Aufgrund der starken Klassenimbalance (Long-Tail-Verteilung) wurde das Vokabular
 \begin{itemize}
     \item \textbf{Mindestanforderung}: Berücksichtigt wurden nur Klassen mit mindestens \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} Beispielen.
     \item \textbf{Resultat}: Nach der Filterung blieben \textbf{146 Klassen} für die finale Klassifikation übrig.
-    \item \textbf{Begründung}: So erhält das Modell pro Gebärde ausreichend Variabilität, um generalisierbare Merkmale zu lernen statt blosses Memorieren.
+    \item \textbf{Begründung}: So erhält das Modell pro Gebärde ausreichend Variabilität, um generalisierbare Merkmale zu lernen statt blosses auswendig Lernen.
 \end{itemize}
 
 \subsection{Merkmalsextraktion mit MediaPipe}
@@ -42,7 +42,7 @@ Zunächst wurde die Erkennung des statischen Fingeralphabets (24 Klassen) unters
 \subsection{Phase 2: Kontinuierliche Erkennung auf Satzebene}
 Anfangs zielten wir auf Satzverarbeitung direkt aus Landmark-Sequenzen:
 \begin{itemize}
-    \item \textbf{Methode}: Architektur mit Connectionist Temporal Classification (CTC-Loss), um Alignment ohne explizite Segmentierung zu lernen.
+    \item \textbf{Methode}: Transformer Architektur mit Connectionist Temporal Classification (CTC-Loss), um Alignment ohne explizite Segmentierung zu lernen.
     \item \textbf{Ergebnis}: Mit einer Word Error Rate (WER) von ca. \textbf{90\,\%} erwies sich der Ansatz als zu anspruchsvoll für die verfügbare Datenbasis.
 \end{itemize}
 
@@ -72,7 +72,7 @@ LSTM-Modelle zeigten bei wachsender Klassenanzahl Begrenzungen; daher stiegen wi
 
 \begin{itemize}
     \item \textbf{Konzept}: Ersetzen der LSTM-Struktur durch einen Transformer-Encoder. Self-Attention sollte zeitliche Abhängigkeiten der 1659-dimensionalen Landmark-Repräsentation besser erfassen.
-    \item \textbf{Ergebnis}: Top-1-Validierungsgenauigkeit \textbf{53{,}94\,\%} — ein wichtiges Signal für erste Erfolge auf dem grossen Vokabular, trotz deutlich spürbarer Long-Tail-Effekte (Gini-Index 0{,}81).
+    \item \textbf{Ergebnis}: Top-1-Validierungsgenauigkeit \textbf{53{,}94\,\%} — ein wichtiges Signal für erste Erfolge auf dem grossen Vokabular.
 \end{itemize}
 
 \subsection{Phase 7: Ein Exkurs in skelettbasierte Graphen}
@@ -94,7 +94,7 @@ Aus den Erkenntnissen von Phase~7 resultierte eine optimierte Transformer-Baseli
 Durch umfangreiches Hyperparameter-Tuning und verfeinertes Feature Engineering wurde die aktuelle Bestleistung erzielt:
 \begin{itemize}
     \item \textbf{Optimierung}: Label Smoothing, Augmentation und optimierte kinematische Features.
-    \item \textbf{Resultat}: Finale Validierungsgenauigkeit \textbf{73,15\,\%} sowie Top-5-Accuracy \textbf{91,76\,\%}.
+    \item \textbf{Resultat}: Finale Validierungsgenauigkeit \textbf{73,86\,\%} sowie Top-5-Accuracy \textbf{91,76\,\%}.
 \end{itemize}
 
 \section{Vorverarbeitung und Datenreinigung}
@@ -178,20 +178,29 @@ Der Transformer wurde gewählt, weil er globale Abhängigkeiten effizient modell
 
 \subsection{Spezifikation der Transformer-Architektur}
 Um Overfitting vorzubeugen, wurde eine kompakte Konfiguration gewählt. Die reduzierte Modellgrösse fördert die Generalisierung auf dem Validierungsset.
+Zur Optimierung des Trainingsprozesses wurde ein \textit{SequentialLR}-Scheduler mit zwei Phasen implementiert. In der ersten Phase sorgt ein \textit{LinearLR}-Warmup über 30~Epochen für einen kontrollierten Anstieg der Lernrate von 10\,\% des Basiswerts ($10^{-4}$) bis zum Maximum. Diese Massnahme reduziert die bei Transformern häufig auftretende Gradienteninstabilität in der Frühphase. 
 
-\begin{table}[h]
+Anschliessend übernimmt ein \textit{CosineAnnealingWarmRestarts}-Scheduler, der die Lernrate zyklisch bis auf ein Minimum von $10^{-7}$ absenkt. Die Parameter $T_0 = 100$ und $T_{\text{mult}} = 2$ bewirken, dass sich die Periodendauer nach jedem Restart verdoppelt. Dadurch kann das Modell tiefer in globale Minima der Verlustfunktion einrasten, während die gelegentlichen Erhöhungen der Lernrate helfen, lokale Optima zu überwinden.
+
+\begin{table}[H]
 \centering
-\caption{Hyperparameter der Transformer-Architektur (Phase 9)}
+\caption{Hyperparameter der Architektur und des Trainingsprozesses (Phase 9)}
 \label{tab:model_config}
-\begin{tabular}{llp{11cm}}
+\begin{tabular}{llp{9.5cm}}
 \toprule
 Parameter & Wert & Begründung \\
 \midrule
 \texttt{input\_size} & 1659 & Resultiert aus 553 Landmarks mit je 3 Koordinaten ($x,y,z$). \\
 \texttt{hidden\_size} & 256 & Reduktion zur Vermeidung von Overfitting bei begrenzter Datenmenge. \\
-\texttt{num\_layers} & 4 & Balance zwischen Tiefe und Stabilität ( reduziert von 6 ). \\
+\texttt{num\_layers} & 4 & Balance zwischen Tiefe und Stabilität. \\
 \texttt{num\_heads} & 8 & Ermöglicht mehrere parallele Attention-Heads. \\
-\texttt{dim\_feedforward} & 1024 & Ca. 4-fache der \texttt{hidden\_size} für ausreichende MLP-Kapazität. \\
+\texttt{dropout\_rate} & 0,65 & Starke Regularisierung zur Reduktion der Differenz zwischen Trainings- und Validierungsleistung. \\
+\texttt{weight\_decay} & $10^{-2}$ & L2-Regularisierung zur Verbesserung der Generalisierungsfähigkeit. \\
+\midrule
+Optimierer & AdamW & Robustheit gegenüber spärlichen Gradienten und entkoppeltes Weight Decay. \\
+Lernrate (Basis) & $10^{-4}$ & Stabiler Ausgangspunkt für den Lernprozess. \\
+Scheduler & SequentialLR & Kombination aus linearem Warmup (30 Epochen) und \textit{CosineAnnealingWarmRestarts} ($T_0=100$). \\
+Label Smoothing & 0,05 & Verhindert eine zu hohe Konfidenz des Modells und verbessert die Kalibrierung. \\
 \bottomrule
 \end{tabular}
 \end{table}

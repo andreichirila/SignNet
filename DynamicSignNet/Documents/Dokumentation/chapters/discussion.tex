@@ -4,22 +4,31 @@
 In diesem Kapitel werden die Ergebnisse der finalen Phase~9 im Zusammenhang mit der Forschungsfrage und den theoretischen Grundlagen interpretiert. Ziel ist es, die in \autoref{ch:results} dargestellten Metriken mit den linguistischen und architektonischen Herausforderungen in Beziehung zu setzen.
 
 \section{Interpretation der Klassifikationsleistung}
-Die finale Evaluation ergab eine Top‑1‑Accuracy von 73,15\,\% für das Vokabular von 146 Klassen. Im Vergleich zur Phase‑2‑Baseline (53,94\,\%) verdeutlicht dies den Nutzen des verfeinerten Feature‑Engineerings und der finalen Transformer‑Architektur.
+Die finale Evaluation ergab eine Top‑1‑Accuracy von 73,86\,\% für das Vokabular von 146 Klassen. Im Vergleich zur Phase‑6‑Baseline (53,94\,\%) verdeutlicht dies den Nutzen des verfeinerten Feature‑Engineerings und der finalen Transformer‑Architektur.
+Besonders aussagekräftig ist die Top‑5‑Accuracy von 91,76\,\%. Die Differenz von knapp 17 Prozentpunkten bedeutet, dass die richtige Gebärde in den meisten Fällen in einem engen Kandidatenkreis enthalten ist.
 
-Besonders aussagekräftig ist die Top‑5‑Accuracy von 91,76\,\%. Die Differenz von knapp 17 Prozentpunkten bedeutet, dass die richtige Gebärde in den meisten Fällen in einem engen Kandidatenkreis enthalten ist — ein wichtiges Kriterium für robuste Assistenzsysteme, bei denen die korrekte Option häufig unter den Top‑Vorschlägen auftaucht.
+\subsection{Robustheit gegenüber Klassenungleichgewicht (Bucket-Analyse)}
+Ein zentraler Nachweis für die Qualität des Modells ist die Analyse der Genauigkeit in Abhängigkeit von der Trainingsstichprobe (siehe \autoref{fig:accuracy_buckets} in Kapitel~5). Die Ergebnisse verdeutlichen, dass das System nicht lediglich die häufigsten Gebärden „auswendig lernt“, sondern eine bemerkenswerte Generalisierungsleistung über das gesamte Spektrum erbringt:
 
-\section{Analyse der Trainingsdynamik und Overfitting‑Resilienz}
+\begin{itemize}
+    \item \textbf{Seltene Klassen (Rare, $< 100$ Samples):} Trotz der geringen Datenbasis erreicht das Modell hier eine Accuracy von 65{,}8\,\%. Dieser Wert ist ein direkter Erfolg des \textit{Balanced Softmax Loss}.
+    \item \textbf{Häufige Klassen (Frequent, $> 300$ Samples):} Mit einer Genauigkeit von 80{,}3\,\% zeigt sich, dass das Modell das volle Potenzial der verfügbaren Variabilität ausschöpft.
+\end{itemize}
+
+Diese Verteilung bestätigt, dass die Kombination aus physikalisch motiviertem Feature-Engineering und einer balancierten Verlustfunktion die strukturellen Defizite des PHOENIX-Datensatzes (Gini-Index 0{,}81 vor Filterung) effektiv kompensiert.
+
+\section{Evaluation der Modellstabilität und Generalisierungsfähigkeit}
 Ein zentraler Analysepunkt ist das Verhalten der Lernkurven in Hinblick auf Generalisierung und Optimierungspotential.
 
 \subsection{Detaillierte Loss‑Analyse}
-Der Verlauf des \textit{Cross‑Entropy Loss} liefert Hinweise auf die Trainingsstabilität. Wie in \autoref{fig:loss_plot} sichtbar, sinken Training‑ und Validation‑Loss über die Trainingsdauer gleichmässig.
+Der Verlauf des \textit{Balanced Softmax Loss} liefert Hinweise auf die Trainingsstabilität. Wie in \autoref{fig:loss_plot} sichtbar, sinken Training‑ und Validation‑Loss über die Trainingsdauer gleichmässig.
 \begin{itemize}
     \item \textbf{Konvergenz:} Beide Kurven erreichen gegen Ende ein Plateau — der Training‑Loss bei etwa 1,1, der Validation‑Loss bei rund 1,55.
     \item \textbf{Kein typisches Overfitting‑Signal:} Ein wieder ansteigender Validation‑Loss bei weiter fallendem Training‑Loss wäre ein klares Overfitting‑Indiz. Da die Kurven hier weitgehend parallel verlaufen, spricht das gegen eine destruktive Überanpassung.
 \end{itemize}
 
 \subsection{Interpretation des Accuracy‑Gaps und Early Stopping}
-Der Unterschied zwischen finaler Training‑Accuracy (85,41\,\%) und Validation‑Accuracy (73,15\,\%) beträgt 12,26 Prozentpunkte. Zeitliche Detailbetrachtungen zeigen Optimierungsmöglichkeiten:
+Der Unterschied zwischen finaler Training‑Accuracy (85,41\,\%) und Validation‑Accuracy (73,86\,\%) beträgt 11,55 Prozentpunkte. Zeitliche Detailbetrachtungen zeigen Optimierungsmöglichkeiten:
 \begin{itemize}
     \item \textbf{Frühes Plateau:} Die Validierungsgenauigkeit erreichte bereits um Schritt 2700 etwa 73\,\% und verbesserte sich danach nur noch geringfügig.
     \item \textbf{Early Stopping als Hebel:} Würde das Training bei Schritt 2700 gestoppt, liesse sich der Generalization‑Gap auf etwa 9\,\% reduzieren und Rechenressourcen sparen.
@@ -36,16 +45,16 @@ Die Konfusionsmatrix in \autoref{fig:confusion_matrix} zeigt, dass Fehlklassifik
     \item \textbf{Visuelle Minimalpaare:} Paare wie \texttt{ABEND} und \texttt{NACHT} teilen oft Handform und Ausführungsort; die Unterscheidung beruht auf non‑manualen Markern (Mimik), die aktuell offenbar noch zu wenig gewichtet werden.
     \item \textbf{Richtungsambiguitäten:} Verwechslungen zwischen \texttt{loc-NORD} und \texttt{NORDRAUM} verdeutlichen die Herausforderung, Richtungsinformation konsistent zu kodieren.
 \end{itemize}
-Diese Muster geben konkrete Hinweise, wo gezielte Feature‑Gewichtung oder zusätzliche Modalitäten (z.\,B. Face‑Mesh) besonders wirksam sein könnten.
+Diese Muster geben konkrete Hinweise, wo gezielte Feature‑Gewichtung oder zusätzliche Modalitäten besonders wirksam sein könnten.
 
 \section{Modellstabilität und Konfidenz‑Evaluation}
 Die Konfidenzverteilung in \autoref{fig:confidence_dist} spricht für eine sinnvolle Kalibrierung des Modells:
 \begin{itemize}
     \item \textbf{Trennschärfe:} Korrekte Vorhersagen liegen im Mittel bei 87,37\,\% Konfidenz, falsche Vorhersagen bei 57,19\,\% — ein klares Signal für verlässliche Unsicherheitsabschätzungen.
-    \item \textbf{Sichere Fehlvorhersagen:} Der geringe Anteil von 5,30\,\% „sicheren Fehlern“ (Konfidenz $>0{,}8$ bei falscher Vorhersage) unterstreicht die Robustheit der Architektur.
+    \item \textbf{Sichere Fehlvorhersagen:} Der geringe Anteil von 5,30\,\% „sicheren Fehlern“ (Konfidenz $>0{,}8$ bei falscher Vorhersage) zeigt die Robustheit der Architektur.
 \end{itemize}
 
 \section{Architektonische Einflüsse und Limitationen}
-Der Erfolg in Phase~9 lässt sich wesentlich auf die Rückkehr zur Transformer‑Architektur mit kompakter \texttt{hidden\_size}=256 zurückführen. Während starre Skeleton‑Graphen zu wenig Flexibilität boten, ermöglicht Self‑Attention eine adaptive Gewichtung zeitlicher Abhängigkeiten.
+Der Erfolg in Phase~9 lässt sich wesentlich auf die Rückkehr zur Transformer‑Architektur mit kompakter \texttt{hidden\_size}=256 zurückführen. Während starre Skeleton‑Graphen zu wenig Flexibilität geboten haben, ermöglicht Self‑Attention eine adaptive Gewichtung zeitlicher Abhängigkeiten.
 
 Gleichzeitig bleibt die phonologische Nähe vieler Gebärden die zentrale Limitation. Ein praktikabler nächster Schritt wäre, Mundbild‑Features (Face‑Mesh) innerhalb der Cross‑Attention stärker zu gewichten, um verbleibende Minimalpaar‑Konfusionen gezielt zu reduzieren.

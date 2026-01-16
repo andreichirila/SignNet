@@ -1,0 +1,1550 @@
+{
+  "timestamp": "20251202_070638",
+  "model_path": "./models_balanced/sign_classifier_best_fixed.pth",
+  "data_dir": "../Data/word_landmarks_extracted",
+  "num_samples": 5657,
+  "num_classes": 146,
+  "overall_accuracy": 0.6715573625596606,
+  "strata_analysis": {
+    "low": {
+      "correct": 331,
+      "total": 579,
+      "accuracy": 0.5716753022452504,
+      "num_classes": 35
+    },
+    "mid": {
+      "correct": 2168,
+      "total": 3178,
+      "accuracy": 0.6821900566393958,
+      "num_classes": 88
+    },
+    "high": {
+      "correct": 1300,
+      "total": 1900,
+      "accuracy": 0.6842105263157895,
+      "num_classes": 23
+    }
+  },
+  "top_confused_pairs": [
+    {
+      "true_class": "ABEND",
+      "pred_class": "NACHT",
+      "count": 22,
+      "rate": 0.43137254901960786,
+      "support": 51
+    },
+    {
+      "true_class": "KOMMEN",
+      "pred_class": "cl-KOMMEN",
+      "count": 16,
+      "rate": 0.25396825396825395,
+      "support": 63
+    },
+    {
+      "true_class": "NACHT",
+      "pred_class": "ABEND",
+      "count": 14,
+      "rate": 0.1308411214953271,
+      "support": 107
+    },
+    {
+      "true_class": "ZWANZIG",
+      "pred_class": "ZWEI",
+      "count": 14,
+      "rate": 0.21875,
+      "support": 64
+    },
+    {
+      "true_class": "HAUPTSAECHLICH",
+      "pred_class": "MEISTENS",
+      "count": 13,
+      "rate": 0.5909090909090909,
+      "support": 22
+    },
+    {
+      "true_class": "REGEN",
+      "pred_class": "REGEN-PLUSPLUS",
+      "count": 13,
+      "rate": 0.11206896551724138,
+      "support": 116
+    },
+    {
+      "true_class": "cl-KOMMEN",
+      "pred_class": "KOMMEN",
+      "count": 13,
+      "rate": 0.26,
+      "support": 50
+    },
+    {
+      "true_class": "AUCH",
+      "pred_class": "ABER",
+      "count": 12,
+      "rate": 0.14814814814814814,
+      "support": 81
+    },
+    {
+      "true_class": "REGION",
+      "pred_class": "loc-REGION",
+      "count": 12,
+      "rate": 0.20689655172413793,
+      "support": 58
+    },
+    {
+      "true_class": "SCHAUER",
+      "pred_class": "REGEN",
+      "count": 11,
+      "rate": 0.23404255319148937,
+      "support": 47
+    },
+    {
+      "true_class": "loc-REGION",
+      "pred_class": "REGION",
+      "count": 11,
+      "rate": 0.18032786885245902,
+      "support": 61
+    },
+    {
+      "true_class": "loc-SUEDOST",
+      "pred_class": "loc-SUED",
+      "count": 11,
+      "rate": 0.4583333333333333,
+      "support": 24
+    },
+    {
+      "true_class": "DREI",
+      "pred_class": "ZWEI",
+      "count": 10,
+      "rate": 0.3225806451612903,
+      "support": 31
+    },
+    {
+      "true_class": "STARK",
+      "pred_class": "MEISTENS",
+      "count": 10,
+      "rate": 0.2564102564102564,
+      "support": 39
+    },
+    {
+      "true_class": "SUED",
+      "pred_class": "loc-SUED",
+      "count": 10,
+      "rate": 0.14925373134328357,
+      "support": 67
+    },
+    {
+      "true_class": "loc-NORD",
+      "pred_class": "NORDRAUM",
+      "count": 10,
+      "rate": 0.30303030303030304,
+      "support": 33
+    },
+    {
+      "true_class": "GRAD",
+      "pred_class": "TEMPERATUR",
+      "count": 9,
+      "rate": 0.09782608695652174,
+      "support": 92
+    },
+    {
+      "true_class": "STURM",
+      "pred_class": "WIND",
+      "count": 9,
+      "rate": 0.1956521739130435,
+      "support": 46
+    },
+    {
+      "true_class": "SUEDOSTRAUM",
+      "pred_class": "loc-SUED",
+      "count": 9,
+      "rate": 0.4090909090909091,
+      "support": 22
+    },
+    {
+      "true_class": "UND",
+      "pred_class": "ABER",
+      "count": 9,
+      "rate": 0.2571428571428571,
+      "support": 35
+    },
+    {
+      "true_class": "WOLKE",
+      "pred_class": "NEBEL",
+      "count": 9,
+      "rate": 0.09375,
+      "support": 96
+    },
+    {
+      "true_class": "loc-NORDWEST",
+      "pred_class": "NORDWESTRAUM",
+      "count": 9,
+      "rate": 0.34615384615384615,
+      "support": 26
+    },
+    {
+      "true_class": "BERG",
+      "pred_class": "MEER",
+      "count": 8,
+      "rate": 0.1568627450980392,
+      "support": 51
+    },
+    {
+      "true_class": "BESONDERS",
+      "pred_class": "MEISTENS",
+      "count": 8,
+      "rate": 0.2,
+      "support": 40
+    },
+    {
+      "true_class": "SUEDRAUM",
+      "pred_class": "loc-SUED",
+      "count": 8,
+      "rate": 0.5333333333333333,
+      "support": 15
+    },
+    {
+      "true_class": "WEHEN",
+      "pred_class": "KOMMEN",
+      "count": 8,
+      "rate": 0.125,
+      "support": 64
+    },
+    {
+      "true_class": "loc-NORD",
+      "pred_class": "NORDOSTRAUM",
+      "count": 8,
+      "rate": 0.24242424242424243,
+      "support": 33
+    },
+    {
+      "true_class": "AUCH",
+      "pred_class": "UND",
+      "count": 7,
+      "rate": 0.08641975308641975,
+      "support": 81
+    },
+    {
+      "true_class": "DANN",
+      "pred_class": "ABER",
+      "count": 7,
+      "rate": 0.11475409836065574,
+      "support": 61
+    },
+    {
+      "true_class": "DANN",
+      "pred_class": "UND",
+      "count": 7,
+      "rate": 0.11475409836065574,
+      "support": 61
+    },
+    {
+      "true_class": "FUENF",
+      "pred_class": "VIER",
+      "count": 7,
+      "rate": 0.20588235294117646,
+      "support": 34
+    },
+    {
+      "true_class": "IX",
+      "pred_class": "BISSCHEN",
+      "count": 7,
+      "rate": 0.06930693069306931,
+      "support": 101
+    },
+    {
+      "true_class": "KOENNEN",
+      "pred_class": "MOEGLICH",
+      "count": 7,
+      "rate": 0.10606060606060606,
+      "support": 66
+    },
+    {
+      "true_class": "SCHNEE",
+      "pred_class": "REGEN",
+      "count": 7,
+      "rate": 0.14583333333333334,
+      "support": 48
+    },
+    {
+      "true_class": "WOLKE",
+      "pred_class": "BEWOELKT",
+      "count": 7,
+      "rate": 0.07291666666666667,
+      "support": 96
+    },
+    {
+      "true_class": "BERG",
+      "pred_class": "ALPEN",
+      "count": 6,
+      "rate": 0.11764705882352941,
+      "support": 51
+    },
+    {
+      "true_class": "BISSCHEN",
+      "pred_class": "MEISTENS",
+      "count": 6,
+      "rate": 0.09090909090909091,
+      "support": 66
+    },
+    {
+      "true_class": "KUEHL",
+      "pred_class": "LUFT",
+      "count": 6,
+      "rate": 0.14634146341463414,
+      "support": 41
+    },
+    {
+      "true_class": "MINUS",
+      "pred_class": "BIS",
+      "count": 6,
+      "rate": 0.16216216216216217,
+      "support": 37
+    },
+    {
+      "true_class": "MOEGLICH",
+      "pred_class": "KOENNEN",
+      "count": 6,
+      "rate": 0.14634146341463414,
+      "support": 41
+    },
+    {
+      "true_class": "NORDRAUM",
+      "pred_class": "NORDOSTRAUM",
+      "count": 6,
+      "rate": 0.18181818181818182,
+      "support": 33
+    },
+    {
+      "true_class": "NORDWESTRAUM",
+      "pred_class": "loc-NORDWEST",
+      "count": 6,
+      "rate": 0.2222222222222222,
+      "support": 27
+    },
+    {
+      "true_class": "REGEN",
+      "pred_class": "SCHAUER",
+      "count": 6,
+      "rate": 0.05172413793103448,
+      "support": 116
+    },
+    {
+      "true_class": "REGEN",
+      "pred_class": "SCHNEE",
+      "count": 6,
+      "rate": 0.05172413793103448,
+      "support": 116
+    },
+    {
+      "true_class": "TEMPERATUR",
+      "pred_class": "GRAD",
+      "count": 6,
+      "rate": 0.17142857142857143,
+      "support": 35
+    },
+    {
+      "true_class": "UEBERWIEGEND",
+      "pred_class": "MEISTENS",
+      "count": 6,
+      "rate": 0.4,
+      "support": 15
+    },
+    {
+      "true_class": "loc-SUEDOST",
+      "pred_class": "SUEDOSTRAUM",
+      "count": 6,
+      "rate": 0.25,
+      "support": 24
+    },
+    {
+      "true_class": "BIS",
+      "pred_class": "ZWEI",
+      "count": 5,
+      "rate": 0.0684931506849315,
+      "support": 73
+    },
+    {
+      "true_class": "DANN",
+      "pred_class": "AUCH",
+      "count": 5,
+      "rate": 0.08196721311475409,
+      "support": 61
+    },
+    {
+      "true_class": "MEER",
+      "pred_class": "BERG",
+      "count": 5,
+      "rate": 0.3125,
+      "support": 16
+    }
+  ],
+  "per_class_metrics": [
+    {
+      "class": "ABEND",
+      "precision": 0.6136363636363636,
+      "recall": 0.5294117647058824,
+      "f1": 0.5684210526315789,
+      "support": 51.0,
+      "sample_count": 254
+    },
+    {
+      "class": "ABER",
+      "precision": 0.3333333333333333,
+      "recall": 0.7083333333333334,
+      "f1": 0.4533333333333333,
+      "support": 48.0,
+      "sample_count": 241
+    },
+    {
+      "class": "ACHT",
+      "precision": 0.8076923076923077,
+      "recall": 0.84,
+      "f1": 0.8235294117647058,
+      "support": 25.0,
+      "sample_count": 123
+    },
+    {
+      "class": "ACHTZEHN",
+      "precision": 0.8571428571428571,
+      "recall": 0.8571428571428571,
+      "f1": 0.8571428571428571,
+      "support": 14.0,
+      "sample_count": 71
+    },
+    {
+      "class": "ALPEN",
+      "precision": 0.7037037037037037,
+      "recall": 0.7037037037037037,
+      "f1": 0.7037037037037037,
+      "support": 27.0,
+      "sample_count": 134
+    },
+    {
+      "class": "ANFANG",
+      "precision": 0.56,
+      "recall": 0.6666666666666666,
+      "f1": 0.6086956521739131,
+      "support": 21.0,
+      "sample_count": 106
+    },
+    {
+      "class": "AUCH",
+      "precision": 0.6666666666666666,
+      "recall": 0.6666666666666666,
+      "f1": 0.6666666666666666,
+      "support": 81.0,
+      "sample_count": 408
+    },
+    {
+      "class": "BAYERN",
+      "precision": 0.7222222222222222,
+      "recall": 0.8125,
+      "f1": 0.7647058823529411,
+      "support": 16.0,
+      "sample_count": 79
+    },
+    {
+      "class": "BERG",
+      "precision": 0.7058823529411765,
+      "recall": 0.47058823529411764,
+      "f1": 0.5647058823529412,
+      "support": 51.0,
+      "sample_count": 254
+    },
+    {
+      "class": "BESONDERS",
+      "precision": 0.45454545454545453,
+      "recall": 0.375,
+      "f1": 0.410958904109589,
+      "support": 40.0,
+      "sample_count": 198
+    },
+    {
+      "class": "BEWOELKT",
+      "precision": 0.17391304347826086,
+      "recall": 0.26666666666666666,
+      "f1": 0.21052631578947367,
+      "support": 15.0,
+      "sample_count": 74
+    },
+    {
+      "class": "BIS",
+      "precision": 0.72,
+      "recall": 0.7397260273972602,
+      "f1": 0.7297297297297297,
+      "support": 73.0,
+      "sample_count": 364
+    },
+    {
+      "class": "BISSCHEN",
+      "precision": 0.7166666666666667,
+      "recall": 0.6515151515151515,
+      "f1": 0.6825396825396826,
+      "support": 66.0,
+      "sample_count": 330
+    },
+    {
+      "class": "BLEIBEN",
+      "precision": 0.8181818181818182,
+      "recall": 0.7714285714285715,
+      "f1": 0.7941176470588235,
+      "support": 35.0,
+      "sample_count": 174
+    },
+    {
+      "class": "DABEI",
+      "precision": 0.7307692307692307,
+      "recall": 0.7916666666666666,
+      "f1": 0.76,
+      "support": 24.0,
+      "sample_count": 118
+    },
+    {
+      "class": "DANN",
+      "precision": 0.6842105263157895,
+      "recall": 0.21311475409836064,
+      "f1": 0.325,
+      "support": 61.0,
+      "sample_count": 306
+    },
+    {
+      "class": "DEUTSCH",
+      "precision": 0.7714285714285715,
+      "recall": 0.7297297297297297,
+      "f1": 0.75,
+      "support": 37.0,
+      "sample_count": 184
+    },
+    {
+      "class": "DIENSTAG",
+      "precision": 0.9428571428571428,
+      "recall": 0.9166666666666666,
+      "f1": 0.9295774647887324,
+      "support": 36.0,
+      "sample_count": 180
+    },
+    {
+      "class": "DONNERSTAG",
+      "precision": 0.8666666666666667,
+      "recall": 0.7959183673469388,
+      "f1": 0.8297872340425532,
+      "support": 49.0,
+      "sample_count": 243
+    },
+    {
+      "class": "DREI",
+      "precision": 0.5172413793103449,
+      "recall": 0.4838709677419355,
+      "f1": 0.5,
+      "support": 31.0,
+      "sample_count": 157
+    },
+    {
+      "class": "DREISSIG",
+      "precision": 0.5882352941176471,
+      "recall": 0.625,
+      "f1": 0.6060606060606061,
+      "support": 16.0,
+      "sample_count": 78
+    },
+    {
+      "class": "DREIZEHN",
+      "precision": 0.44,
+      "recall": 0.6111111111111112,
+      "f1": 0.5116279069767442,
+      "support": 18.0,
+      "sample_count": 88
+    },
+    {
+      "class": "DRUCK",
+      "precision": 0.5,
+      "recall": 0.47058823529411764,
+      "f1": 0.48484848484848486,
+      "support": 17.0,
+      "sample_count": 85
+    },
+    {
+      "class": "EINS",
+      "precision": 0.5185185185185185,
+      "recall": 0.56,
+      "f1": 0.5384615384615384,
+      "support": 25.0,
+      "sample_count": 127
+    },
+    {
+      "class": "ELF",
+      "precision": 0.6875,
+      "recall": 0.6875,
+      "f1": 0.6875,
+      "support": 16.0,
+      "sample_count": 81
+    },
+    {
+      "class": "ENORM",
+      "precision": 0.36363636363636365,
+      "recall": 0.4444444444444444,
+      "f1": 0.4,
+      "support": 18.0,
+      "sample_count": 89
+    },
+    {
+      "class": "EUROPA",
+      "precision": 0.38461538461538464,
+      "recall": 0.3333333333333333,
+      "f1": 0.35714285714285715,
+      "support": 15.0,
+      "sample_count": 75
+    },
+    {
+      "class": "FLUSS",
+      "precision": 0.825,
+      "recall": 0.717391304347826,
+      "f1": 0.7674418604651163,
+      "support": 46.0,
+      "sample_count": 232
+    },
+    {
+      "class": "FREITAG",
+      "precision": 0.8666666666666667,
+      "recall": 0.9811320754716981,
+      "f1": 0.9203539823008849,
+      "support": 53.0,
+      "sample_count": 264
+    },
+    {
+      "class": "FREUNDLICH",
+      "precision": 0.9272727272727272,
+      "recall": 0.8793103448275862,
+      "f1": 0.9026548672566371,
+      "support": 58.0,
+      "sample_count": 288
+    },
+    {
+      "class": "FRISCH",
+      "precision": 0.7647058823529411,
+      "recall": 0.9285714285714286,
+      "f1": 0.8387096774193549,
+      "support": 28.0,
+      "sample_count": 138
+    },
+    {
+      "class": "FROST",
+      "precision": 0.75,
+      "recall": 0.6923076923076923,
+      "f1": 0.72,
+      "support": 26.0,
+      "sample_count": 128
+    },
+    {
+      "class": "FUENF",
+      "precision": 0.6538461538461539,
+      "recall": 0.5,
+      "f1": 0.5666666666666667,
+      "support": 34.0,
+      "sample_count": 171
+    },
+    {
+      "class": "FUENFZEHN",
+      "precision": 0.5333333333333333,
+      "recall": 0.4444444444444444,
+      "f1": 0.48484848484848486,
+      "support": 18.0,
+      "sample_count": 92
+    },
+    {
+      "class": "GEWITTER",
+      "precision": 0.875,
+      "recall": 0.7777777777777778,
+      "f1": 0.8235294117647058,
+      "support": 54.0,
+      "sample_count": 269
+    },
+    {
+      "class": "GLATT",
+      "precision": 0.6153846153846154,
+      "recall": 0.8421052631578947,
+      "f1": 0.7111111111111111,
+      "support": 19.0,
+      "sample_count": 93
+    },
+    {
+      "class": "GRAD",
+      "precision": 0.8961038961038961,
+      "recall": 0.75,
+      "f1": 0.8165680473372781,
+      "support": 92.0,
+      "sample_count": 459
+    },
+    {
+      "class": "GUT",
+      "precision": 0.78125,
+      "recall": 0.8333333333333334,
+      "f1": 0.8064516129032258,
+      "support": 30.0,
+      "sample_count": 148
+    },
+    {
+      "class": "HABEN",
+      "precision": 0.2692307692307692,
+      "recall": 0.4375,
+      "f1": 0.3333333333333333,
+      "support": 16.0,
+      "sample_count": 80
+    },
+    {
+      "class": "HAUPTSAECHLICH",
+      "precision": 0.23529411764705882,
+      "recall": 0.18181818181818182,
+      "f1": 0.20512820512820512,
+      "support": 22.0,
+      "sample_count": 110
+    },
+    {
+      "class": "HEUTE",
+      "precision": 0.9186046511627907,
+      "recall": 0.8315789473684211,
+      "f1": 0.8729281767955801,
+      "support": 95.0,
+      "sample_count": 478
+    },
+    {
+      "class": "HIMMEL",
+      "precision": 0.6774193548387096,
+      "recall": 0.8076923076923077,
+      "f1": 0.7368421052631579,
+      "support": 26.0,
+      "sample_count": 129
+    },
+    {
+      "class": "HOCH",
+      "precision": 0.7692307692307693,
+      "recall": 0.6382978723404256,
+      "f1": 0.6976744186046512,
+      "support": 47.0,
+      "sample_count": 234
+    },
+    {
+      "class": "IM-VERLAUF",
+      "precision": 0.6551724137931034,
+      "recall": 0.7916666666666666,
+      "f1": 0.7169811320754716,
+      "support": 24.0,
+      "sample_count": 121
+    },
+    {
+      "class": "IN-KOMMEND",
+      "precision": 0.6904761904761905,
+      "recall": 0.8529411764705882,
+      "f1": 0.7631578947368421,
+      "support": 34.0,
+      "sample_count": 172
+    },
+    {
+      "class": "IX",
+      "precision": 0.7741935483870968,
+      "recall": 0.4752475247524752,
+      "f1": 0.588957055214724,
+      "support": 101.0,
+      "sample_count": 503
+    },
+    {
+      "class": "JETZT",
+      "precision": 0.9,
+      "recall": 0.75,
+      "f1": 0.8181818181818182,
+      "support": 72.0,
+      "sample_count": 358
+    },
+    {
+      "class": "KALT",
+      "precision": 0.6666666666666666,
+      "recall": 0.7333333333333333,
+      "f1": 0.6984126984126984,
+      "support": 30.0,
+      "sample_count": 150
+    },
+    {
+      "class": "KLAR",
+      "precision": 0.7872340425531915,
+      "recall": 0.7551020408163265,
+      "f1": 0.7708333333333334,
+      "support": 49.0,
+      "sample_count": 246
+    },
+    {
+      "class": "KOENNEN",
+      "precision": 0.8076923076923077,
+      "recall": 0.6363636363636364,
+      "f1": 0.711864406779661,
+      "support": 66.0,
+      "sample_count": 330
+    },
+    {
+      "class": "KOMMEN",
+      "precision": 0.3522727272727273,
+      "recall": 0.49206349206349204,
+      "f1": 0.4105960264900662,
+      "support": 63.0,
+      "sample_count": 314
+    },
+    {
+      "class": "KUEHL",
+      "precision": 0.7777777777777778,
+      "recall": 0.5121951219512195,
+      "f1": 0.6176470588235294,
+      "support": 41.0,
+      "sample_count": 206
+    },
+    {
+      "class": "KUESTE",
+      "precision": 0.6666666666666666,
+      "recall": 0.7407407407407407,
+      "f1": 0.7017543859649122,
+      "support": 27.0,
+      "sample_count": 134
+    },
+    {
+      "class": "LAND",
+      "precision": 0.46511627906976744,
+      "recall": 0.5405405405405406,
+      "f1": 0.5,
+      "support": 37.0,
+      "sample_count": 186
+    },
+    {
+      "class": "LANG",
+      "precision": 0.6666666666666666,
+      "recall": 0.42857142857142855,
+      "f1": 0.5217391304347826,
+      "support": 14.0,
+      "sample_count": 72
+    },
+    {
+      "class": "LIEB",
+      "precision": 0.75,
+      "recall": 0.75,
+      "f1": 0.75,
+      "support": 20.0,
+      "sample_count": 101
+    },
+    {
+      "class": "LUFT",
+      "precision": 0.5555555555555556,
+      "recall": 0.7692307692307693,
+      "f1": 0.6451612903225806,
+      "support": 26.0,
+      "sample_count": 129
+    },
+    {
+      "class": "MAESSIG",
+      "precision": 0.8367346938775511,
+      "recall": 0.803921568627451,
+      "f1": 0.82,
+      "support": 51.0,
+      "sample_count": 253
+    },
+    {
+      "class": "MAXIMAL",
+      "precision": 0.8095238095238095,
+      "recall": 0.9444444444444444,
+      "f1": 0.8717948717948718,
+      "support": 18.0,
+      "sample_count": 90
+    },
+    {
+      "class": "MEER",
+      "precision": 0.1875,
+      "recall": 0.375,
+      "f1": 0.25,
+      "support": 16.0,
+      "sample_count": 78
+    },
+    {
+      "class": "MEHR",
+      "precision": 0.7727272727272727,
+      "recall": 0.6710526315789473,
+      "f1": 0.7183098591549296,
+      "support": 76.0,
+      "sample_count": 383
+    },
+    {
+      "class": "MEISTENS",
+      "precision": 0.2638888888888889,
+      "recall": 0.5757575757575758,
+      "f1": 0.3619047619047619,
+      "support": 33.0,
+      "sample_count": 164
+    },
+    {
+      "class": "MILD",
+      "precision": 0.4838709677419355,
+      "recall": 0.625,
+      "f1": 0.5454545454545454,
+      "support": 24.0,
+      "sample_count": 121
+    },
+    {
+      "class": "MINUS",
+      "precision": 0.717948717948718,
+      "recall": 0.7567567567567568,
+      "f1": 0.7368421052631579,
+      "support": 37.0,
+      "sample_count": 185
+    },
+    {
+      "class": "MITTAG",
+      "precision": 0.6451612903225806,
+      "recall": 0.7142857142857143,
+      "f1": 0.6779661016949152,
+      "support": 28.0,
+      "sample_count": 138
+    },
+    {
+      "class": "MITTE",
+      "precision": 0.7073170731707317,
+      "recall": 0.6304347826086957,
+      "f1": 0.6666666666666666,
+      "support": 46.0,
+      "sample_count": 231
+    },
+    {
+      "class": "MITTWOCH",
+      "precision": 0.9523809523809523,
+      "recall": 0.9302325581395349,
+      "f1": 0.9411764705882353,
+      "support": 43.0,
+      "sample_count": 214
+    },
+    {
+      "class": "MOEGLICH",
+      "precision": 0.7560975609756098,
+      "recall": 0.7560975609756098,
+      "f1": 0.7560975609756098,
+      "support": 41.0,
+      "sample_count": 203
+    },
+    {
+      "class": "MONTAG",
+      "precision": 0.8636363636363636,
+      "recall": 0.9047619047619048,
+      "f1": 0.8837209302325582,
+      "support": 42.0,
+      "sample_count": 211
+    },
+    {
+      "class": "MORGEN",
+      "precision": 0.9523809523809523,
+      "recall": 0.847457627118644,
+      "f1": 0.8968609865470852,
+      "support": 118.0,
+      "sample_count": 593
+    },
+    {
+      "class": "NACH",
+      "precision": 0.5925925925925926,
+      "recall": 0.7272727272727273,
+      "f1": 0.6530612244897959,
+      "support": 22.0,
+      "sample_count": 112
+    },
+    {
+      "class": "NACHT",
+      "precision": 0.7589285714285714,
+      "recall": 0.794392523364486,
+      "f1": 0.776255707762557,
+      "support": 107.0,
+      "sample_count": 538
+    },
+    {
+      "class": "NEBEL",
+      "precision": 0.56,
+      "recall": 0.6829268292682927,
+      "f1": 0.6153846153846154,
+      "support": 41.0,
+      "sample_count": 205
+    },
+    {
+      "class": "NEUN",
+      "precision": 0.8,
+      "recall": 0.8,
+      "f1": 0.8,
+      "support": 20.0,
+      "sample_count": 101
+    },
+    {
+      "class": "NOCH",
+      "precision": 0.75,
+      "recall": 0.4090909090909091,
+      "f1": 0.5294117647058824,
+      "support": 22.0,
+      "sample_count": 108
+    },
+    {
+      "class": "NORD",
+      "precision": 0.8026315789473685,
+      "recall": 0.8026315789473685,
+      "f1": 0.8026315789473685,
+      "support": 76.0,
+      "sample_count": 378
+    },
+    {
+      "class": "NORDOSTRAUM",
+      "precision": 0.38235294117647056,
+      "recall": 0.7222222222222222,
+      "f1": 0.5,
+      "support": 18.0,
+      "sample_count": 89
+    },
+    {
+      "class": "NORDRAUM",
+      "precision": 0.45161290322580644,
+      "recall": 0.42424242424242425,
+      "f1": 0.4375,
+      "support": 33.0,
+      "sample_count": 168
+    },
+    {
+      "class": "NORDWESTRAUM",
+      "precision": 0.37142857142857144,
+      "recall": 0.48148148148148145,
+      "f1": 0.41935483870967744,
+      "support": 27.0,
+      "sample_count": 134
+    },
+    {
+      "class": "NULL",
+      "precision": 0.5384615384615384,
+      "recall": 0.35,
+      "f1": 0.42424242424242425,
+      "support": 20.0,
+      "sample_count": 101
+    },
+    {
+      "class": "NUR",
+      "precision": 0.7,
+      "recall": 0.8235294117647058,
+      "f1": 0.7567567567567568,
+      "support": 34.0,
+      "sample_count": 170
+    },
+    {
+      "class": "OST",
+      "precision": 0.8113207547169812,
+      "recall": 0.7413793103448276,
+      "f1": 0.7747747747747747,
+      "support": 58.0,
+      "sample_count": 292
+    },
+    {
+      "class": "PLUS",
+      "precision": 0.6190476190476191,
+      "recall": 0.6842105263157895,
+      "f1": 0.65,
+      "support": 19.0,
+      "sample_count": 96
+    },
+    {
+      "class": "REGEN",
+      "precision": 0.7339449541284404,
+      "recall": 0.6896551724137931,
+      "f1": 0.7111111111111111,
+      "support": 116.0,
+      "sample_count": 578
+    },
+    {
+      "class": "REGEN-PLUSPLUS",
+      "precision": 0.43333333333333335,
+      "recall": 0.4642857142857143,
+      "f1": 0.4482758620689655,
+      "support": 28.0,
+      "sample_count": 139
+    },
+    {
+      "class": "REGION",
+      "precision": 0.6511627906976745,
+      "recall": 0.4827586206896552,
+      "f1": 0.5544554455445545,
+      "support": 58.0,
+      "sample_count": 290
+    },
+    {
+      "class": "SAMSTAG",
+      "precision": 0.9245283018867925,
+      "recall": 0.9607843137254902,
+      "f1": 0.9423076923076923,
+      "support": 51.0,
+      "sample_count": 254
+    },
+    {
+      "class": "SCHAUER",
+      "precision": 0.627906976744186,
+      "recall": 0.574468085106383,
+      "f1": 0.6,
+      "support": 47.0,
+      "sample_count": 233
+    },
+    {
+      "class": "SCHNEE",
+      "precision": 0.6326530612244898,
+      "recall": 0.6458333333333334,
+      "f1": 0.6391752577319587,
+      "support": 48.0,
+      "sample_count": 241
+    },
+    {
+      "class": "SCHOEN",
+      "precision": 0.6666666666666666,
+      "recall": 0.8275862068965517,
+      "f1": 0.7384615384615385,
+      "support": 29.0,
+      "sample_count": 145
+    },
+    {
+      "class": "SCHON",
+      "precision": 0.6086956521739131,
+      "recall": 0.6363636363636364,
+      "f1": 0.6222222222222222,
+      "support": 22.0,
+      "sample_count": 111
+    },
+    {
+      "class": "SCHWACH",
+      "precision": 0.7894736842105263,
+      "recall": 0.8333333333333334,
+      "f1": 0.8108108108108109,
+      "support": 54.0,
+      "sample_count": 268
+    },
+    {
+      "class": "SECHS",
+      "precision": 0.6857142857142857,
+      "recall": 1.0,
+      "f1": 0.8135593220338984,
+      "support": 24.0,
+      "sample_count": 122
+    },
+    {
+      "class": "SECHSZEHN",
+      "precision": 0.4642857142857143,
+      "recall": 0.8666666666666667,
+      "f1": 0.6046511627906976,
+      "support": 15.0,
+      "sample_count": 77
+    },
+    {
+      "class": "SEHEN",
+      "precision": 0.7083333333333334,
+      "recall": 0.6296296296296297,
+      "f1": 0.6666666666666666,
+      "support": 27.0,
+      "sample_count": 135
+    },
+    {
+      "class": "SIEBEN",
+      "precision": 0.8,
+      "recall": 0.8888888888888888,
+      "f1": 0.8421052631578947,
+      "support": 27.0,
+      "sample_count": 136
+    },
+    {
+      "class": "SIEBZEHN",
+      "precision": 0.5,
+      "recall": 0.7647058823529411,
+      "f1": 0.6046511627906976,
+      "support": 17.0,
+      "sample_count": 84
+    },
+    {
+      "class": "SONNE",
+      "precision": 0.9690721649484536,
+      "recall": 0.8867924528301887,
+      "f1": 0.9261083743842364,
+      "support": 106.0,
+      "sample_count": 532
+    },
+    {
+      "class": "SONNTAG",
+      "precision": 0.9230769230769231,
+      "recall": 0.96,
+      "f1": 0.9411764705882353,
+      "support": 50.0,
+      "sample_count": 251
+    },
+    {
+      "class": "SONST",
+      "precision": 0.6875,
+      "recall": 0.2972972972972973,
+      "f1": 0.41509433962264153,
+      "support": 37.0,
+      "sample_count": 186
+    },
+    {
+      "class": "SPAETER",
+      "precision": 0.3333333333333333,
+      "recall": 0.7142857142857143,
+      "f1": 0.45454545454545453,
+      "support": 14.0,
+      "sample_count": 71
+    },
+    {
+      "class": "STARK",
+      "precision": 0.7142857142857143,
+      "recall": 0.5128205128205128,
+      "f1": 0.5970149253731343,
+      "support": 39.0,
+      "sample_count": 194
+    },
+    {
+      "class": "STERN",
+      "precision": 0.7368421052631579,
+      "recall": 0.7777777777777778,
+      "f1": 0.7567567567567568,
+      "support": 18.0,
+      "sample_count": 90
+    },
+    {
+      "class": "STURM",
+      "precision": 0.7954545454545454,
+      "recall": 0.7608695652173914,
+      "f1": 0.7777777777777778,
+      "support": 46.0,
+      "sample_count": 232
+    },
+    {
+      "class": "SUED",
+      "precision": 0.8490566037735849,
+      "recall": 0.6716417910447762,
+      "f1": 0.75,
+      "support": 67.0,
+      "sample_count": 337
+    },
+    {
+      "class": "SUEDOSTRAUM",
+      "precision": 0.47058823529411764,
+      "recall": 0.36363636363636365,
+      "f1": 0.41025641025641024,
+      "support": 22.0,
+      "sample_count": 108
+    },
+    {
+      "class": "SUEDRAUM",
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "support": 15.0,
+      "sample_count": 77
+    },
+    {
+      "class": "SUEDWESTRAUM",
+      "precision": 0.5,
+      "recall": 0.3888888888888889,
+      "f1": 0.4375,
+      "support": 18.0,
+      "sample_count": 90
+    },
+    {
+      "class": "TAG",
+      "precision": 0.7435897435897436,
+      "recall": 0.5576923076923077,
+      "f1": 0.6373626373626373,
+      "support": 52.0,
+      "sample_count": 262
+    },
+    {
+      "class": "TEIL",
+      "precision": 0.8611111111111112,
+      "recall": 0.775,
+      "f1": 0.8157894736842105,
+      "support": 40.0,
+      "sample_count": 200
+    },
+    {
+      "class": "TEILWEISE",
+      "precision": 0.4074074074074074,
+      "recall": 0.7333333333333333,
+      "f1": 0.5238095238095238,
+      "support": 15.0,
+      "sample_count": 77
+    },
+    {
+      "class": "TEMPERATUR",
+      "precision": 0.55,
+      "recall": 0.6285714285714286,
+      "f1": 0.5866666666666667,
+      "support": 35.0,
+      "sample_count": 175
+    },
+    {
+      "class": "TIEF",
+      "precision": 0.7213114754098361,
+      "recall": 0.7586206896551724,
+      "f1": 0.7394957983193278,
+      "support": 58.0,
+      "sample_count": 290
+    },
+    {
+      "class": "TROCKEN",
+      "precision": 0.8108108108108109,
+      "recall": 0.6976744186046512,
+      "f1": 0.75,
+      "support": 43.0,
+      "sample_count": 214
+    },
+    {
+      "class": "UEBERWIEGEND",
+      "precision": 0.6666666666666666,
+      "recall": 0.13333333333333333,
+      "f1": 0.2222222222222222,
+      "support": 15.0,
+      "sample_count": 76
+    },
+    {
+      "class": "UND",
+      "precision": 0.2692307692307692,
+      "recall": 0.4,
+      "f1": 0.3218390804597701,
+      "support": 35.0,
+      "sample_count": 173
+    },
+    {
+      "class": "VERSCHWINDEN",
+      "precision": 0.45,
+      "recall": 0.4090909090909091,
+      "f1": 0.42857142857142855,
+      "support": 22.0,
+      "sample_count": 111
+    },
+    {
+      "class": "VIEL",
+      "precision": 0.868421052631579,
+      "recall": 0.7857142857142857,
+      "f1": 0.825,
+      "support": 42.0,
+      "sample_count": 211
+    },
+    {
+      "class": "VIER",
+      "precision": 0.3939393939393939,
+      "recall": 0.48148148148148145,
+      "f1": 0.43333333333333335,
+      "support": 27.0,
+      "sample_count": 135
+    },
+    {
+      "class": "VIERZEHN",
+      "precision": 0.5909090909090909,
+      "recall": 0.65,
+      "f1": 0.6190476190476191,
+      "support": 20.0,
+      "sample_count": 101
+    },
+    {
+      "class": "WAHRSCHEINLICH",
+      "precision": 0.4230769230769231,
+      "recall": 0.7333333333333333,
+      "f1": 0.5365853658536586,
+      "support": 15.0,
+      "sample_count": 76
+    },
+    {
+      "class": "WARM",
+      "precision": 0.9230769230769231,
+      "recall": 0.7741935483870968,
+      "f1": 0.8421052631578947,
+      "support": 31.0,
+      "sample_count": 155
+    },
+    {
+      "class": "WECHSELHAFT",
+      "precision": 0.9545454545454546,
+      "recall": 0.9333333333333333,
+      "f1": 0.9438202247191011,
+      "support": 45.0,
+      "sample_count": 226
+    },
+    {
+      "class": "WEHEN",
+      "precision": 0.7037037037037037,
+      "recall": 0.59375,
+      "f1": 0.6440677966101694,
+      "support": 64.0,
+      "sample_count": 319
+    },
+    {
+      "class": "WENIG",
+      "precision": 0.2631578947368421,
+      "recall": 0.3333333333333333,
+      "f1": 0.29411764705882354,
+      "support": 15.0,
+      "sample_count": 73
+    },
+    {
+      "class": "WENN",
+      "precision": 0.4230769230769231,
+      "recall": 0.6875,
+      "f1": 0.5238095238095238,
+      "support": 16.0,
+      "sample_count": 79
+    },
+    {
+      "class": "WEST",
+      "precision": 0.7692307692307693,
+      "recall": 0.6382978723404256,
+      "f1": 0.6976744186046512,
+      "support": 47.0,
+      "sample_count": 233
+    },
+    {
+      "class": "WETTER",
+      "precision": 0.9318181818181818,
+      "recall": 0.8367346938775511,
+      "f1": 0.8817204301075269,
+      "support": 98.0,
+      "sample_count": 490
+    },
+    {
+      "class": "WIE-AUSSEHEN",
+      "precision": 0.9322033898305084,
+      "recall": 0.9322033898305084,
+      "f1": 0.9322033898305084,
+      "support": 59.0,
+      "sample_count": 295
+    },
+    {
+      "class": "WIEDER",
+      "precision": 0.21739130434782608,
+      "recall": 0.3125,
+      "f1": 0.2564102564102564,
+      "support": 16.0,
+      "sample_count": 82
+    },
+    {
+      "class": "WIND",
+      "precision": 0.7631578947368421,
+      "recall": 0.7160493827160493,
+      "f1": 0.7388535031847133,
+      "support": 81.0,
+      "sample_count": 408
+    },
+    {
+      "class": "WOLKE",
+      "precision": 0.8833333333333333,
+      "recall": 0.5520833333333334,
+      "f1": 0.6794871794871795,
+      "support": 96.0,
+      "sample_count": 482
+    },
+    {
+      "class": "ZEHN",
+      "precision": 0.5769230769230769,
+      "recall": 0.6,
+      "f1": 0.5882352941176471,
+      "support": 25.0,
+      "sample_count": 123
+    },
+    {
+      "class": "ZUSCHAUER",
+      "precision": 0.7894736842105263,
+      "recall": 0.75,
+      "f1": 0.7692307692307693,
+      "support": 20.0,
+      "sample_count": 98
+    },
+    {
+      "class": "ZWANZIG",
+      "precision": 0.8085106382978723,
+      "recall": 0.59375,
+      "f1": 0.6846846846846847,
+      "support": 64.0,
+      "sample_count": 319
+    },
+    {
+      "class": "ZWEI",
+      "precision": 0.20588235294117646,
+      "recall": 0.6666666666666666,
+      "f1": 0.3146067415730337,
+      "support": 21.0,
+      "sample_count": 107
+    },
+    {
+      "class": "ZWISCHEN",
+      "precision": 0.38235294117647056,
+      "recall": 0.65,
+      "f1": 0.48148148148148145,
+      "support": 20.0,
+      "sample_count": 99
+    },
+    {
+      "class": "ZWOELF",
+      "precision": 0.4,
+      "recall": 0.4444444444444444,
+      "f1": 0.42105263157894735,
+      "support": 18.0,
+      "sample_count": 91
+    },
+    {
+      "class": "cl-KOMMEN",
+      "precision": 0.4126984126984127,
+      "recall": 0.52,
+      "f1": 0.46017699115044247,
+      "support": 50.0,
+      "sample_count": 253
+    },
+    {
+      "class": "loc-NORD",
+      "precision": 0.48148148148148145,
+      "recall": 0.3939393939393939,
+      "f1": 0.43333333333333335,
+      "support": 33.0,
+      "sample_count": 163
+    },
+    {
+      "class": "loc-NORDWEST",
+      "precision": 0.2631578947368421,
+      "recall": 0.19230769230769232,
+      "f1": 0.2222222222222222,
+      "support": 26.0,
+      "sample_count": 130
+    },
+    {
+      "class": "loc-REGION",
+      "precision": 0.5833333333333334,
+      "recall": 0.45901639344262296,
+      "f1": 0.5137614678899083,
+      "support": 61.0,
+      "sample_count": 304
+    },
+    {
+      "class": "loc-SUED",
+      "precision": 0.1891891891891892,
+      "recall": 0.7368421052631579,
+      "f1": 0.3010752688172043,
+      "support": 19.0,
+      "sample_count": 96
+    },
+    {
+      "class": "loc-SUEDOST",
+      "precision": 0.5,
+      "recall": 0.125,
+      "f1": 0.2,
+      "support": 24.0,
+      "sample_count": 119
+    },
+    {
+      "class": "loc-SUEDWEST",
+      "precision": 0.5,
+      "recall": 0.26666666666666666,
+      "f1": 0.34782608695652173,
+      "support": 15.0,
+      "sample_count": 73
+    },
+    {
+      "class": "loc-WEST",
+      "precision": 0.3888888888888889,
+      "recall": 0.4666666666666667,
+      "f1": 0.42424242424242425,
+      "support": 15.0,
+      "sample_count": 74
+    }
+  ]
+}

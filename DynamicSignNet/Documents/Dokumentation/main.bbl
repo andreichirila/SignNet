@@ -1,0 +1,118 @@
+\begin{thebibliography}{10}
+
+\bibitem{bowden2004}
+Richard Bowden, David Windridge, Timor Kadir, Andrew Zisserman, and Michael
+  Brady.
+\newblock A linguistic feature vector for the visual interpretation of sign
+  language.
+\newblock In {\em European Conference on Computer Vision (ECCV)}, pages
+  390--401, 2004.
+
+\bibitem{camgoz2018neural}
+Necati~Cihan Camg{\"o}z, Simon Hadfield, Oscar Koller, Hermann Ney, and Richard
+  Bowden.
+\newblock Neural sign language translation.
+\newblock In {\em Proceedings of the IEEE Conference on Computer Vision and
+  Pattern Recognition (CVPR)}, pages 7784--7793, 2018.
+
+\bibitem{cao2019}
+Zhe Cao, Gines Hidalgo, Tomas Simon, Shih-En Wei, and Yaser Sheikh.
+\newblock Openpose: Realtime multi-person 2d pose estimation using part
+  affinity fields.
+\newblock {\em IEEE Transactions on Pattern Analysis and Machine Intelligence},
+  43(1):172--186, 2019.
+
+\bibitem{carreira2017}
+Jo{\~a}o Carreira and Andrew Zisserman.
+\newblock Quo vadis, action recognition? a new model and the kinetics dataset.
+\newblock In {\em Proceedings of the IEEE Conference on Computer Vision and
+  Pattern Recognition (CVPR)}, pages 6299--6308, 2017.
+
+\bibitem{cui2019classbalanced}
+Yin Cui, Menglin Jia, Tsung-Yi Lin, Yang Song, and Serge Belongie.
+\newblock Class-balanced loss based on effective number of samples.
+\newblock In {\em Proceedings of the IEEE/CVF Conference on Computer Vision and
+  Pattern Recognition (CVPR)}, pages 9268--9277, 2019.
+
+\bibitem{dafnis2022}
+Konstantinos~M. Dafnis, Evgenia Chroni, Carol Neidle, and Dimitris~N. Metaxas.
+\newblock Bidirectional skeleton-based isolated sign recognition using graph
+  convolutional networks.
+\newblock In {\em Proceedings of the 13th Conference on Language Resources and
+  Evaluation (LREC 2022)}, pages 7328--7338, Marseille, 2022. European Language
+  Resources Association (ELRA).
+
+\bibitem{koller2015phoenix}
+Oscar Koller, Jens Forster, and Hermann Ney.
+\newblock Continuous sign language recognition: Towards large vocabulary
+  statistical recognition systems handling multiple signers.
+\newblock {\em Computer Vision and Image Understanding}, 141:108--125, December
+  2015.
+
+\bibitem{li2020wlasl}
+Dongxu Li, Cristian Rodriguez, Xin Yu, and Xiaopeng Hong.
+\newblock Word-level deep sign language recognition from video: A new
+  large-scale dataset and methods comparison.
+\newblock In {\em Proceedings of the IEEE/CVF Winter Conference on Applications
+  of Computer Vision (WACV)}, pages 1459--1469, 2020.
+
+\bibitem{lin2017focal}
+Tsung-Yi Lin, Priya Goyal, Ross Girshick, Kaiming He, and Piotr Doll{\'a}r.
+\newblock Focal loss for dense object detection.
+\newblock In {\em Proceedings of the IEEE International Conference on Computer
+  Vision (ICCV)}, pages 2980--2988, 2017.
+
+\bibitem{lugaresi2019}
+Camillo Lugaresi, Jiuqiang Tang, Hadon Nash, Chris McClanahan, Esha Uboweja,
+  Michael Hber, Fan Zhang, Zhuo Wu, Andrey Vakunov, and Matthias Grundmann.
+\newblock Mediapipe: A framework for building perception pipelines.
+\newblock {\em arXiv preprint arXiv:1906.08172}, 2019.
+
+\bibitem{pigou2014}
+Lionel Pigou, Sander Dieleman, Pieter-Jan Kindermans, and Benjamin Schrauwen.
+\newblock Sign language recognition using convolutional neural networks.
+\newblock In {\em European Conference on Computer Vision (ECCV) Workshops},
+  pages 572--578, 2014.
+
+\bibitem{ren2020balanced}
+Jiawei Ren, Cunjun Yu, Xiao Ma, Haiyu Zhao, and Shuai Yi.
+\newblock Balanced meta-softmax for long-tailed visual recognition.
+\newblock In {\em Advances in Neural Information Processing Systems},
+  volume~33, pages 4175--4186, 2020.
+
+\bibitem{starner1998}
+Thad Starner, Joshua Weaver, and Alex Pentland.
+\newblock Real-time american sign language recognition using desk and wearable
+  computer based video.
+\newblock In {\em IEEE Transactions on Pattern Analysis and Machine
+  Intelligence}, volume~20, pages 1371--1375, 1998.
+
+\bibitem{stokoe1960}
+William~C. Stokoe.
+\newblock {\em Sign Language Structure: An Outline of the Visual Communication
+  Systems of the American Deaf}.
+\newblock Number~8 in Studies in Linguistics: Occasional Papers. University of
+  Buffalo, 1960.
+
+\bibitem{vaswani2017}
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+  Aidan~N. Gomez, {\L}ukasz Kaiser, and Illia Polosukhin.
+\newblock Attention is all you need.
+\newblock In {\em Advances in Neural Information Processing Systems},
+  volume~30, pages 5998--6008, 2017.
+
+\bibitem{vogler2001}
+Christian Vogler and Dimitris Metaxas.
+\newblock A framework for recognizing the simultaneous aspects of american sign
+  language.
+\newblock In {\em Computer Vision and Image Understanding}, volume~81, pages
+  358--384, 2001.
+
+\bibitem{yan2018}
+Sijie Yan, Yuanjun Xiong, and Dahua Lin.
+\newblock Spatial temporal graph convolutional networks for skeleton-based
+  action recognition.
+\newblock In {\em Thirty-Second AAAI Conference on Artificial Intelligence},
+  2018.
+
+\end{thebibliography}

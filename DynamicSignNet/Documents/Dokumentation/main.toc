@@ -1,0 +1,98 @@
+\babel@toc {german}{}\relax 
+\contentsline {chapter}{\numberline {1}Einleitung}{2}{chapter.1}%
+\contentsline {section}{\numberline {1.1}Thematik und Relevanz}{2}{section.1.1}%
+\contentsline {section}{\numberline {1.2}Problemstellung}{2}{section.1.2}%
+\contentsline {section}{\numberline {1.3}Zielsetzung}{2}{section.1.3}%
+\contentsline {chapter}{\numberline {2}Stand der Technik}{3}{chapter.2}%
+\contentsline {section}{\numberline {2.1}Traditionelle Methoden}{3}{section.2.1}%
+\contentsline {section}{\numberline {2.2}Deep-Learning-Ansätze}{3}{section.2.2}%
+\contentsline {subsection}{\numberline {2.2.1}CNN-RNN-Architekturen}{3}{subsection.2.2.1}%
+\contentsline {subsection}{\numberline {2.2.2}3D-CNNs}{3}{subsection.2.2.2}%
+\contentsline {subsection}{\numberline {2.2.3}Transformer-Architekturen}{3}{subsection.2.2.3}%
+\contentsline {section}{\numberline {2.3}Skelettbasierte Ansätze}{3}{section.2.3}%
+\contentsline {subsection}{\numberline {2.3.1}Pose-Estimation}{4}{subsection.2.3.1}%
+\contentsline {subsection}{\numberline {2.3.2}Graph Convolutional Networks}{4}{subsection.2.3.2}%
+\contentsline {section}{\numberline {2.4}Datensätze}{4}{section.2.4}%
+\contentsline {subsection}{\numberline {2.4.1}WLASL}{4}{subsection.2.4.1}%
+\contentsline {subsection}{\numberline {2.4.2}PHOENIX}{4}{subsection.2.4.2}%
+\contentsline {section}{\numberline {2.5}Herausforderung: Klassenungleichheit}{4}{section.2.5}%
+\contentsline {subsection}{\numberline {2.5.1}Focal Loss}{4}{subsection.2.5.1}%
+\contentsline {subsection}{\numberline {2.5.2}Class-Balanced Loss}{4}{subsection.2.5.2}%
+\contentsline {subsection}{\numberline {2.5.3}Balanced Softmax}{5}{subsection.2.5.3}%
+\contentsline {section}{\numberline {2.6}Zusammenfassung}{5}{section.2.6}%
+\contentsline {chapter}{\numberline {3}Hintergrund}{6}{chapter.3}%
+\contentsline {section}{\numberline {3.1}Gebärdensprache als linguistisches System}{6}{section.3.1}%
+\contentsline {subsection}{\numberline {3.1.1}Phonologie der Gebärdensprache}{6}{subsection.3.1.1}%
+\contentsline {subsection}{\numberline {3.1.2}Glossennotation}{6}{subsection.3.1.2}%
+\contentsline {subsection}{\numberline {3.1.3}Isolierte vs. kontinuierliche Gebärdenerkennung}{6}{subsection.3.1.3}%
+\contentsline {section}{\numberline {3.2}Transformer-Architektur}{7}{section.3.2}%
+\contentsline {subsection}{\numberline {3.2.1}Self-Attention}{7}{subsection.3.2.1}%
+\contentsline {subsection}{\numberline {3.2.2}Positional Encoding}{7}{subsection.3.2.2}%
+\contentsline {subsection}{\numberline {3.2.3}Vorteile gegenüber rekurrenten Architekturen}{7}{subsection.3.2.3}%
+\contentsline {section}{\numberline {3.3}Herausforderungen des Datensatzes}{8}{section.3.3}%
+\contentsline {subsection}{\numberline {3.3.1}Long-Tail-Verteilung}{8}{subsection.3.3.1}%
+\contentsline {subsection}{\numberline {3.3.2}Gini-Koeffizient}{8}{subsection.3.3.2}%
+\contentsline {subsection}{\numberline {3.3.3}Visuelle Konfusion}{8}{subsection.3.3.3}%
+\contentsline {chapter}{\numberline {4}Methodik}{9}{chapter.4}%
+\contentsline {section}{\numberline {4.1}Datengrundlage und Klassenwahl}{9}{section.4.1}%
+\contentsline {subsection}{\numberline {4.1.1}Filterkriterien und Stichprobenumfang}{9}{subsection.4.1.1}%
+\contentsline {subsection}{\numberline {4.1.2}Merkmalsextraktion mit MediaPipe}{9}{subsection.4.1.2}%
+\contentsline {section}{\numberline {4.2}Iterativer Forschungsansatz und Versuchsaufbau}{9}{section.4.2}%
+\contentsline {subsection}{\numberline {4.2.1}Phase 1: Statische Baseline (CNN) – Fingeralphabet}{9}{subsection.4.2.1}%
+\contentsline {subsection}{\numberline {4.2.2}Phase 2: Kontinuierliche Erkennung auf Satzebene}{10}{subsection.4.2.2}%
+\contentsline {subsection}{\numberline {4.2.3}Phase 3: Minimalistisches Satz-Modell (Debugging)}{10}{subsection.4.2.3}%
+\contentsline {subsection}{\numberline {4.2.4}Phase 4: Übergang zu isolierten Wörtern (Top 10)}{10}{subsection.4.2.4}%
+\contentsline {subsection}{\numberline {4.2.5}Phase 5: Skalierung auf Top 50 Wörter}{10}{subsection.4.2.5}%
+\contentsline {subsection}{\numberline {4.2.6}Phase 6: Skalierung auf 146 Klassen und Wechsel zum Transformer}{10}{subsection.4.2.6}%
+\contentsline {subsection}{\numberline {4.2.7}Phase 7: Ein Exkurs in skelettbasierte Graphen}{10}{subsection.4.2.7}%
+\contentsline {subsection}{\numberline {4.2.8}Phase 8: Rückkehr zur optimierten Transformer-Architektur (v2)}{10}{subsection.4.2.8}%
+\contentsline {subsection}{\numberline {4.2.9}Phase 9: Finales optimiertes Modell}{11}{subsection.4.2.9}%
+\contentsline {section}{\numberline {4.3}Vorverarbeitung und Datenreinigung}{11}{section.4.3}%
+\contentsline {subsection}{\numberline {4.3.1}Umgang mit Fehlwerten und Verdeckungen (Occlusion)}{11}{subsection.4.3.1}%
+\contentsline {section}{\numberline {4.4}Datenaugmentation}{11}{section.4.4}%
+\contentsline {subsection}{\numberline {4.4.1}Temporale Augmentation (TemporalAugmentation)}{11}{subsection.4.4.1}%
+\contentsline {subsection}{\numberline {4.4.2}Landmark-Occlusion-Augmentation}{11}{subsection.4.4.2}%
+\contentsline {subsection}{\numberline {4.4.3}Mirror Augmentation}{11}{subsection.4.4.3}%
+\contentsline {subsection}{\numberline {4.4.4}Weighted Sampling und Oversampling}{12}{subsection.4.4.4}%
+\contentsline {section}{\numberline {4.5}Feature Engineering: Kinematik und Geometrie}{12}{section.4.5}%
+\contentsline {subsection}{\numberline {4.5.1}Kinematische Ableitungen}{12}{subsection.4.5.1}%
+\contentsline {subsection}{\numberline {4.5.2}Skelett-Geometrie und Bone-Vektoren}{12}{subsection.4.5.2}%
+\contentsline {subsection}{\numberline {4.5.3}Distanzmerkmale und Normalisierung}{12}{subsection.4.5.3}%
+\contentsline {section}{\numberline {4.6}Modellarchitektur: Transformer-Encoder}{12}{section.4.6}%
+\contentsline {subsection}{\numberline {4.6.1}Spezifikation der Transformer-Architektur}{12}{subsection.4.6.1}%
+\contentsline {chapter}{\numberline {5}Resultate}{14}{chapter.5}%
+\contentsline {section}{\numberline {5.1}Vergleich der Entwicklungsphasen}{14}{section.5.1}%
+\contentsline {section}{\numberline {5.2}Datensatz-Statistik und Split-Verhältnis}{14}{section.5.2}%
+\contentsline {section}{\numberline {5.3}Analyse des Trainingsverlaufs}{14}{section.5.3}%
+\contentsline {section}{\numberline {5.4}Quantitative Ergebnisse}{15}{section.5.4}%
+\contentsline {section}{\numberline {5.5}Konfidenz-Analyse und Kalibrierung}{15}{section.5.5}%
+\contentsline {section}{\numberline {5.6}Detaillierte Fehleranalyse}{16}{section.5.6}%
+\contentsline {subsection}{\numberline {5.6.1}Evaluation nach Klassenhäufigkeit (Buckets)}{17}{subsection.5.6.1}%
+\contentsline {chapter}{\numberline {6}Diskussion}{18}{chapter.6}%
+\contentsline {section}{\numberline {6.1}Interpretation der Klassifikationsleistung}{18}{section.6.1}%
+\contentsline {subsection}{\numberline {6.1.1}Robustheit gegenüber Klassenungleichgewicht (Bucket-Analyse)}{18}{subsection.6.1.1}%
+\contentsline {section}{\numberline {6.2}Evaluation der Modellstabilität und Generalisierungsfähigkeit}{18}{section.6.2}%
+\contentsline {subsection}{\numberline {6.2.1}Detaillierte Loss‑Analyse}{18}{subsection.6.2.1}%
+\contentsline {subsection}{\numberline {6.2.2}Interpretation des Accuracy‑Gaps und Early Stopping}{18}{subsection.6.2.2}%
+\contentsline {subsection}{\numberline {6.2.3}Fazit zur Generalisierung}{19}{subsection.6.2.3}%
+\contentsline {section}{\numberline {6.3}Analyse linguistischer Konfusionscluster}{19}{section.6.3}%
+\contentsline {section}{\numberline {6.4}Modellstabilität und Konfidenz‑Evaluation}{19}{section.6.4}%
+\contentsline {section}{\numberline {6.5}Architektonische Einflüsse und Limitationen}{19}{section.6.5}%
+\contentsline {chapter}{\numberline {7}Fazit und Ausblick}{20}{chapter.7}%
+\contentsline {section}{\numberline {7.1}Zusammenfassung der Ergebnisse}{20}{section.7.1}%
+\contentsline {section}{\numberline {7.2}Technische Würdigung}{20}{section.7.2}%
+\contentsline {section}{\numberline {7.3}Ausblick}{20}{section.7.3}%
+\contentsline {section}{\numberline {7.4}Persönliches Fazit Andrei}{20}{section.7.4}%
+\contentsline {subsection}{\numberline {7.4.1}Was habe ich gut gemacht?}{21}{subsection.7.4.1}%
+\contentsline {subsection}{\numberline {7.4.2}Was würde ich anders machen?}{21}{subsection.7.4.2}%
+\contentsline {subsection}{\numberline {7.4.3}Was habe ich gelernt?}{21}{subsection.7.4.3}%
+\contentsline {paragraph}{\nonumberline Technisch}{21}{paragraph*.12}%
+\contentsline {paragraph}{\nonumberline Prozessbezogen}{22}{paragraph*.13}%
+\contentsline {paragraph}{\nonumberline Persönlich}{22}{paragraph*.14}%
+\contentsline {section}{\numberline {7.5}Persönliches Fazit Roman}{22}{section.7.5}%
+\contentsline {subsection}{\numberline {7.5.1}Was habe ich gut gemacht?}{22}{subsection.7.5.1}%
+\contentsline {subsection}{\numberline {7.5.2}Was würde ich anders machen?}{22}{subsection.7.5.2}%
+\contentsline {subsection}{\numberline {7.5.3}Was habe ich gelernt?}{22}{subsection.7.5.3}%
+\def \@chapapp {\appendixname }
+\contentsline {chapter}{Literaturverzeichnis}{23}{subsection.7.5.3}%
+\providecommand \tocbasic@end@toc@file {}\tocbasic@end@toc@file 

@@ -21,7 +21,7 @@ Diese Verteilung bestätigt, dass die Kombination aus physikalisch motiviertem F
 Ein zentraler Analysepunkt ist das Verhalten der Lernkurven in Hinblick auf Generalisierung und Optimierungspotential.
 
 \subsection{Detaillierte Loss‑Analyse}
-Der Verlauf des \textit{Balanced Softmax Loss} liefert Hinweise auf die Trainingsstabilität. Wie in \autoref{fig:loss_plot} sichtbar, sinken Training‑ und Validation‑Loss über die Trainingsdauer gleichmässig.
+Der Verlauf des \textit{Balanced Softmax Loss} liefert Hinweise auf die Trainingsstabilität. Wie in \autoref{fig:loss_lr} sichtbar, sinken Training‑ und Validation‑Loss über die Trainingsdauer gleichmässig.
 \begin{itemize}
     \item \textbf{Konvergenz:} Beide Kurven erreichen gegen Ende ein Plateau — der Training‑Loss bei etwa 1,1, der Validation‑Loss bei rund 1,55.
     \item \textbf{Kein typisches Overfitting‑Signal:} Ein wieder ansteigender Validation‑Loss bei weiter fallendem Training‑Loss wäre ein klares Overfitting‑Indiz. Da die Kurven hier weitgehend parallel verlaufen, spricht das gegen eine destruktive Überanpassung.

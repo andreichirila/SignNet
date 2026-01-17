@@ -4,15 +4,33 @@
 Dieses Kapitel beschreibt die technische Umsetzung und den iterativen Forschungsprozess des \textit{SignNet}-Systems. Im Zentrum stehen die Begründungen der Designentscheidungen, die in mehreren Entwicklungsphasen getroffen wurden, um eine robuste und dynamische Gebärdenspracherkennung zu ermöglichen.
 
 \section{Datengrundlage und Klassenwahl}
-Die Grundlage für die dynamische Erkennung bildet der \textit{Phoenix}-Datensatz, der ursprünglich mehr als 1200 verschiedene Gebärden (Glossen) enthält.
+
+Die Auswahl geeigneter Daten war zentral für den Erfolg von \textit{SignNet}. Da Gebärdensprache weit über das reine Buchstabieren hinausgeht, basiert das System auf zwei komplementären Säulen: dem statischen Fingeralphabet als kontrolliertem Einstiegspunkt und dem komplexen \textit{PHOENIX}-Datensatz für die dynamische Gebärdenerkennung. 
+
+Als erster Schritt diente das deutsche Fingeralphabet (DGS). Es bot ein überschaubares, statisches Szenario, in dem sich die Präzision der Landmark-Extraktion systematisch beurteilen liess. Verwendet wurden Bilddaten zu 24 Handformen (A–Z, ohne J und Z, da diese Bewegungen beinhalten). 
+
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.22\textwidth]{figures/example_finger.jpg}
+    \caption{Beispielbild aus dem DGS-Fingeralphabet.}
+    \label{fig:ds_fingeralphabet}
+\end{figure}
+
+Die eigentliche Herausforderung bildete der \textit{PHOENIX-2014}-Datensatz. Er umfasst Videoaufnahmen von Wettervorhersagen in Gebärdensprache und enthält ursprünglich über 1\,200 Glossen. Die inhaltliche und visuelle Heterogenität des Materials — unterschiedliche Signer, Beleuchtungssituationen, Perspektiven und Tempi — macht den Datensatz realistisch, zugleich aber technisch anspruchsvoll. Für \textit{SignNet} diente PHOENIX als massgebliche Grundlage, um unter praxisnahen Bedingungen Generalisierung, zeitliche Abhängigkeiten und Interaktionen zwischen Hand- und Gesichtsmerkmalen zu evaluieren. Aus diesen Eigenschaften ergaben sich konkrete Anforderungen an Augmentation, Feature-Engineering und balancierte Verlustfunktionen, die die weiteren Entwicklungsphasen prägten.
+\begin{figure}[H]
+    \centering
+    \includegraphics[width=0.25\textwidth]{figures/example_phoenix.png}
+    \caption{Beispiel-Frame aus PHOENIX-2014.}
+    \label{fig:ds_phoenix}
+\end{figure}
 
 \subsection{Filterkriterien und Stichprobenumfang}
-Aufgrund der starken Klassenimbalance (Long-Tail-Verteilung) wurde das Vokabular gezielt eingeschränkt, um stabile Trainingsbedingungen zu schaffen:
+Aufgrund der starken Klassenimbalance (Long-Tail-Verteilung) wurde das Vokabular ab Phase~6 (siehe \autoref{sec:methodology_phases}) gezielt eingeschränkt, um stabile Trainingsbedingungen zu schaffen:
 
 \begin{itemize}
     \item \textbf{Mindestanforderung}: Berücksichtigt wurden nur Klassen mit mindestens \texttt{MIN\_SAMPLES\_PER\_CLASS = 70} Beispielen.
     \item \textbf{Resultat}: Nach der Filterung blieben \textbf{146 Klassen} für die finale Klassifikation übrig.
-    \item \textbf{Begründung}: So erhält das Modell pro Gebärde ausreichend Variabilität, um generalisierbare Merkmale zu lernen statt blosses auswendig Lernen.
+    \item \textbf{Begründung}: So erhält das Modell pro Gebärde ausreichend Variabilität, um generalisierbare Merkmale zu lernen statt blosses Auswendiglernen.
 \end{itemize}
 
 \subsection{Merkmalsextraktion mit MediaPipe}
@@ -29,6 +47,7 @@ Die Extraktion erfolgt mittels dreier spezialisierter Submodelle, deren Ergebnis
 Insgesamt ergeben sich 553 Punkte, je als Koordinatentripel $(x,y,z)$ dargestellt, was einer Eingabedimension von 1659 Merkmalen pro Frame entspricht. Dieser flache Merkmalsvektor bildet die Grundlage für weiteres Feature Engineering wie Geschwindigkeiten und Bone-Vektoren. Die $x$- und $y$-Werte sind auf Bildbreite bzw. -höhe normiert ($[0,1]$), während $z$ die relative Tiefeninformation zur Kamera darstellt.
 
 \section{Iterativer Forschungsansatz und Versuchsaufbau}
+\label{sec:methodology_phases}
 Das System wurde schrittweise entwickelt; jede Phase baute auf den Erkenntnissen der Vorangegangenen auf, um identifizierte Schwachstellen gezielt zu adressieren.
 
 \subsection{Phase 1: Statische Baseline (CNN) – Fingeralphabet}
@@ -39,8 +58,8 @@ Zunächst wurde die Erkennung des statischen Fingeralphabets (24 Klassen) unters
     \item \textbf{Erkenntnis}: Hohe Genauigkeit, jedoch fehlte die Fähigkeit, zeitliche Dynamik der Gebärden zu erfassen.
 \end{itemize}
 
-\subsection{Phase 2: Kontinuierliche Erkennung auf Satzebene}
-Anfangs zielten wir auf Satzverarbeitung direkt aus Landmark-Sequenzen:
+\subsection{Phase 2: Wechsel zum PHOENIX-Datensatz (Satzebene)}
+Mit Phase 2 begann die Arbeit an der eigentlichen „Königsdisziplin“: der Verarbeitung fliessender Gebärdensprache auf Basis des \textbf{PHOENIX-2014}-Datensatzes. Dieser Datensatz bildete ab hier die Grundlage für alle weiteren Phasen.
 \begin{itemize}
     \item \textbf{Methode}: Transformer Architektur mit Connectionist Temporal Classification (CTC-Loss), um Alignment ohne explizite Segmentierung zu lernen.
     \item \textbf{Ergebnis}: Mit einer Word Error Rate (WER) von ca. \textbf{90\,\%} erwies sich der Ansatz als zu anspruchsvoll für die verfügbare Datenbasis.
@@ -104,7 +123,7 @@ Robuste Vorverarbeitung war essenziell für stabile Modelle.
 MediaPipe ist anfällig für Verdeckungen (z.\,B. überlappende Hände). Massnahmen:
 \begin{itemize}
     \item \textbf{Numerische Stabilität}: Auftretende \texttt{NaN}-Werte werden durch $0.0$ ersetzt, um Fehler in folgenden Berechnungen zu vermeiden.
-    \item \textbf{Händigkeits-Invarianz}: Der \texttt{TransformerSignClassifierWithHandedness} berücksichtigt explizit dominante Hand, um Händigkeit unabhängig zu machen.
+    \item \textbf{Händigkeits-Invarianz}: Der \texttt{TransformerSignClassifierWithHandedness} berücksichtigt explizit die dominante Hand, um Händigkeit unabhängig zu machen.
 \end{itemize}
 
 \section{Datenaugmentation}
@@ -141,7 +160,7 @@ Horizontales Spiegeln (30\,\%):
 \subsection{Weighted Sampling und Oversampling}
 Zur Reduktion von Class-Imbalance:
 \begin{itemize}
-    \item \textbf{WeightedRandomSampler}: Gewichte $\propto 1/\sqrt{n_c}$.
+    \item \textbf{WeightedRandomSampler}: Die Sampling-Gewichte sind proportional zu $1/\sqrt{n_c}$, wobei $n_c$ die Anzahl der Trainingssamples einer Klasse bezeichnet. Klassen mit wenigen Beispielen erhalten dadurch höhere Sampling-Wahrscheinlichkeiten, während häufig vertretene Klassen entsprechend seltener gezogen werden. Die Wurzel im Nenner sorgt für eine konservativere Gewichtung als $1/n_c$ und verhindert ein Überkompensieren selten vorkommender Klassen.
     \item \textbf{Explicit Oversampling}: Gezielte Duplikation seltener Klassen (z.\,B. „ZWEI“ $5\times$).
 \end{itemize}
 

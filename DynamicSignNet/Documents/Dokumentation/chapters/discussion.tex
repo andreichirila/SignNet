@@ -54,6 +54,14 @@ Die Konfidenzverteilung in \autoref{fig:confidence_dist} spricht für eine sinnv
     \item \textbf{Sichere Fehlvorhersagen:} Der geringe Anteil von 5,30\,\% „sicheren Fehlern“ (Konfidenz $>0{,}8$ bei falscher Vorhersage) zeigt die Robustheit der Architektur.
 \end{itemize}
 
+\section{Methodische Reflexion: Das Validierungs-Dilemma}
+In Phase~9 entschieden wir uns für einen binären Split (Train/Validation) statt der klassischen Dreiteilung (Train/Validation/Test). Diese Wahl erhöhte die Stabilität der Metriken bei stark unbalancierten Klassen, bringt jedoch methodische Risiken mit sich.
+
+\subsection{Statistische Relevanz vs. Unabhängigkeit}
+Ein isoliertes Test-Set ist Standard, um Generalisierung auf unbekannte Daten zu belegen. Im Long-Tail-Bereich mit nur 70 Stichproben pro Klasse hätte eine 70:15:15-Aufteilung jedoch lediglich etwa zehn Testbeispiele ergeben. Eine einzige Fehlklassifikation entspräche dort bereits \(\sim 10\,\%\) Genauigkeitseinbruch und würde die Aussagekraft verzerren. Der 80:20-Split stellt dagegen mindestens 14 Validierungsbeispiele pro rare Klasse bereit und stabilisiert die Metriken.
+
+\subsection{Risiko des Hyperparameter-Overfittings}
+Die iterative Abstimmung von Architektur und Hyperparametern anhand der Validierung birgt \textit{Selection Bias} und potenzielles Hyperparameter-Overfitting. Zukünftige Arbeiten sollten daher die erreichte Genauigkeit von 73{,}86\,\% auf einem vollständig externen Datensatz (andere Signer, veränderte Bedingungen) verifizieren. Im Rahmen dieser Arbeit wogen jedoch geringere Varianz und belastbarere Metriken in 146 Klassen schwerer als ein kleiner, potenziell irreführender Testsatz.
 \section{Architektonische Einflüsse und Limitationen}
 Der Erfolg in Phase~9 lässt sich wesentlich auf die Rückkehr zur Transformer‑Architektur mit kompakter \texttt{hidden\_size}=256 zurückführen. Während starre Skeleton‑Graphen zu wenig Flexibilität geboten haben, ermöglicht Self‑Attention eine adaptive Gewichtung zeitlicher Abhängigkeiten.
 

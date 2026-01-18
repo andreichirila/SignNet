@@ -1,9 +1,0 @@
-{\reset@font\mtcSfont\mtc@string\contentsline{section}{\noexpand \leavevmode \numberline {6.1}Interpretation der Klassifikationsleistung}{\reset@font\mtcSfont 18}{section.6.1}}
-{\reset@font\mtcSSfont\mtc@string\contentsline{subsection}{\noexpand \leavevmode \numberline {6.1.1}Robustheit gegenüber Klassenungleichgewicht (Bucket-Analyse)}{\reset@font\mtcSSfont 18}{subsection.6.1.1}}
-{\reset@font\mtcSfont\mtc@string\contentsline{section}{\noexpand \leavevmode \numberline {6.2}Evaluation der Modellstabilität und Generalisierungsfähigkeit}{\reset@font\mtcSfont 18}{section.6.2}}
-{\reset@font\mtcSSfont\mtc@string\contentsline{subsection}{\noexpand \leavevmode \numberline {6.2.1}Detaillierte Loss‑Analyse}{\reset@font\mtcSSfont 18}{subsection.6.2.1}}
-{\reset@font\mtcSSfont\mtc@string\contentsline{subsection}{\noexpand \leavevmode \numberline {6.2.2}Interpretation des Accuracy‑Gaps und Early Stopping}{\reset@font\mtcSSfont 18}{subsection.6.2.2}}
-{\reset@font\mtcSSfont\mtc@string\contentsline{subsection}{\noexpand \leavevmode \numberline {6.2.3}Fazit zur Generalisierung}{\reset@font\mtcSSfont 19}{subsection.6.2.3}}
-{\reset@font\mtcSfont\mtc@string\contentsline{section}{\noexpand \leavevmode \numberline {6.3}Analyse linguistischer Konfusionscluster}{\reset@font\mtcSfont 19}{section.6.3}}
-{\reset@font\mtcSfont\mtc@string\contentsline{section}{\noexpand \leavevmode \numberline {6.4}Modellstabilität und Konfidenz‑Evaluation}{\reset@font\mtcSfont 19}{section.6.4}}
-{\reset@font\mtcSfont\mtc@string\contentsline{section}{\noexpand \leavevmode \numberline {6.5}Architektonische Einflüsse und Limitationen}{\reset@font\mtcSfont 19}{section.6.5}}

@@ -324,24 +324,34 @@ class MediaPipeTracker:
         return landmarks, annotated, has_hands
 
     def _draw_landmarks(self, frame, results_hands, results_face, results_pose):
+        small_landmarks_face     = self.mp_drawing.DrawingSpec(color=(255, 255,   0), thickness=1, circle_radius=1)  # cyan
+        small_connections_face   = self.mp_drawing.DrawingSpec(color=(200, 200,   0), thickness=1, circle_radius=1)
+
+        small_landmarks_pose     = self.mp_drawing.DrawingSpec(color=(  0, 255, 255), thickness=1, circle_radius=1)  # yellow
+        small_connections_pose   = self.mp_drawing.DrawingSpec(color=(  0, 200, 200), thickness=1, circle_radius=1)
+
+        small_landmarks_hand     = self.mp_drawing.DrawingSpec(color=(255,   0, 255), thickness=1, circle_radius=1)  # magenta
+        small_connections_hand   = self.mp_drawing.DrawingSpec(color=(200,   0, 200), thickness=1, circle_radius=1)
+
         if results_face.multi_face_landmarks:
             for face_landmarks in results_face.multi_face_landmarks:
                 self.mp_drawing.draw_landmarks(
                     frame, face_landmarks, mp.solutions.face_mesh.FACEMESH_CONTOURS,
-                    landmark_drawing_spec=None,
-                    connection_drawing_spec=self.mp_drawing_styles.get_default_face_mesh_contours_style()
+                    landmark_drawing_spec=small_landmarks_face,
+                    connection_drawing_spec=small_connections_face
                 )
         if results_pose.pose_landmarks:
             self.mp_drawing.draw_landmarks(
                 frame, results_pose.pose_landmarks, mp.solutions.pose.POSE_CONNECTIONS,
-                landmark_drawing_spec=self.mp_drawing_styles.get_default_pose_landmarks_style()
+                landmark_drawing_spec=small_landmarks_pose,
+                connection_drawing_spec=small_connections_pose
             )
         if results_hands.multi_hand_landmarks:
             for hand_landmarks in results_hands.multi_hand_landmarks:
                 self.mp_drawing.draw_landmarks(
                     frame, hand_landmarks, mp.solutions.hands.HAND_CONNECTIONS,
-                    self.mp_drawing_styles.get_default_hand_landmarks_style(),
-                    self.mp_drawing_styles.get_default_hand_connections_style()
+                    landmark_drawing_spec=small_landmarks_hand,
+                    connection_drawing_spec=small_connections_hand
                 )
 
     def _extract_landmarks(self, results_hands, results_face, results_pose) -> Tuple[Optional[np.ndarray], bool]:

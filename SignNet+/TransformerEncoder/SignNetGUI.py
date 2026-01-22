@@ -55,7 +55,8 @@ class DemoConfig:
     ])
 
     # Video folder for thumbnail bar
-    video_folder: str = r"D:\OST\SignNet\SignNet+\TransformerEncoder\videos"
+    video_folder: str = r"D:\OST\SignNet\SignNet+\TransformerEncoder\videos\PHOENIX"
+    # video_folder: str = r"D:\OST\SignNet\SignNet+\TransformerEncoder\videos"
 
     # Thumbnail settings
     thumbnail_width: int = 140
